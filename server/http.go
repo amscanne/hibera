@@ -26,7 +26,7 @@ type Connection struct {
 }
 
 type Addr struct {
-	*core.Client
+    core.ClientId
 }
 
 type HTTPServer struct {
@@ -44,15 +44,12 @@ func (l Listener) Accept() (net.Conn, error) {
 }
 
 func (c Connection) RemoteAddr() net.Addr {
-	return Addr{c.Client}
+	return Addr{c.Client.ClientId}
 }
 
 func (c Connection) Close() error {
-        if c.Client != nil {
-            // Inform the core about this dropped client.
-            c.Client.Core.DropClient(c.Client.ClientId)
-            c.Client = nil
-        }
+        // Inform the core about this dropped client.
+        c.Client.Core.DropClient(c.Client.ClientId)
 	return c.Conn.Close()
 }
 
@@ -61,12 +58,7 @@ func (a Addr) Network() string {
 }
 
 func (a Addr) String() string {
-        if a.Client != nil {
-            // Return the string client id.
-	    return string(a.Client.ClientId)
-        }
-        // We've already closed.
-        return "<disconnected>"
+    return strconv.FormatUint(uint64(a.ClientId), 10)
 }
 
 func (s *HTTPServer) info(output *bytes.Buffer) error {
@@ -178,12 +170,12 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
 	// Pull out the relevant client.
 	id, err := strconv.ParseUint(r.RemoteAddr, 0, 64)
 	if err != nil {
-		http.Error(w, "", 403)
+		http.Error(w, fmt.Sprintf("No Id found in '%s'.", r.RemoteAddr), 500)
 		return
 	}
 	client := s.Core.FindClient(core.ClientId(id))
 	if client == nil {
-		http.Error(w, "", 403)
+		http.Error(w, fmt.Sprintf("Client with Id %d not found.", id), 403)
 		return
 	}
 

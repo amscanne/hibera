@@ -13,39 +13,6 @@ var _ = proto.Marshal
 var _ = &json.SyntaxError{}
 var _ = math.Inf
 
-type FOO int32
-
-const (
-	FOO_X FOO = 17
-)
-
-var FOO_name = map[int32]string{
-	17: "X",
-}
-var FOO_value = map[string]int32{
-	"X": 17,
-}
-
-func (x FOO) Enum() *FOO {
-	p := new(FOO)
-	*p = x
-	return p
-}
-func (x FOO) String() string {
-	return proto.EnumName(FOO_name, int32(x))
-}
-func (x FOO) MarshalJSON() ([]byte, error) {
-	return json.Marshal(x.String())
-}
-func (x *FOO) UnmarshalJSON(data []byte) error {
-	value, err := proto.UnmarshalJSONEnum(FOO_value, data, "FOO")
-	if err != nil {
-		return err
-	}
-	*x = FOO(value)
-	return nil
-}
-
 type Ping struct {
 	Version          *uint64 `protobuf:"varint,1,req,name=version" json:"version,omitempty"`
 	XXX_unrecognized []byte  `json:"-"`
@@ -79,5 +46,4 @@ func (this *Pong) GetVersion() uint64 {
 }
 
 func init() {
-	proto.RegisterEnum("server.FOO", FOO_name, FOO_value)
 }

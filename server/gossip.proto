@@ -1,9 +1,5 @@
 package server;
 
-enum FOO {
-    X = 17;
-};
-    
 message Ping {
     required uint64 version = 1;
 }

@@ -12,13 +12,14 @@ type Core struct {
         //master  *Master
         //proxy   *Proxy
 
-	groups  map[string]map[ClientId]string
-	locks   map[string]map[ClientId]string
+	groups map[string]map[ClientId]string
+	locks map[string]map[ClientId]string
 	watches map[string]map[ClientId]bool
 
         clients map[ClientId]*Client
-	cluster *Cluster
 	ClientId
+
+	cluster *Cluster
 }
 
 type Client struct {
@@ -87,8 +88,10 @@ func (c *Core) WatchFire(key string, rev uint64) (uint64, error) {
 
 func (c *Core) NewClient() *Client {
 	id := c.ClientId
+	client := &Client{id, c}
 	c.ClientId += 1
-	return &Client{id, c}
+        c.clients[id] = client
+        return client
 }
 
 func (c *Core) FindClient(id ClientId) *Client {
@@ -128,6 +131,10 @@ func (c *Core) DropClient(id ClientId) {
 func NewCore(domain string, keys uint, backend *storage.Backend) *Core {
 	core := new(Core)
 	core.data = backend
+	core.groups = make(map[string]map[ClientId]string)
+	core.locks = make(map[string]map[ClientId]string)
+	core.watches = make(map[string]map[ClientId]bool)
+        core.clients = make(map[ClientId]*Client)
         ids, err := core.data.LoadIds(keys)
         if err != nil {
             log.Fatal("Unable to load ring: ", err)
