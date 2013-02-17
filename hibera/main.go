@@ -13,7 +13,7 @@ import (
 
 var url = flag.String("url", "http://localhost:2033/", "API address.")
 var exec = flag.String("exec", "", "Script to execute in context.")
-var timeout = flag.Uint("timeout", 0, "Timeout for acquiring a lock.")
+var timeout = flag.Uint("timeout", 0, "Timeout (in ms) for acquiring a lock.")
 var name = flag.String("name", "", "Name to use (other than machine address).")
 var count = flag.Uint("count", 1, "Count for services run via the run command.")
 var start = flag.String("start", "", "Script to start the given service.")
@@ -24,41 +24,46 @@ var output = flag.String("output", "", "Output file for sync.")
 var usagemsg = `usage: hibera <command> <key> [options]
 commands:
 
-    [-name <name>]            --- Run a process while holding
-    [-exec <run-script>]          the given lock.
-    [-timeout <timeout>]
-     lock <key>
+    lock <key>                   --- Run a process while holding
+         [-name <name>]              the given lock.
+         [-exec <run-script>]
+         [-timeout <timeout>]
 
-    [-name <name>]            --- Run a process while joined to
-    [-exec <run-script>]          the given group.
-     join <key>
+    join <key>                   --- Run a process while joined to
+         [-name <name>]              the given group.
+         [-exec <run-script>]
 
-    [-count <count>]          --- Conditionally run up-to <count>
-    [-start <start-script>]       process across the cluster.
-    [-stop <stop-script>]
-    [-name <name>]
-     run <key>
+    run <key>                    --- Conditionally run up-to <count>
+        [-count <count>]             process across the cluster.
+        [-start <start-script>]
+        [-stop <stop-script>]
+        [-name <name>]
 
-    [-limit <number>]         --- Show current members of the
-     members <key>                given group.
+    members <key>                --- Show current members of the
+            [-limit <number>]        given group. NOTE: members that
+            [-name <name>]           match this node's name will be
+                                     prefixed with a '*'.
 
-     get <key>                --- Get the contents of the key.
+    get <key>                    --- Get the contents of the key.
 
-     set <key>                --- Set the contents of the key.
+    set <key>                    --- Set the contents of the key.
 
-     rm <key>                 --- Remove the given key.
+    rm <key>                     --- Remove the given key.
 
-     list                     --- List all keys.
+    list                         --- List all keys.
 
-     clear                    --- Clear all data.
+    clear                        --- Clear all data.
 
-    [-output <file>]          --- Synchronize a key, either as
-    [-exec <run-script>]          stdin to a named script to
-     sync <key>                   directly to the named file.
+    sync <key>                   --- Synchronize a key, either as
+         [-output <file>]            stdin to a named script to
+         [-exec <run-script>]        directly to the named file.
 
-     watch <key>              --- Wait for an update of the key.
+    watch <key>                  --- Wait for an update of the key.
 
-     fire <key>               --- Notify all waiters on the key.
+    fire <key>                   --- Notify all waiters on the key.
+
+options for all commands:
+    [-url <url>]                 --- The API URL.
 `
 
 func do_exec(command string, input string) error {
@@ -92,7 +97,7 @@ func cli_run(c *client.HiberaClient, key string, name string, count uint, start 
 
 	for {
 		// List the current members.
-		members, rev, err := c.Members(key, count)
+		members, rev, err := c.Members(key, name, count)
 		if err != nil {
 			return err
 		}
@@ -100,7 +105,7 @@ func cli_run(c *client.HiberaClient, key string, name string, count uint, start 
 		// Check if we're in the list.
 		active := false
 		for _, member := range members {
-			if member == name {
+			if member[0] == '*' {
 				active = true
 				break
 			}
@@ -122,8 +127,8 @@ func cli_run(c *client.HiberaClient, key string, name string, count uint, start 
 	return nil
 }
 
-func cli_members(c *client.HiberaClient, key string, limit uint) error {
-	members, _, err := c.Members(key, limit)
+func cli_members(c *client.HiberaClient, key string, name string, limit uint) error {
+	members, _, err := c.Members(key, name, limit)
 	if err != nil {
 		return err
 	}
@@ -219,26 +224,24 @@ func usage() {
 	os.Exit(1)
 }
 
-func checkArgs(n int) {
-	if flag.NArg() != n {
-		usage()
-	}
-}
-
 func main() {
-	flag.Parse()
-
 	// Pull out our arguments.
-	command := flag.Arg(0)
+        if len(os.Args) == 1 {
+            usage()
+        }
+	command := os.Args[1]
+        os.Args = os.Args[1:]
 
-	// Check our arguments.
 	key := ""
 	if command == "list" || command == "clear" {
-		checkArgs(1)
 	} else {
-		checkArgs(2)
-		key = flag.Arg(1)
+		if len(os.Args) == 1 {
+                    usage()
+                }
+		key = os.Args[1]
+                os.Args = os.Args[1:]
 	}
+	flag.Parse()
 
 	// Create our client.
 	c := client.NewHiberaClient(*url)
@@ -259,7 +262,7 @@ func main() {
 		err = cli_run(c, key, *name, *count, *start, *stop)
 		break
 	case "members":
-		err = cli_members(c, key, *limit)
+		err = cli_members(c, key, *name, *limit)
 		break
 	case "get":
 		err = cli_get(c, key)

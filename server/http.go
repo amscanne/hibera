@@ -69,7 +69,7 @@ func serv_state_lock(key string, output *bytes.Buffer) (uint64, error) {
 	return 0, nil
 }
 
-func serv_acquire_lock(uuid string, key string, timeout uint64) (uint64, error) {
+func serv_acquire_lock(uuid string, key string, timeout uint64, name string) (uint64, error) {
 	return 0, nil
 }
 
@@ -77,7 +77,7 @@ func serv_release_lock(uuid string, key string) (uint64, error) {
 	return 0, nil
 }
 
-func serv_members_group(group string, output *bytes.Buffer, limit uint64) (uint64, error) {
+func serv_members_group(group string, output *bytes.Buffer, name string, limit uint64) (uint64, error) {
 	return 0, nil
 }
 
@@ -164,7 +164,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 				rev, err = serv_state_lock(parts[1], buf)
 				break
 			case "POST":
-				rev, err = serv_acquire_lock(uuid, parts[1], intParam(r, "timeout"))
+				rev, err = serv_acquire_lock(uuid, parts[1], intParam(r, "timeout"), strParam(r, "name"))
 				break
 			case "DELETE":
 				rev, err = serv_release_lock(uuid, parts[1])
@@ -174,7 +174,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		case "groups":
 			switch r.Method {
 			case "GET":
-				rev, err = serv_members_group(parts[1], buf, intParam(r, "limit"))
+				rev, err = serv_members_group(parts[1], buf, strParam(r, "name"), intParam(r, "limit"))
 				break
 			case "POST":
 				rev, err = serv_join_group(uuid, parts[1], strParam(r, "name"))
