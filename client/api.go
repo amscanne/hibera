@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"crypto/tls"
 	"net/url"
 	"net/http"
 )
@@ -25,7 +26,10 @@ func NewHiberaClient(url string) *HiberaClient {
 	client := new(HiberaClient)
 	client.url = url
 	client.lock = new(sync.Mutex)
-	client.http = new(http.Client)
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
+	client.http = &http.Client{Transport: tr}
 	return client
 }
 
@@ -102,6 +106,7 @@ func (h *HiberaClient) doreq(method string, args HttpArgs) (*http.Response, erro
 func (h *HiberaClient) Lock(key string, timeout uint, name string) (uint64, error) {
 	args := makeArgs(fmt.Sprintf("/locks/%s", key))
 	args.params["timeout"] = string(timeout)
+        args.params["name"] = string(name)
 	resp, err := h.doreq("POST", args)
 	if err != nil {
 		return 0, err
@@ -159,6 +164,7 @@ func (h *HiberaClient) Watch(key string, rev uint64) (uint64, error) {
 
 func (h *HiberaClient) Join(group string, name string) (uint64, error) {
 	args := makeArgs(fmt.Sprintf("/groups/%s/%s", group, name))
+        args.params["name"] = string(name)
 	resp, err := h.doreq("POST", args)
 	if err != nil {
 		return 0, err
@@ -172,6 +178,7 @@ func (h *HiberaClient) Join(group string, name string) (uint64, error) {
 
 func (h *HiberaClient) Leave(group string, name string) (uint64, error) {
 	args := makeArgs(fmt.Sprintf("/groups/%s/%s", group, name))
+        args.params["name"] = string(name)
 	resp, err := h.doreq("DELETE", args)
 	if err != nil {
 		return 0, err
@@ -183,8 +190,10 @@ func (h *HiberaClient) Leave(group string, name string) (uint64, error) {
 	return rev, err
 }
 
-func (h *HiberaClient) Members(group string, limit uint) ([]string, uint64, error) {
+func (h *HiberaClient) Members(group string, name string, limit uint) ([]string, uint64, error) {
 	args := makeArgs(fmt.Sprintf("/groups/%s", group))
+	args.params["limit"] = string(limit)
+        args.params["name"] = string(name)
 	resp, err := h.doreq("GET", args)
 	if err != nil {
 		return nil, 0, err
