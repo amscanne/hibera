@@ -1,0 +1,11 @@
+package server;
+
+enum FOO {
+    X = 17;
+};
+    
+message Ping {
+}
+
+message Pong {
+}
