@@ -26,6 +26,12 @@ type Addr struct {
 	uuid string
 }
 
+type HTTPServer struct {
+    *core.Core
+    *http.Server
+    *Listener
+}
+
 func (l Listener) Accept() (net.Conn, error) {
 	c, err := l.Listener.Accept()
 	if err == nil {
@@ -129,7 +135,7 @@ func strParam(r *http.Request, name string) string {
 	return values[0]
 }
 
-func handler(w http.ResponseWriter, r *http.Request) {
+func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
 	// Extract out parameters.
 	r.ParseForm()
 	parts := strings.SplitN(r.URL.Path[1:], "/", 2)
@@ -139,7 +145,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 
 	// Prepare our response.
 	buf := new(bytes.Buffer)
-	err := errors.New("Unhandler Request")
+	err := errors.New("Unhandled Request")
 	rev := uint64(0)
 
 	switch len(parts) {
@@ -219,26 +225,40 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func RunHTTP(addr string, port int) error {
-
-	// Initialize our default handler.
-	http.HandleFunc("/", handler)
+func NewHTTPServer(core *core.Core, addr string, port uint) *HTTPServer {
+        // Create our object.
+        server := new(HTTPServer)
 
 	// Create our hooked listener.
+        if len(addr) == 0 {
+            addr = DEFAULT_BIND
+        }
+        if port == 0 {
+            port = DEFAULT_PORT
+        }
 	ln, err := net.Listen("tcp", fmt.Sprintf("%s:%d", addr, port))
 	if err != nil {
-		return err
+            log.Fatal("Unable to bind HTTP server: ", err)
+            return nil
 	}
-	hook := Listener{ln}
+	server.Listener = &Listener{ln}
+        server.Core = core
 
 	// Create our http server, and provide connections
 	// using our hook listener to track active clients.
-	s := &http.Server{
-		ReadTimeout:  0,
+        handler := func(w http.ResponseWriter, r *http.Request) {
+            server.process(w, r)
+        }
+	server.Server = &http.Server{
+                Handler: http.HandlerFunc(handler),
+		ReadTimeout: 0,
 		WriteTimeout: 0,
 	}
-	s.Serve(hook)
 
 	// No error occured.
-	return nil
+	return server
+}
+
+func (s *HTTPServer) Run() {
+    s.Serve(s.Listener)
 }

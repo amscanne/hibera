@@ -11,7 +11,7 @@ import (
 	"hibera/client"
 )
 
-var url = flag.String("url", "http://localhost:2033/", "API address.")
+var api = flag.String("api", "", "API address.")
 var exec = flag.String("exec", "", "Script to execute in context.")
 var timeout = flag.Uint("timeout", 0, "Timeout (in ms) for acquiring a lock.")
 var name = flag.String("name", "", "Name to use (other than machine address).")
@@ -22,6 +22,10 @@ var limit = flag.Uint("limit", 0, "Limit for machines to return.")
 var output = flag.String("output", "", "Output file for sync.")
 
 var usagemsg = `usage: hibera <command> <key> [options]
+
+options for all commands:
+    [-api <address:port>]        --- The API address.
+
 commands:
 
     lock <key>                   --- Run a process while holding
@@ -61,9 +65,6 @@ commands:
     watch <key>                  --- Wait for an update of the key.
 
     fire <key>                   --- Notify all waiters on the key.
-
-options for all commands:
-    [-url <url>]                 --- The API URL.
 `
 
 func do_exec(command string, input string) error {
@@ -244,7 +245,7 @@ func main() {
 	flag.Parse()
 
 	// Create our client.
-	c := client.NewHiberaClient(*url)
+	c := client.NewHiberaClient(*api)
 	if c == nil {
 		return
 	}
@@ -293,7 +294,7 @@ func main() {
 	}
 
 	if err != nil {
-		log.Fatal(fmt.Sprintf("%s", err))
+		log.Fatal("Error: ", err)
 		os.Exit(1)
 	}
 }

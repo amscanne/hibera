@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strings"
+        "strings"
 	"crypto/tls"
 	"net/url"
 	"net/http"
+        "encoding/json"
+        "hibera/server"
 )
 
 var rev_error = errors.New("No X-Revision Found")
@@ -22,9 +24,23 @@ type HiberaClient struct {
 	http *http.Client
 }
 
-func NewHiberaClient(url string) *HiberaClient {
+func NewHiberaClient(addr string) *HiberaClient {
 	client := new(HiberaClient)
-	client.url = url
+        idx := strings.Index(addr, ":")
+        port := server.DEFAULT_PORT
+        if idx >= 0 && idx + 1 < len(addr) {
+	    parsed_port, err := strconv.ParseUint(addr[idx+1:], 0, 32)
+            if err != nil {
+                port = server.DEFAULT_PORT
+            } else {
+                port = uint(parsed_port)
+            }
+            addr = addr[:idx]
+        }
+        if len(addr) == 0 {
+            addr = "localhost"
+        }
+        client.url = fmt.Sprintf("http://%s:%d", addr, port)
 	client.lock = new(sync.Mutex)
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
@@ -53,17 +69,17 @@ func getRev(resp *http.Response) (uint64, error) {
 	return strconv.ParseUint(rev[0], 0, 64)
 }
 
-func getContent(resp *http.Response) (string, error) {
+func getContent(resp *http.Response) ([]byte, error) {
 	length := resp.ContentLength
 	if length < 0 {
-		return "", nil
+		return nil, nil
 	}
 	buf := make([]byte, length)
 	_, err := io.ReadFull(resp.Body, buf)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return string(buf), nil
+	return buf, nil
 }
 
 func (h *HiberaClient) req(method string, args HttpArgs) (*http.Request, error) {
@@ -131,7 +147,7 @@ func (h *HiberaClient) Unlock(key string) (uint64, error) {
 	return rev, err
 }
 
-func (h *HiberaClient) State(key string) (string, uint64, error) {
+func (h *HiberaClient) Owner(key string) (string, uint64, error) {
 	args := makeArgs(fmt.Sprintf("/locks/%s", key))
 	resp, err := h.doreq("DELETE", args)
 	if err != nil {
@@ -140,12 +156,17 @@ func (h *HiberaClient) State(key string) (string, uint64, error) {
 	if resp.StatusCode != 200 {
 		return "", 0, http_error
 	}
-	state, err := getContent(resp)
+	content, err := getContent(resp)
+	if err != nil {
+		return "", 0, err
+	}
+        var owner string
+        err = json.Unmarshal(content, &owner)
 	if err != nil {
 		return "", 0, err
 	}
 	rev, err := getRev(resp)
-	return state, rev, err
+	return owner, rev, err
 }
 
 func (h *HiberaClient) Watch(key string, rev uint64) (uint64, error) {
@@ -201,12 +222,17 @@ func (h *HiberaClient) Members(group string, name string, limit uint) ([]string,
 	if resp.StatusCode != 200 {
 		return nil, 0, http_error
 	}
-	members, err := getContent(resp)
+	content, err := getContent(resp)
+	if err != nil {
+		return nil, 0, err
+	}
+        var members []string
+        err = json.Unmarshal(content, &members)
 	if err != nil {
 		return nil, 0, err
 	}
 	rev, err := getRev(resp)
-	return strings.Split(members, "\n"), rev, err
+	return members, rev, err
 }
 
 func (h *HiberaClient) Get(key string) (string, uint64, error) {
@@ -218,7 +244,12 @@ func (h *HiberaClient) Get(key string) (string, uint64, error) {
 	if resp.StatusCode != 200 {
 		return "", 0, http_error
 	}
-	value, err := getContent(resp)
+	content, err := getContent(resp)
+	if err != nil {
+		return "", 0, err
+	}
+        var value string
+        err = json.Unmarshal(content, &value)
 	if err != nil {
 		return "", 0, err
 	}
@@ -235,11 +266,16 @@ func (h *HiberaClient) List() ([]string, error) {
 	if resp.StatusCode != 200 {
 		return nil, http_error
 	}
-	items, err := getContent(resp)
+	content, err := getContent(resp)
 	if err != nil {
 		return nil, err
 	}
-	return strings.Split(items, "\n"), nil
+        var items []string
+        err = json.Unmarshal(content, &items)
+	if err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 func (h *HiberaClient) Set(key string, value string, rev uint64) (uint64, error) {

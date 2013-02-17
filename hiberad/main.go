@@ -2,27 +2,39 @@ package main
 
 import (
 	"flag"
-	"log"
+        "strings"
 	"hibera/storage"
 	"hibera/server"
+        "hibera/core"
 )
 
-var bind = flag.String("bind", "", "Bind address for the server.")
-var port = flag.Int("port", 2033, "Bind port for the server.")
-var path = flag.String("path", "/var/lib/hibera/", "Backing storage path.")
+var bind = flag.String("bind", server.DEFAULT_BIND, "Bind address for the server.")
+var port = flag.Uint("port", server.DEFAULT_PORT, "Bind port for the server.")
+var path = flag.String("path", storage.DEFAULT_PATH, "Backing storage path.")
+var domain = flag.String("domain", core.DEFAULT_DOMAIN, "Failure domain for this server.")
+var seeds = flag.String("seeds", "", "Seeds for joining the cluster.")
 
 func main() {
 	flag.Parse()
 
-	err := storage.Run(*path)
-	if err != nil {
-		log.Fatal("Error initializing storage: ", err)
-		return
+        // Initialize our storage.
+	backend := storage.NewBackend(*path)
+	if backend == nil {
+	    return
 	}
 
-	err = server.Run(*bind, *port)
-	if err != nil {
-		log.Fatal("Error starting server: ", err)
-		return
-	}
+        // Initialize our core.
+        core := core.NewCore(*domain, strings.Split(*seeds, ","), backend)
+        if core == nil {
+            return
+        }
+
+        // Startup our server.
+        s := server.NewServer(core, *bind, *port)
+        if s == nil {
+            return
+        }
+
+        // Run our server.
+	s.Run()
 }

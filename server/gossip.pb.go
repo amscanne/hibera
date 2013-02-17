@@ -47,20 +47,36 @@ func (x *FOO) UnmarshalJSON(data []byte) error {
 }
 
 type Ping struct {
-	XXX_unrecognized []byte `json:"-"`
+	Version          *uint64 `protobuf:"varint,1,req,name=version" json:"version,omitempty"`
+	XXX_unrecognized []byte  `json:"-"`
 }
 
 func (this *Ping) Reset()         { *this = Ping{} }
 func (this *Ping) String() string { return proto.CompactTextString(this) }
 func (*Ping) ProtoMessage()       {}
 
+func (this *Ping) GetVersion() uint64 {
+	if this != nil && this.Version != nil {
+		return *this.Version
+	}
+	return 0
+}
+
 type Pong struct {
-	XXX_unrecognized []byte `json:"-"`
+	Version          *uint64 `protobuf:"varint,1,req,name=version" json:"version,omitempty"`
+	XXX_unrecognized []byte  `json:"-"`
 }
 
 func (this *Pong) Reset()         { *this = Pong{} }
 func (this *Pong) String() string { return proto.CompactTextString(this) }
 func (*Pong) ProtoMessage()       {}
+
+func (this *Pong) GetVersion() uint64 {
+	if this != nil && this.Version != nil {
+		return *this.Version
+	}
+	return 0
+}
 
 func init() {
 	proto.RegisterEnum("server.FOO", FOO_name, FOO_value)

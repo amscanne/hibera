@@ -5,7 +5,9 @@ enum FOO {
 };
     
 message Ping {
+    required uint64 version = 1;
 }
 
 message Pong {
+    required uint64 version = 1;
 }
