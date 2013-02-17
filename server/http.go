@@ -63,55 +63,55 @@ func (a Addr) String() string {
 	return a.uuid
 }
 
-func serv_list_data(output *bytes.Buffer) error {
+func (s *HTTPServer) list_data(output *bytes.Buffer) error {
 	return nil
 }
 
-func serv_clear_data() error {
+func (s *HTTPServer) clear_data() error {
 	return nil
 }
 
-func serv_state_lock(key string, output *bytes.Buffer) (uint64, error) {
+func (s *HTTPServer) state_lock(key string, output *bytes.Buffer) (uint64, error) {
 	return 0, nil
 }
 
-func serv_acquire_lock(uuid string, key string, timeout uint64, name string) (uint64, error) {
+func (s *HTTPServer) acquire_lock(uuid string, key string, timeout uint64, name string) (uint64, error) {
 	return 0, nil
 }
 
-func serv_release_lock(uuid string, key string) (uint64, error) {
+func (s *HTTPServer) release_lock(uuid string, key string) (uint64, error) {
 	return 0, nil
 }
 
-func serv_members_group(group string, output *bytes.Buffer, name string, limit uint64) (uint64, error) {
+func (s *HTTPServer) members_group(group string, output *bytes.Buffer, name string, limit uint64) (uint64, error) {
 	return 0, nil
 }
 
-func serv_join_group(uuid string, group string, name string) (uint64, error) {
+func (s *HTTPServer) join_group(uuid string, group string, name string) (uint64, error) {
 	return 0, nil
 }
 
-func serv_leave_group(uuid string, group string, name string) (uint64, error) {
+func (s *HTTPServer) leave_group(uuid string, group string, name string) (uint64, error) {
 	return 0, nil
 }
 
-func serv_get_data(key string, output *bytes.Buffer) (uint64, error) {
+func (s *HTTPServer) get_data(key string, output *bytes.Buffer) (uint64, error) {
 	return 0, nil
 }
 
-func serv_set_data(key string, input io.ReadCloser, rev uint64) (uint64, error) {
+func (s *HTTPServer) set_data(key string, input io.ReadCloser, rev uint64) (uint64, error) {
 	return 0, nil
 }
 
-func serv_remove_data(key string, rev uint64) (uint64, error) {
+func (s *HTTPServer) remove_data(key string, rev uint64) (uint64, error) {
 	return 0, nil
 }
 
-func serv_do_watch(uuid string, key string, rev uint64) (uint64, error) {
+func (s *HTTPServer) do_watch(uuid string, key string, rev uint64) (uint64, error) {
 	return 0, nil
 }
 
-func serv_fire_watch(key string, rev uint64) (uint64, error) {
+func (s *HTTPServer) fire_watch(key string, rev uint64) (uint64, error) {
 	return 0, nil
 }
 
@@ -154,10 +154,10 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
 		case "data":
 			switch r.Method {
 			case "GET":
-				err = serv_list_data(buf)
+				err = s.list_data(buf)
 				break
 			case "DELETE":
-				err = serv_clear_data()
+				err = s.clear_data()
 				break
 			}
 			break
@@ -167,49 +167,49 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
 		case "locks":
 			switch r.Method {
 			case "GET":
-				rev, err = serv_state_lock(parts[1], buf)
+				rev, err = s.state_lock(parts[1], buf)
 				break
 			case "POST":
-				rev, err = serv_acquire_lock(uuid, parts[1], intParam(r, "timeout"), strParam(r, "name"))
+				rev, err = s.acquire_lock(uuid, parts[1], intParam(r, "timeout"), strParam(r, "name"))
 				break
 			case "DELETE":
-				rev, err = serv_release_lock(uuid, parts[1])
+				rev, err = s.release_lock(uuid, parts[1])
 				break
 			}
 			break
 		case "groups":
 			switch r.Method {
 			case "GET":
-				rev, err = serv_members_group(parts[1], buf, strParam(r, "name"), intParam(r, "limit"))
+				rev, err = s.members_group(parts[1], buf, strParam(r, "name"), intParam(r, "limit"))
 				break
 			case "POST":
-				rev, err = serv_join_group(uuid, parts[1], strParam(r, "name"))
+				rev, err = s.join_group(uuid, parts[1], strParam(r, "name"))
 				break
 			case "DELETE":
-				rev, err = serv_leave_group(uuid, parts[1], strParam(r, "name"))
+				rev, err = s.leave_group(uuid, parts[1], strParam(r, "name"))
 				break
 			}
 			break
 		case "data":
 			switch r.Method {
 			case "GET":
-				rev, err = serv_get_data(parts[1], buf)
+				rev, err = s.get_data(parts[1], buf)
 				break
 			case "POST":
-				rev, err = serv_set_data(parts[1], r.Body, intParam(r, "rev"))
+				rev, err = s.set_data(parts[1], r.Body, intParam(r, "rev"))
 				break
 			case "DELETE":
-				rev, err = serv_remove_data(parts[1], intParam(r, "rev"))
+				rev, err = s.remove_data(parts[1], intParam(r, "rev"))
 				break
 			}
 			break
 		case "watches":
 			switch r.Method {
 			case "GET":
-				rev, err = serv_do_watch(uuid, parts[1], intParam(r, "rev"))
+				rev, err = s.do_watch(uuid, parts[1], intParam(r, "rev"))
 				break
 			case "POST":
-				rev, err = serv_fire_watch(parts[1], intParam(r, "rev"))
+				rev, err = s.fire_watch(parts[1], intParam(r, "rev"))
 				break
 			}
 			break
