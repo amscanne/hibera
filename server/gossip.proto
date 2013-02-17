@@ -1,9 +1,18 @@
 package server;
 
-message Ping {
-    required uint64 version = 1;
+enum TYPE {
+    PING = 0;
+    PONG = 1;
+};
+
+message ServerInfo {
+    required string id = 1;
+    required uint32 ipv4 = 2;
+    required uint32 port = 3;
 }
 
-message Pong {
-    required uint64 version = 1;
+message Gossip {
+    required uint32 type = 1;
+    required uint64 version = 2;
+    repeated ServerInfo dead = 3;
 }

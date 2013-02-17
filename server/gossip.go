@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+        "code.google.com/p/goprotobuf/proto"
 	"hibera/core"
 )
 
@@ -12,14 +13,42 @@ type GossipServer struct {
 	conn *net.UDPConn
 }
 
+func (s *GossipServer) sendPing(addr *net.UDPAddr) error {
+    // Create our message.
+    pkttype := uint32(TYPE_PING)
+    version := uint64(0)
+    ping := &Gossip{}
+    ping.Type = &pkttype
+    ping.Version = &version
+    data, err := proto.Marshal(ping)
+    if err != nil {
+        return  err
+    }
+
+    // Send the packet.
+    _, err = s.conn.WriteToUDP(data, addr)
+    return err
+}
+
+func (s *GossipServer) processPong(addr *net.UDPAddr, gossip *Gossip) {
+}
+
 func (s *GossipServer) Serve() {
 	packet := make([]byte, 1024)
 	for {
+                // Pull the next packet.
 		n, addr, err := s.conn.ReadFromUDP(packet)
 		if err != nil {
 			continue
 		}
-		fmt.Printf("Received %d bytes from %s.", addr.String(), n)
+                pong := &Gossip{}
+                err = proto.Unmarshal(packet[0:n], pong)
+                if err != nil {
+                    continue
+                }
+
+                // Process whenever.
+                go s.processPong(addr, pong)
 	}
 }
 
