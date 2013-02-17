@@ -23,7 +23,7 @@ func (s *GossipServer) Serve() {
 	}
 }
 
-func NewGossipServer(core *core.Core, addr string, port uint) *GossipServer {
+func NewGossipServer(core *core.Core, addr string, port uint, seeds []string) *GossipServer {
 	udpaddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", addr, port))
 	if err != nil {
 		log.Fatal("Unable to resolve address: ", err)

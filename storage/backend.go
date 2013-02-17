@@ -5,6 +5,9 @@ import (
 	"log"
 	"sync"
 	"path"
+        "bytes"
+        "strings"
+        "io/ioutil"
 	"encoding/gob"
 )
 
@@ -35,6 +38,7 @@ type Backend struct {
 	log1     *os.File
 	log2name string
 	log2     *os.File
+        idname   string
 	lock     *sync.Mutex
 	cs       chan *Update
 }
@@ -52,7 +56,7 @@ func NewBackend(p string) *Backend {
 	}
 
 	// Open our files.
-	data, err := os.OpenFile(path.Join(p, "data"), os.O_RDWR|os.O_CREATE, 0644)
+	dataf, err := os.OpenFile(path.Join(p, "data"), os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
 		log.Fatal("Error initializing data file: ", err)
 		return nil
@@ -60,14 +64,15 @@ func NewBackend(p string) *Backend {
 	log1name := path.Join(p, "log.1")
 	log1, err := os.OpenFile(log1name, os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
-		data.Close()
+		dataf.Close()
 		log.Fatal("Error initializing log file: ", err)
 		return nil
 	}
 	log2name := path.Join(p, "log.2")
 	log2, err := os.OpenFile(log2name, os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
-		data.Close()
+                log1.Close()
+		dataf.Close()
 		log.Fatal("Error initializing log file: ", err)
 		return nil
 	}
@@ -76,10 +81,22 @@ func NewBackend(p string) *Backend {
 	cs := make(chan *Update)
 
 	// Create our backend.
-	b := &Backend{make(map[string]Val), data, log1name, log1, log2name, log2, new(sync.Mutex), cs}
+	b := new(Backend)
+        b.memory = make(map[string]Val)
+        b.data = dataf
+        b.log1name = log1name
+        b.log1 = log1
+        b.log2name = log2name
+        b.log2 =log2
+        b.lock = new(sync.Mutex)
+        b.cs = cs
+        b.idname = path.Join(p, "id")
+
+        // Load data.
 	b.loadFile(b.data)
 	b.loadFile(b.log1)
 	b.loadFile(b.log2)
+
 	return b
 }
 
@@ -158,36 +175,44 @@ func (b *Backend) logWriter() {
 		finished = finished[0:0]
 
 		// Kick off a pivot if we've exceed our size.
-		off, err := b.log2.Seek(0, 1)
+	        off, err := b.log2.Seek(0, 1)
 		if err != nil && off > MAXIMUM_LOG_SIZE {
 			go b.pivotLogs()
 		}
 	}
 
+        process := func(update *Update) {
+	    // Update the in-memory database.
+		// NOTE: This should be atomic.
+		if update.Entry.Val.value == nil {
+			delete(b.memory, update.Entry.key)
+		} else {
+			b.memory[update.Entry.key] = update.Entry.Val
+		}
+
+		// Serialize the entry to the log.
+		b.lock.Lock()
+		update.error = enc.Encode(update.Entry)
+		b.lock.Unlock()
+
+		// Add it to our list of done.
+		finished = append(finished, update)
+            }
+
 	for {
+                // Do a non-blocking call.
 		select {
 		case update := <-b.cs:
-			// Update the in-memory database.
-			// NOTE: This should be atomic.
-			if update.Entry.Val.value == nil {
-				delete(b.memory, update.Entry.key)
-			} else {
-				b.memory[update.Entry.key] = update.Entry.Val
-			}
-
-			// Serialize the entry to the log.
-			b.lock.Lock()
-			update.error = enc.Encode(update.Entry)
-			b.lock.Unlock()
-
-			// Add it to our list of done.
-			finished = append(finished, update)
-			break
-
+			process(update)
+                        break
 		default:
 			complete()
 			break
 		}
+
+                // Do a blocking call.
+                update := <-b.cs
+		process(update)
 
 		if len(finished) == MAXIMUM_LOG_BATCH {
 			complete()
@@ -214,6 +239,44 @@ func (b *Backend) Read(key string) ([]byte, uint64, error) {
 
 func (b *Backend) Delete(key string, rev uint64) error {
 	return b.Write(key, rev, nil)
+}
+
+func (b *Backend) LoadIds(number uint) ([]string, error) {
+        ids := make([]string, 0)
+
+        // Read our current set of ids.
+        iddata, err := ioutil.ReadFile(b.idname)
+        if err != nil &&
+           iddata != nil ||
+           len(iddata) > 0 {
+            ids = strings.Split(string(iddata), "\n")
+        }
+
+        // Supplement.
+        for {
+            if len(ids) >= int(number) {
+                break
+            }
+            uuid, err := Uuid()
+            if err != nil {
+                return nil, err
+            }
+            ids = append(ids, uuid)
+        }
+
+        // Write out the result.
+	buf := new(bytes.Buffer)
+        for _, id := range ids {
+	    buf.WriteString(id)
+	    buf.WriteString("\n")
+        }
+        err = ioutil.WriteFile(b.idname, buf.Bytes(), 0644)
+        if err != nil {
+            return nil, err
+        }
+
+        // Return our ids.
+        return ids[0:number], nil
 }
 
 func (b *Backend) Run() {

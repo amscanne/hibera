@@ -12,13 +12,13 @@ type Server struct {
 	*GossipServer
 }
 
-func NewServer(core *core.Core, addr string, port uint) *Server {
+func NewServer(core *core.Core, addr string, port uint, seeds []string) *Server {
 	http := NewHTTPServer(core, addr, port)
 	if http == nil {
 		return nil
 	}
 
-	gossip := NewGossipServer(core, addr, port)
+	gossip := NewGossipServer(core, addr, port, seeds)
 	if gossip == nil {
 		return nil
 	}

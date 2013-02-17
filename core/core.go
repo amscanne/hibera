@@ -1,33 +1,32 @@
 package core
 
 import (
+    "log"
 	"hibera/storage"
 )
 
-type Client struct {
-	id uint64
-}
-
-type Ref struct {
-	name  string
-	owner *Node
-}
+type ClientId uint64
 
 type Core struct {
 	data    *storage.Backend
-	groups  map[string][]Ref
-	locks   map[string]Ref
-	watches map[string]*Client
+        //master  *Master
+        //proxy   *Proxy
 
+	groups  map[string]map[ClientId]string
+	locks   map[string]map[ClientId]string
+	watches map[string]map[ClientId]bool
+
+        clients map[ClientId]*Client
 	cluster *Cluster
-	clients uint64
+	ClientId
+}
+
+type Client struct {
+	ClientId
+        *Core
 }
 
 type Info struct {
-}
-
-func (c *Client) Id() uint64 {
-	return c.id
 }
 
 func (c *Core) Info() (Info, error) {
@@ -42,11 +41,11 @@ func (c *Core) DataClear() error {
 	return nil
 }
 
-func (c *Core) LockOwner(key string) (string, uint64, error) {
-	return "", 0, nil
+func (c *Core) LockOwners(key string) ([]string, uint64, error) {
+	return nil, 0, nil
 }
 
-func (c *Core) LockAcquire(client *Client, key string, timeout uint64, name string) (uint64, error) {
+func (c *Core) LockAcquire(client *Client, key string, timeout uint64, name string, limit uint64) (uint64, error) {
 	return 0, nil
 }
 
@@ -87,17 +86,53 @@ func (c *Core) WatchFire(key string, rev uint64) (uint64, error) {
 }
 
 func (c *Core) NewClient() *Client {
-	id := c.clients
-	c.clients += 1
-	return &Client{id}
+	id := c.ClientId
+	c.ClientId += 1
+	return &Client{id, c}
 }
 
-func (c *Core) FindClient(id uint64) *Client {
-	return nil
+func (c *Core) FindClient(id ClientId) *Client {
+    return c.clients[id]
 }
 
-func NewCore(domain string, seeds []string, backend *storage.Backend) *Core {
+func (c *Core) fireWatches(path []string) {
+}
+
+func (c *Core) DropClient(id ClientId) {
+    paths := make([]string, 0)
+
+    // Kill off all ephemeral nodes.
+    for group, members := range c.groups {
+        if len(members[id]) > 0 {
+            paths = append(paths, group)
+        }
+        delete(members, id)
+    }
+    for lock, owners := range c.locks {
+        if len(owners[id]) > 0 {
+            paths = append(paths, lock)
+        }
+        delete(owners, id)
+    }
+    for _, clients := range c.watches {
+        delete(clients, id)
+    }
+
+    // Remove the client.
+    delete(c.clients, id)
+
+    // Fire watches.
+    c.fireWatches(paths)
+}
+
+func NewCore(domain string, keys uint, backend *storage.Backend) *Core {
 	core := new(Core)
 	core.data = backend
+        ids, err := core.data.LoadIds(keys)
+        if err != nil {
+            log.Fatal("Unable to load ring: ", err)
+            return nil
+        }
+	core.cluster = NewCluster(domain, ids)
 	return core
 }

@@ -1,17 +1,17 @@
-package core
+package storage
 
 import (
 	"log"
+        "strings"
 	"io/ioutil"
 )
 
-func Uuid() string {
+func Uuid() (string, error) {
 	contents, err := ioutil.ReadFile("/proc/sys/kernel/random/uuid")
-
 	if err != nil {
 		log.Fatal("UUID generation failed!")
-		return ""
+		return "", err
 	}
 
-	return string(contents)
+	return strings.TrimSpace(string(contents)), nil
 }

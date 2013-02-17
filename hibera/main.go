@@ -18,7 +18,7 @@ var name = flag.String("name", "", "Name to use (other than machine address).")
 var count = flag.Uint("count", 1, "Count for services run via the run command.")
 var start = flag.String("start", "", "Script to start the given service.")
 var stop = flag.String("stop", "", "Script to stop the given service.")
-var limit = flag.Uint("limit", 0, "Limit for machines to return.")
+var limit = flag.Uint("limit", 1, "Limit for machines to run or simultanous locks.")
 var output = flag.String("output", "", "Output file for sync.")
 
 var usagemsg = `usage: hibera <command> <key> [options]
@@ -32,6 +32,7 @@ commands:
 
     lock <key>                   --- Run a process while holding
          [-name <name>]              the given lock.
+         [-limit <number>]
          [-exec <run-script>]
          [-timeout <timeout>]
 
@@ -81,8 +82,8 @@ func cli_info(c *client.HiberaClient) error {
 	return nil
 }
 
-func cli_lock(c *client.HiberaClient, key string, name string, exec string, timeout uint) error {
-	_, err := c.Lock(key, timeout, name)
+func cli_lock(c *client.HiberaClient, key string, name string, exec string, timeout uint, limit uint) error {
+	_, err := c.Lock(key, timeout, name, limit)
 	if err != nil {
 		return err
 	}
@@ -268,7 +269,7 @@ func main() {
         case "info":
                 err = cli_info(c)
 	case "lock":
-		err = cli_lock(c, key, *name, *exec, *timeout)
+		err = cli_lock(c, key, *name, *exec, *timeout, *limit)
 		break
 	case "join":
 		err = cli_join(c, key, *name, *exec)

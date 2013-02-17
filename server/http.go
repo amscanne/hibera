@@ -31,8 +31,8 @@ type Addr struct {
 
 type HTTPServer struct {
 	*core.Core
-	*http.Server
 	*Listener
+	*http.Server
 }
 
 func (l Listener) Accept() (net.Conn, error) {
@@ -48,9 +48,12 @@ func (c Connection) RemoteAddr() net.Addr {
 }
 
 func (c Connection) Close() error {
-	log.Printf("%s", c.Conn.RemoteAddr())
-	rv := c.Conn.Close()
-	return rv
+        if c.Client != nil {
+            // Inform the core about this dropped client.
+            c.Client.Core.DropClient(c.Client.ClientId)
+            c.Client = nil
+        }
+	return c.Conn.Close()
 }
 
 func (a Addr) Network() string {
@@ -58,7 +61,12 @@ func (a Addr) Network() string {
 }
 
 func (a Addr) String() string {
-	return string(a.Client.Id())
+        if a.Client != nil {
+            // Return the string client id.
+	    return string(a.Client.ClientId)
+        }
+        // We've already closed.
+        return "<disconnected>"
 }
 
 func (s *HTTPServer) info(output *bytes.Buffer) error {
@@ -85,15 +93,15 @@ func (s *HTTPServer) data_clear() error {
 
 func (s *HTTPServer) lock_owner(key string, output *bytes.Buffer) (uint64, error) {
 	enc := json.NewEncoder(output)
-	owner, rev, err := s.Core.LockOwner(key)
+	owners, rev, err := s.Core.LockOwners(key)
 	if err != nil {
 		return 0, err
 	}
-	return rev, enc.Encode(owner)
+	return rev, enc.Encode(owners)
 }
 
-func (s *HTTPServer) lock_acquire(client *core.Client, key string, timeout uint64, name string) (uint64, error) {
-	return s.Core.LockAcquire(client, key, timeout, name)
+func (s *HTTPServer) lock_acquire(client *core.Client, key string, timeout uint64, name string, limit uint64) (uint64, error) {
+	return s.Core.LockAcquire(client, key, timeout, name, limit)
 }
 
 func (s *HTTPServer) lock_release(client *core.Client, key string) (uint64, error) {
@@ -173,7 +181,7 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "", 403)
 		return
 	}
-	client := s.Core.FindClient(id)
+	client := s.Core.FindClient(core.ClientId(id))
 	if client == nil {
 		http.Error(w, "", 403)
 		return
@@ -214,7 +222,7 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
 				rev, err = s.lock_owner(parts[1], buf)
 				break
 			case "POST":
-				rev, err = s.lock_acquire(client, parts[1], intParam(r, "timeout"), strParam(r, "name"))
+				rev, err = s.lock_acquire(client, parts[1], intParam(r, "timeout"), strParam(r, "name"), intParam(r, "limit"))
 				break
 			case "DELETE":
 				rev, err = s.lock_release(client, parts[1])

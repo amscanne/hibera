@@ -139,10 +139,11 @@ func (h *HiberaClient) Info(base uint) (*core.Info, error) {
 	return &info, err
 }
 
-func (h *HiberaClient) Lock(key string, timeout uint, name string) (uint64, error) {
+func (h *HiberaClient) Lock(key string, timeout uint, name string, limit uint) (uint64, error) {
 	args := makeArgs(fmt.Sprintf("/locks/%s", key))
 	args.params["timeout"] = string(timeout)
 	args.params["name"] = string(name)
+	args.params["limit"] = string(limit)
 	resp, err := h.doreq("POST", args)
 	if err != nil {
 		return 0, err
@@ -167,26 +168,26 @@ func (h *HiberaClient) Unlock(key string) (uint64, error) {
 	return rev, err
 }
 
-func (h *HiberaClient) Owner(key string) (string, uint64, error) {
+func (h *HiberaClient) Owners(key string) ([]string, uint64, error) {
 	args := makeArgs(fmt.Sprintf("/locks/%s", key))
 	resp, err := h.doreq("DELETE", args)
 	if err != nil {
-		return "", 0, err
+		return nil, 0, err
 	}
 	if resp.StatusCode != 200 {
-		return "", 0, http_error
+		return nil, 0, http_error
 	}
 	content, err := getContent(resp)
 	if err != nil {
-		return "", 0, err
+		return nil, 0, err
 	}
-	var owner string
-	err = json.Unmarshal(content, &owner)
+	var owners []string
+	err = json.Unmarshal(content, &owners)
 	if err != nil {
-		return "", 0, err
+		return nil, 0, err
 	}
 	rev, err := getRev(resp)
-	return owner, rev, err
+	return owners, rev, err
 }
 
 func (h *HiberaClient) Watch(key string, rev uint64) (uint64, error) {

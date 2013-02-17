@@ -12,6 +12,7 @@ var bind = flag.String("bind", server.DEFAULT_BIND, "Bind address for the server
 var port = flag.Uint("port", server.DEFAULT_PORT, "Bind port for the server.")
 var path = flag.String("path", storage.DEFAULT_PATH, "Backing storage path.")
 var domain = flag.String("domain", core.DEFAULT_DOMAIN, "Failure domain for this server.")
+var keys = flag.Uint("keys", core.DEFAULT_KEYS, "The number of keys for this node (weight).")
 var seeds = flag.String("seeds", "", "Seeds for joining the cluster.")
 
 func main() {
@@ -24,13 +25,13 @@ func main() {
 	}
 
 	// Initialize our core.
-	core := core.NewCore(*domain, strings.Split(*seeds, ","), backend)
+	core := core.NewCore(*domain, *keys, backend)
 	if core == nil {
 		return
 	}
 
 	// Startup our server.
-	s := server.NewServer(core, *bind, *port)
+	s := server.NewServer(core, *bind, *port, strings.Split(*seeds, ","))
 	if s == nil {
 		return
 	}
