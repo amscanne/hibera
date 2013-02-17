@@ -2,14 +2,14 @@ package server
 
 import (
 	"fmt"
-        "log"
+	"log"
 	"net"
-        "hibera/core"
+	"hibera/core"
 )
 
 type GossipServer struct {
-    *core.Core
-    conn *net.UDPConn
+	*core.Core
+	conn *net.UDPConn
 }
 
 func (s *GossipServer) Serve() {
@@ -19,24 +19,24 @@ func (s *GossipServer) Serve() {
 		if err != nil {
 			continue
 		}
-                fmt.Printf("Received %d bytes from %s.", addr.String(), n)
+		fmt.Printf("Received %d bytes from %s.", addr.String(), n)
 	}
 }
 
 func NewGossipServer(core *core.Core, addr string, port uint) *GossipServer {
 	udpaddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", addr, port))
 	if err != nil {
-            log.Fatal("Unable to resolve address: ", err)
-	    return nil
+		log.Fatal("Unable to resolve address: ", err)
+		return nil
 	}
 
 	conn, err := net.ListenUDP("udp", udpaddr)
 	if err != nil {
-            log.Fatal("Unable to bind Gossip server: ", err)
-	    return nil
+		log.Fatal("Unable to bind Gossip server: ", err)
+		return nil
 	}
 
-        return &GossipServer{core, conn}
+	return &GossipServer{core, conn}
 }
 
 func (s *GossipServer) Run() {

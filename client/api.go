@@ -7,12 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-        "strings"
+	"strings"
 	"crypto/tls"
 	"net/url"
 	"net/http"
-        "encoding/json"
-        "hibera/server"
+	"encoding/json"
+	"hibera/core"
+	"hibera/server"
 )
 
 var rev_error = errors.New("No X-Revision Found")
@@ -26,21 +27,21 @@ type HiberaClient struct {
 
 func NewHiberaClient(addr string) *HiberaClient {
 	client := new(HiberaClient)
-        idx := strings.Index(addr, ":")
-        port := server.DEFAULT_PORT
-        if idx >= 0 && idx + 1 < len(addr) {
-	    parsed_port, err := strconv.ParseUint(addr[idx+1:], 0, 32)
-            if err != nil {
-                port = server.DEFAULT_PORT
-            } else {
-                port = uint(parsed_port)
-            }
-            addr = addr[:idx]
-        }
-        if len(addr) == 0 {
-            addr = "localhost"
-        }
-        client.url = fmt.Sprintf("http://%s:%d", addr, port)
+	idx := strings.Index(addr, ":")
+	port := server.DEFAULT_PORT
+	if idx >= 0 && idx+1 < len(addr) {
+		parsed_port, err := strconv.ParseUint(addr[idx+1:], 0, 32)
+		if err != nil {
+			port = server.DEFAULT_PORT
+		} else {
+			port = uint(parsed_port)
+		}
+		addr = addr[0:idx]
+	}
+	if len(addr) == 0 {
+		addr = "localhost"
+	}
+	client.url = fmt.Sprintf("http://%s:%d", addr, port)
 	client.lock = new(sync.Mutex)
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
@@ -119,10 +120,29 @@ func (h *HiberaClient) doreq(method string, args HttpArgs) (*http.Response, erro
 	return h.http.Do(req)
 }
 
+func (h *HiberaClient) Info(base uint) (*core.Info, error) {
+	args := makeArgs("/")
+	args.params["base"] = string(base)
+	resp, err := h.doreq("GET", args)
+	if err != nil {
+		return nil, err
+	}
+	content, err := getContent(resp)
+	if err != nil {
+		return nil, err
+	}
+	var info core.Info
+	err = json.Unmarshal(content, &info)
+	if err != nil {
+		return nil, err
+	}
+	return &info, err
+}
+
 func (h *HiberaClient) Lock(key string, timeout uint, name string) (uint64, error) {
 	args := makeArgs(fmt.Sprintf("/locks/%s", key))
 	args.params["timeout"] = string(timeout)
-        args.params["name"] = string(name)
+	args.params["name"] = string(name)
 	resp, err := h.doreq("POST", args)
 	if err != nil {
 		return 0, err
@@ -160,8 +180,8 @@ func (h *HiberaClient) Owner(key string) (string, uint64, error) {
 	if err != nil {
 		return "", 0, err
 	}
-        var owner string
-        err = json.Unmarshal(content, &owner)
+	var owner string
+	err = json.Unmarshal(content, &owner)
 	if err != nil {
 		return "", 0, err
 	}
@@ -185,7 +205,7 @@ func (h *HiberaClient) Watch(key string, rev uint64) (uint64, error) {
 
 func (h *HiberaClient) Join(group string, name string) (uint64, error) {
 	args := makeArgs(fmt.Sprintf("/groups/%s/%s", group, name))
-        args.params["name"] = string(name)
+	args.params["name"] = string(name)
 	resp, err := h.doreq("POST", args)
 	if err != nil {
 		return 0, err
@@ -199,7 +219,7 @@ func (h *HiberaClient) Join(group string, name string) (uint64, error) {
 
 func (h *HiberaClient) Leave(group string, name string) (uint64, error) {
 	args := makeArgs(fmt.Sprintf("/groups/%s/%s", group, name))
-        args.params["name"] = string(name)
+	args.params["name"] = string(name)
 	resp, err := h.doreq("DELETE", args)
 	if err != nil {
 		return 0, err
@@ -214,7 +234,7 @@ func (h *HiberaClient) Leave(group string, name string) (uint64, error) {
 func (h *HiberaClient) Members(group string, name string, limit uint) ([]string, uint64, error) {
 	args := makeArgs(fmt.Sprintf("/groups/%s", group))
 	args.params["limit"] = string(limit)
-        args.params["name"] = string(name)
+	args.params["name"] = string(name)
 	resp, err := h.doreq("GET", args)
 	if err != nil {
 		return nil, 0, err
@@ -226,8 +246,8 @@ func (h *HiberaClient) Members(group string, name string, limit uint) ([]string,
 	if err != nil {
 		return nil, 0, err
 	}
-        var members []string
-        err = json.Unmarshal(content, &members)
+	var members []string
+	err = json.Unmarshal(content, &members)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -248,8 +268,8 @@ func (h *HiberaClient) Get(key string) (string, uint64, error) {
 	if err != nil {
 		return "", 0, err
 	}
-        var value string
-        err = json.Unmarshal(content, &value)
+	var value string
+	err = json.Unmarshal(content, &value)
 	if err != nil {
 		return "", 0, err
 	}
@@ -270,8 +290,8 @@ func (h *HiberaClient) List() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-        var items []string
-        err = json.Unmarshal(content, &items)
+	var items []string
+	err = json.Unmarshal(content, &items)
 	if err != nil {
 		return nil, err
 	}

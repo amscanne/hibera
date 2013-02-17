@@ -28,6 +28,8 @@ options for all commands:
 
 commands:
 
+    info                         --- Show cluster info.
+
     lock <key>                   --- Run a process while holding
          [-name <name>]              the given lock.
          [-exec <run-script>]
@@ -68,6 +70,14 @@ commands:
 `
 
 func do_exec(command string, input string) error {
+	return nil
+}
+
+func cli_info(c *client.HiberaClient) error {
+	_, err := c.Info(0)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -227,20 +237,22 @@ func usage() {
 
 func main() {
 	// Pull out our arguments.
-        if len(os.Args) == 1 {
-            usage()
-        }
+	if len(os.Args) == 1 {
+		usage()
+	}
 	command := os.Args[1]
-        os.Args = os.Args[1:]
+	os.Args = os.Args[1:]
 
 	key := ""
-	if command == "list" || command == "clear" {
+	if command == "info" ||
+           command == "list" ||
+           command == "clear" {
 	} else {
 		if len(os.Args) == 1 {
-                    usage()
-                }
+			usage()
+		}
 		key = os.Args[1]
-                os.Args = os.Args[1:]
+		os.Args = os.Args[1:]
 	}
 	flag.Parse()
 
@@ -253,6 +265,8 @@ func main() {
 	// Do our stuff.
 	var err error
 	switch command {
+        case "info":
+                err = cli_info(c)
 	case "lock":
 		err = cli_lock(c, key, *name, *exec, *timeout)
 		break

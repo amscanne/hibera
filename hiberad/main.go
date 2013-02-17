@@ -2,10 +2,10 @@ package main
 
 import (
 	"flag"
-        "strings"
+	"strings"
 	"hibera/storage"
 	"hibera/server"
-        "hibera/core"
+	"hibera/core"
 )
 
 var bind = flag.String("bind", server.DEFAULT_BIND, "Bind address for the server.")
@@ -17,24 +17,25 @@ var seeds = flag.String("seeds", "", "Seeds for joining the cluster.")
 func main() {
 	flag.Parse()
 
-        // Initialize our storage.
+	// Initialize our storage.
 	backend := storage.NewBackend(*path)
 	if backend == nil {
-	    return
+		return
 	}
 
-        // Initialize our core.
-        core := core.NewCore(*domain, strings.Split(*seeds, ","), backend)
-        if core == nil {
-            return
-        }
+	// Initialize our core.
+	core := core.NewCore(*domain, strings.Split(*seeds, ","), backend)
+	if core == nil {
+		return
+	}
 
-        // Startup our server.
-        s := server.NewServer(core, *bind, *port)
-        if s == nil {
-            return
-        }
+	// Startup our server.
+	s := server.NewServer(core, *bind, *port)
+	if s == nil {
+		return
+	}
 
-        // Run our server.
+	// Run our server.
+	go backend.Run()
 	s.Run()
 }
