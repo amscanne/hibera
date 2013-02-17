@@ -4,8 +4,12 @@ import (
 	"fmt"
 	"net"
 	"log"
+	"io"
+	"strconv"
+	"bytes"
 	"strings"
 	"net/http"
+	"errors"
 	"hibera/core"
 )
 
@@ -53,24 +57,166 @@ func (a Addr) String() string {
 	return a.uuid
 }
 
+func serv_list_data(output *bytes.Buffer) error {
+	return nil
+}
+
+func serv_clear_data() error {
+	return nil
+}
+
+func serv_state_lock(key string, output *bytes.Buffer) (uint64, error) {
+	return 0, nil
+}
+
+func serv_acquire_lock(uuid string, key string, timeout uint64) (uint64, error) {
+	return 0, nil
+}
+
+func serv_release_lock(uuid string, key string) (uint64, error) {
+	return 0, nil
+}
+
+func serv_members_group(group string, output *bytes.Buffer, limit uint64) (uint64, error) {
+	return 0, nil
+}
+
+func serv_join_group(uuid string, group string, name string) (uint64, error) {
+	return 0, nil
+}
+
+func serv_leave_group(uuid string, group string, name string) (uint64, error) {
+	return 0, nil
+}
+
+func serv_get_data(key string, output *bytes.Buffer) (uint64, error) {
+	return 0, nil
+}
+
+func serv_set_data(key string, input io.ReadCloser, rev uint64) (uint64, error) {
+	return 0, nil
+}
+
+func serv_remove_data(key string, rev uint64) (uint64, error) {
+	return 0, nil
+}
+
+func serv_do_watch(uuid string, key string, rev uint64) (uint64, error) {
+	return 0, nil
+}
+
+func serv_fire_watch(key string, rev uint64) (uint64, error) {
+	return 0, nil
+}
+
+func intParam(r *http.Request, name string) uint64 {
+	values := r.Form[name]
+	if len(values) == 0 {
+		return 0
+	}
+	rval, err := strconv.ParseUint(values[0], 0, 64)
+	if err != nil {
+		return 0
+	}
+	return rval
+}
+
+func strParam(r *http.Request, name string) string {
+	values := r.Form[name]
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
+}
+
 func handler(w http.ResponseWriter, r *http.Request) {
+	// Extract out parameters.
 	r.ParseForm()
-	parts := strings.SplitN(r.URL.Path[1:], "/", 3)
+	parts := strings.SplitN(r.URL.Path[1:], "/", 2)
+
+	// Pull out the relevant client.
+	uuid := r.RemoteAddr
+
+	// Prepare our response.
+	buf := new(bytes.Buffer)
+	err := errors.New("Unhandler Request")
+	rev := uint64(0)
 
 	switch len(parts) {
 	case 1:
-		fmt.Fprintf(w, "{%s}", parts[0])
-		break
+		switch parts[0] {
+		case "data":
+			switch r.Method {
+			case "GET":
+				err = serv_list_data(buf)
+				break
+			case "DELETE":
+				err = serv_clear_data()
+				break
+			}
+			break
+		}
 	case 2:
-		fmt.Fprintf(w, "{%s} -> %s", parts[0], parts[1])
-		break
-	case 3:
-		fmt.Fprintf(w, "{%s} -> %s -> %s", parts[0], parts[1], parts[2])
-		break
+		switch parts[0] {
+		case "locks":
+			switch r.Method {
+			case "GET":
+				rev, err = serv_state_lock(parts[1], buf)
+				break
+			case "POST":
+				rev, err = serv_acquire_lock(uuid, parts[1], intParam(r, "timeout"))
+				break
+			case "DELETE":
+				rev, err = serv_release_lock(uuid, parts[1])
+				break
+			}
+			break
+		case "groups":
+			switch r.Method {
+			case "GET":
+				rev, err = serv_members_group(parts[1], buf, intParam(r, "limit"))
+				break
+			case "POST":
+				rev, err = serv_join_group(uuid, parts[1], strParam(r, "name"))
+				break
+			case "DELETE":
+				rev, err = serv_leave_group(uuid, parts[1], strParam(r, "name"))
+				break
+			}
+			break
+		case "data":
+			switch r.Method {
+			case "GET":
+				rev, err = serv_get_data(parts[1], buf)
+				break
+			case "POST":
+				rev, err = serv_set_data(parts[1], r.Body, intParam(r, "rev"))
+				break
+			case "DELETE":
+				rev, err = serv_remove_data(parts[1], intParam(r, "rev"))
+				break
+			}
+			break
+		case "watches":
+			switch r.Method {
+			case "GET":
+				rev, err = serv_do_watch(uuid, parts[1], intParam(r, "rev"))
+				break
+			case "POST":
+				rev, err = serv_fire_watch(parts[1], intParam(r, "rev"))
+				break
+			}
+			break
+		}
 	}
 
-	//fmt.Fprintf(w, "%s %s!", r.URL.Path[1:], r.Form["timeout"])
-	//fmt.Fprintf(w, "%s!", r.RemoteAddr)
+	if err != nil {
+		http.Error(w, "", 501)
+	} else {
+		w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
+		w.Header().Set("X-Revision", strconv.FormatUint(rev, 10))
+		io.Copy(w, buf)
+	}
 }
 
 func RunHTTP(addr string, port int) error {

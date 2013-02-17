@@ -9,10 +9,10 @@ func Serve(conn *net.UDPConn) {
 	packet := make([]byte, 1024)
 	for {
 		n, addr, err := conn.ReadFromUDP(packet)
-                if err != nil {
-                    continue
-                }
-                fmt.Printf("%d bytes received @ %s\n", n, addr);
+		if err != nil {
+			continue
+		}
+		fmt.Printf("%d bytes received @ %s\n", n, addr)
 	}
 }
 
