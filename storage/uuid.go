@@ -2,7 +2,7 @@ package storage
 
 import (
 	"log"
-        "strings"
+	"strings"
 	"io/ioutil"
 )
 

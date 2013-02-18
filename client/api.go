@@ -54,12 +54,13 @@ type HttpArgs struct {
 	path    string
 	headers map[string]string
 	params  map[string]string
+        body    io.Reader
 }
 
 func makeArgs(path string) HttpArgs {
 	headers := make(map[string]string)
 	params := make(map[string]string)
-	return HttpArgs{path: path, headers: headers, params: params}
+	return HttpArgs{path, headers, params, nil}
 }
 
 func getRev(resp *http.Response) (uint64, error) {
@@ -100,7 +101,7 @@ func (h *HiberaClient) req(method string, args HttpArgs) (*http.Request, error) 
 			addr.WriteString(url.QueryEscape(value))
 		}
 	}
-	req, err := http.NewRequest(method, addr.String(), nil)
+	req, err := http.NewRequest(method, addr.String(), args.body)
 	if err != nil {
 		return req, err
 	}
@@ -256,26 +257,21 @@ func (h *HiberaClient) Members(group string, name string, limit uint) ([]string,
 	return members, rev, err
 }
 
-func (h *HiberaClient) Get(key string) (string, uint64, error) {
+func (h *HiberaClient) Get(key string) ([]byte, uint64, error) {
 	args := makeArgs(fmt.Sprintf("/data/%s", key))
 	resp, err := h.doreq("GET", args)
 	if err != nil {
-		return "", 0, err
+		return nil, 0, err
 	}
 	if resp.StatusCode != 200 {
-		return "", 0, http_error
+		return nil, 0, http_error
 	}
 	content, err := getContent(resp)
 	if err != nil {
-		return "", 0, err
-	}
-	var value string
-	err = json.Unmarshal(content, &value)
-	if err != nil {
-		return "", 0, err
+		return nil, 0, err
 	}
 	rev, err := getRev(resp)
-	return value, rev, err
+	return content, rev, err
 }
 
 func (h *HiberaClient) List() ([]string, error) {
@@ -299,9 +295,10 @@ func (h *HiberaClient) List() ([]string, error) {
 	return items, nil
 }
 
-func (h *HiberaClient) Set(key string, value string, rev uint64) (uint64, error) {
+func (h *HiberaClient) Set(key string, value []byte, rev uint64) (uint64, error) {
 	args := makeArgs(fmt.Sprintf("/data/%s", key))
 	args.params["rev"] = strconv.FormatUint(rev, 10)
+        args.body = bytes.NewBuffer(value)
 	resp, err := h.doreq("POST", args)
 	if err != nil {
 		return 0, err

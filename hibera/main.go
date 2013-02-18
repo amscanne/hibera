@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"bytes"
 	"io"
+        "io/ioutil"
 	"os"
 	"log"
 	"strings"
@@ -70,7 +71,7 @@ commands:
     fire <key>                   --- Notify all waiters on the key.
 `
 
-func do_exec(command string, input string) error {
+func do_exec(command string, input []byte) error {
 	return nil
 }
 
@@ -88,7 +89,7 @@ func cli_lock(c *client.HiberaClient, key string, name string, exec string, time
 		return err
 	}
 	defer c.Unlock(key)
-	return do_exec(exec, "")
+	return do_exec(exec, nil)
 }
 
 func cli_join(c *client.HiberaClient, key string, name string, exec string) error {
@@ -97,7 +98,7 @@ func cli_join(c *client.HiberaClient, key string, name string, exec string) erro
 		return err
 	}
 	defer c.Leave(key, name)
-	return do_exec(exec, "")
+	return do_exec(exec, nil)
 }
 
 func cli_run(c *client.HiberaClient, key string, name string, count uint, start string, stop string) error {
@@ -125,9 +126,9 @@ func cli_run(c *client.HiberaClient, key string, name string, count uint, start 
 
 		// Start or stop appropriately.
 		if active {
-			do_exec(start, "")
+			do_exec(start, nil)
 		} else {
-			do_exec(stop, "")
+			do_exec(stop, nil)
 		}
 
 		// Wait for the next update.
@@ -160,11 +161,10 @@ func cli_get(c *client.HiberaClient, key string) error {
 }
 
 func cli_set(c *client.HiberaClient, key string) error {
-	buf := bytes.NewBuffer(nil)
+	buf := new(bytes.Buffer)
 	// Fully read input.
 	io.Copy(buf, os.Stdin)
-	value := string(buf.Bytes())
-	_, err := c.Set(key, value, 0)
+	_, err := c.Set(key, buf.Bytes(), 0)
 	return err
 }
 
@@ -197,13 +197,10 @@ func cli_sync(c *client.HiberaClient, key string, output string, exec string) er
 
 		if output != "" {
 			// Copy the output to the file.
-			f, err := os.OpenFile(output, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	                err = ioutil.WriteFile(output, value, 0644)
 			if err != nil {
-				f.Close()
 				return err
 			}
-			io.WriteString(f, value)
-			f.Close()
 		}
 
 		if exec != "" {
@@ -246,8 +243,8 @@ func main() {
 
 	key := ""
 	if command == "info" ||
-           command == "list" ||
-           command == "clear" {
+		command == "list" ||
+		command == "clear" {
 	} else {
 		if len(os.Args) == 1 {
 			usage()
@@ -266,8 +263,8 @@ func main() {
 	// Do our stuff.
 	var err error
 	switch command {
-        case "info":
-                err = cli_info(c)
+	case "info":
+		err = cli_info(c)
 	case "lock":
 		err = cli_lock(c, key, *name, *exec, *timeout, *limit)
 		break

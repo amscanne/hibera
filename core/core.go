@@ -1,22 +1,22 @@
 package core
 
 import (
-    "log"
+	"log"
 	"hibera/storage"
 )
 
 type ClientId uint64
 
 type Core struct {
-	data    *storage.Backend
-        //master  *Master
-        //proxy   *Proxy
+	data *storage.Backend
+	//master  *Master
+	//proxy   *Proxy
 
-	groups map[string]map[ClientId]string
-	locks map[string]map[ClientId]string
+	groups  map[string]map[ClientId]string
+	locks   map[string]map[ClientId]string
 	watches map[string]map[ClientId]bool
 
-        clients map[ClientId]*Client
+	clients map[ClientId]*Client
 	ClientId
 
 	cluster *Cluster
@@ -24,22 +24,21 @@ type Core struct {
 
 type Client struct {
 	ClientId
-        *Core
+	*Core
 }
 
-type Info struct {
-}
+type Info struct{}
 
 func (c *Core) Info() (Info, error) {
-    return Info{}, nil
+	return Info{}, nil
 }
 
 func (c *Core) DataList() ([]string, error) {
-	return make([]string, 0), nil
+	return c.data.List()
 }
 
 func (c *Core) DataClear() error {
-	return nil
+	return c.data.Clear()
 }
 
 func (c *Core) LockOwners(key string) ([]string, uint64, error) {
@@ -67,15 +66,15 @@ func (c *Core) GroupLeave(client *Client, group string, name string) (uint64, er
 }
 
 func (c *Core) DataGet(key string) ([]byte, uint64, error) {
-	return nil, 0, nil
+	return c.data.Read(key)
 }
 
 func (c *Core) DataSet(key string, value []byte, rev uint64) (uint64, error) {
-	return 0, nil
+	return 0, c.data.Write(key, value, rev)
 }
 
 func (c *Core) DataRemove(key string, rev uint64) (uint64, error) {
-	return 0, nil
+	return 0, c.data.Delete(key, rev)
 }
 
 func (c *Core) WatchWait(client *Client, key string, rev uint64) (uint64, error) {
@@ -90,42 +89,42 @@ func (c *Core) NewClient() *Client {
 	id := c.ClientId
 	client := &Client{id, c}
 	c.ClientId += 1
-        c.clients[id] = client
-        return client
+	c.clients[id] = client
+	return client
 }
 
 func (c *Core) FindClient(id ClientId) *Client {
-    return c.clients[id]
+	return c.clients[id]
 }
 
 func (c *Core) fireWatches(path []string) {
 }
 
 func (c *Core) DropClient(id ClientId) {
-    paths := make([]string, 0)
+	paths := make([]string, 0)
 
-    // Kill off all ephemeral nodes.
-    for group, members := range c.groups {
-        if len(members[id]) > 0 {
-            paths = append(paths, group)
-        }
-        delete(members, id)
-    }
-    for lock, owners := range c.locks {
-        if len(owners[id]) > 0 {
-            paths = append(paths, lock)
-        }
-        delete(owners, id)
-    }
-    for _, clients := range c.watches {
-        delete(clients, id)
-    }
+	// Kill off all ephemeral nodes.
+	for group, members := range c.groups {
+		if len(members[id]) > 0 {
+			paths = append(paths, group)
+		}
+		delete(members, id)
+	}
+	for lock, owners := range c.locks {
+		if len(owners[id]) > 0 {
+			paths = append(paths, lock)
+		}
+		delete(owners, id)
+	}
+	for _, clients := range c.watches {
+		delete(clients, id)
+	}
 
-    // Remove the client.
-    delete(c.clients, id)
+	// Remove the client.
+	delete(c.clients, id)
 
-    // Fire watches.
-    c.fireWatches(paths)
+	// Fire watches.
+	c.fireWatches(paths)
 }
 
 func NewCore(domain string, keys uint, backend *storage.Backend) *Core {
@@ -134,12 +133,12 @@ func NewCore(domain string, keys uint, backend *storage.Backend) *Core {
 	core.groups = make(map[string]map[ClientId]string)
 	core.locks = make(map[string]map[ClientId]string)
 	core.watches = make(map[string]map[ClientId]bool)
-        core.clients = make(map[ClientId]*Client)
-        ids, err := core.data.LoadIds(keys)
-        if err != nil {
-            log.Fatal("Unable to load ring: ", err)
-            return nil
-        }
+	core.clients = make(map[ClientId]*Client)
+	ids, err := core.data.LoadIds(keys)
+	if err != nil {
+		log.Fatal("Unable to load ring: ", err)
+		return nil
+	}
 	core.cluster = NewCluster(domain, ids)
 	return core
 }

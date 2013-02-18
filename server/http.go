@@ -10,7 +10,6 @@ import (
 	"strings"
 	"net/http"
 	"errors"
-	"io/ioutil"
 	"encoding/json"
 	"hibera/core"
 )
@@ -26,7 +25,7 @@ type Connection struct {
 }
 
 type Addr struct {
-    core.ClientId
+	core.ClientId
 }
 
 type HTTPServer struct {
@@ -48,8 +47,8 @@ func (c Connection) RemoteAddr() net.Addr {
 }
 
 func (c Connection) Close() error {
-        // Inform the core about this dropped client.
-        c.Client.Core.DropClient(c.Client.ClientId)
+	// Inform the core about this dropped client.
+	c.Client.Core.DropClient(c.Client.ClientId)
 	return c.Conn.Close()
 }
 
@@ -58,7 +57,7 @@ func (a Addr) Network() string {
 }
 
 func (a Addr) String() string {
-    return strconv.FormatUint(uint64(a.ClientId), 10)
+	return strconv.FormatUint(uint64(a.ClientId), 10)
 }
 
 func (s *HTTPServer) info(output *bytes.Buffer) error {
@@ -162,11 +161,20 @@ func strParam(r *http.Request, name string) string {
 	return values[0]
 }
 
-func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
-	// Extract out parameters.
-	r.ParseForm()
-	parts := strings.SplitN(r.URL.Path[1:], "/", 2)
+func getContent(r *http.Request) ([]byte, error) {
+	length := r.ContentLength
+	if length < 0 {
+		return nil, nil
+	}
+	buf := make([]byte, length)
+	n, err := io.ReadFull(r.Body, buf)
+        if n != int(length) || err != nil {
+		return nil, err
+	}
+	return buf, nil
+}
 
+func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
 	// Pull out the relevant client.
 	id, err := strconv.ParseUint(r.RemoteAddr, 0, 64)
 	if err != nil {
@@ -179,21 +187,32 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+        // Read the content.
+        content, err := getContent(r)
+        if err != nil {
+	    http.Error(w, "Error reading content.", 500)
+	    return
+        }
+
+	// Extract out parameters.
+	r.ParseForm()
+	parts := strings.SplitN(r.URL.Path[1:], "/", 2)
+
 	// Prepare our response.
 	buf := new(bytes.Buffer)
-	err = errors.New(fmt.Sprintf("Unhandled Requst: %s %s", r.Method, r.URL.Path))
+	err = errors.New(fmt.Sprintf("Unhandled Request: %s %s", r.Method, r.URL.Path))
 	rev := uint64(0)
 
 	switch len(parts) {
 	case 1:
 		switch parts[0] {
-                case "":
-                    switch r.Method {
+		case "":
+			switch r.Method {
 			case "GET":
 				err = s.info(buf)
 				break
-                    }
-                    break
+			}
+			break
 
 		case "data":
 			switch r.Method {
@@ -240,12 +259,7 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
 				rev, err = s.data_get(parts[1], buf)
 				break
 			case "POST":
-				data, newerr := ioutil.ReadAll(r.Body)
-				if newerr == nil {
-					rev, err = s.data_set(parts[1], data, intParam(r, "rev"))
-				} else {
-                                    err = newerr
-                                }
+				rev, err = s.data_set(parts[1], content, intParam(r, "rev"))
 				break
 			case "DELETE":
 				rev, err = s.data_remove(parts[1], intParam(r, "rev"))

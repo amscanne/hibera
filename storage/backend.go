@@ -5,9 +5,9 @@ import (
 	"log"
 	"sync"
 	"path"
-        "bytes"
-        "strings"
-        "io/ioutil"
+	"bytes"
+	"strings"
+	"io/ioutil"
 	"encoding/gob"
 )
 
@@ -16,12 +16,12 @@ var MAXIMUM_LOG_BATCH = 256
 var MAXIMUM_LOG_SIZE = int64(1024 * 1024)
 
 type Val struct {
-	rev   uint64
-	value []byte
+	Rev   uint64
+	Value []byte
 }
 
 type Entry struct {
-	key string
+	Key string
 	Val
 }
 
@@ -38,7 +38,7 @@ type Backend struct {
 	log1     *os.File
 	log2name string
 	log2     *os.File
-        idname   string
+	idname   string
 	lock     *sync.Mutex
 	cs       chan *Update
 }
@@ -71,7 +71,7 @@ func NewBackend(p string) *Backend {
 	log2name := path.Join(p, "log.2")
 	log2, err := os.OpenFile(log2name, os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
-                log1.Close()
+		log1.Close()
 		dataf.Close()
 		log.Fatal("Error initializing log file: ", err)
 		return nil
@@ -82,17 +82,17 @@ func NewBackend(p string) *Backend {
 
 	// Create our backend.
 	b := new(Backend)
-        b.memory = make(map[string]Val)
-        b.data = dataf
-        b.log1name = log1name
-        b.log1 = log1
-        b.log2name = log2name
-        b.log2 =log2
-        b.lock = new(sync.Mutex)
-        b.cs = cs
-        b.idname = path.Join(p, "id")
+	b.memory = make(map[string]Val)
+	b.data = dataf
+	b.log1name = log1name
+	b.log1 = log1
+	b.log2name = log2name
+	b.log2 = log2
+	b.lock = new(sync.Mutex)
+	b.cs = cs
+	b.idname = path.Join(p, "id")
 
-        // Load data.
+	// Load data.
 	b.loadFile(b.data)
 	b.loadFile(b.log1)
 	b.loadFile(b.log2)
@@ -152,10 +152,10 @@ func (b *Backend) loadFile(file *os.File) error {
 		}
 
 		// Atomic set on our map.
-		if entry.Val.value == nil {
-			delete(b.memory, entry.key)
+		if entry.Val.Value == nil {
+			delete(b.memory, entry.Key)
 		} else {
-			b.memory[entry.key] = entry.Val
+			b.memory[entry.Key] = entry.Val
 		}
 	}
 
@@ -175,19 +175,19 @@ func (b *Backend) logWriter() {
 		finished = finished[0:0]
 
 		// Kick off a pivot if we've exceed our size.
-	        off, err := b.log2.Seek(0, 1)
+		off, err := b.log2.Seek(0, 1)
 		if err != nil && off > MAXIMUM_LOG_SIZE {
 			go b.pivotLogs()
 		}
 	}
 
-        process := func(update *Update) {
-	    // Update the in-memory database.
+	process := func(update *Update) {
+		// Update the in-memory database.
 		// NOTE: This should be atomic.
-		if update.Entry.Val.value == nil {
-			delete(b.memory, update.Entry.key)
+		if update.Entry.Val.Value == nil {
+			delete(b.memory, update.Entry.Key)
 		} else {
-			b.memory[update.Entry.key] = update.Entry.Val
+			b.memory[update.Entry.Key] = update.Entry.Val
 		}
 
 		// Serialize the entry to the log.
@@ -197,21 +197,21 @@ func (b *Backend) logWriter() {
 
 		// Add it to our list of done.
 		finished = append(finished, update)
-            }
+	}
 
 	for {
-                // Do a non-blocking call.
+		// Do a non-blocking call.
 		select {
 		case update := <-b.cs:
 			process(update)
-                        break
+			break
 		default:
 			complete()
 			break
 		}
 
-                // Do a blocking call.
-                update := <-b.cs
+		// Do a blocking call.
+		update := <-b.cs
 		process(update)
 
 		if len(finished) == MAXIMUM_LOG_BATCH {
@@ -220,7 +220,7 @@ func (b *Backend) logWriter() {
 	}
 }
 
-func (b *Backend) Write(key string, rev uint64, value []byte) error {
+func (b *Backend) Write(key string, value []byte, rev uint64) error {
 	val := Val{rev, value}
 	entry := Entry{key, val}
 	mutex := sync.Mutex{}
@@ -234,49 +234,71 @@ func (b *Backend) Write(key string, rev uint64, value []byte) error {
 
 func (b *Backend) Read(key string) ([]byte, uint64, error) {
 	val := b.memory[key]
-	return val.value, val.rev, nil
+	return val.Value, val.Rev, nil
 }
 
 func (b *Backend) Delete(key string, rev uint64) error {
-	return b.Write(key, rev, nil)
+	return b.Write(key, nil, rev)
+}
+
+func (b *Backend) List() ([]string, error) {
+	keys := make([]string, 0, len(b.memory))
+	for k, _ := range b.memory {
+		keys = append(keys, k)
+	}
+	return keys, nil
+}
+
+func (b *Backend) Clear() error {
+	keys, err := b.List()
+        if err != nil {
+            return err
+        }
+	for _, k := range keys {
+		err = b.Delete(k, 0)
+                if err != nil {
+                    return err
+                }
+	}
+	return nil
 }
 
 func (b *Backend) LoadIds(number uint) ([]string, error) {
-        ids := make([]string, 0)
+	ids := make([]string, 0)
 
-        // Read our current set of ids.
-        iddata, err := ioutil.ReadFile(b.idname)
-        if err != nil &&
-           iddata != nil ||
-           len(iddata) > 0 {
-            ids = strings.Split(string(iddata), "\n")
-        }
+	// Read our current set of ids.
+	iddata, err := ioutil.ReadFile(b.idname)
+	if err != nil &&
+		iddata != nil ||
+		len(iddata) > 0 {
+		ids = strings.Split(string(iddata), "\n")
+	}
 
-        // Supplement.
-        for {
-            if len(ids) >= int(number) {
-                break
-            }
-            uuid, err := Uuid()
-            if err != nil {
-                return nil, err
-            }
-            ids = append(ids, uuid)
-        }
+	// Supplement.
+	for {
+		if len(ids) >= int(number) {
+			break
+		}
+		uuid, err := Uuid()
+		if err != nil {
+			return nil, err
+		}
+		ids = append(ids, uuid)
+	}
 
-        // Write out the result.
+	// Write out the result.
 	buf := new(bytes.Buffer)
-        for _, id := range ids {
-	    buf.WriteString(id)
-	    buf.WriteString("\n")
-        }
-        err = ioutil.WriteFile(b.idname, buf.Bytes(), 0644)
-        if err != nil {
-            return nil, err
-        }
+	for _, id := range ids {
+		buf.WriteString(id)
+		buf.WriteString("\n")
+	}
+	err = ioutil.WriteFile(b.idname, buf.Bytes(), 0644)
+	if err != nil {
+		return nil, err
+	}
 
-        // Return our ids.
-        return ids[0:number], nil
+	// Return our ids.
+	return ids[0:number], nil
 }
 
 func (b *Backend) Run() {
