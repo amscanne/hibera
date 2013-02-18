@@ -64,12 +64,12 @@ type Local struct {
 
 func (l *Local) lock(key string) *Lock {
 	l.Mutex.Lock()
-	defer l.Mutex.Unlock()
 	lock := l.sync[key]
 	if lock == nil {
 		lock = NewLock()
 		l.sync[key] = lock
 	}
+	l.Mutex.Unlock()
 	lock.lock()
 	return lock
 }
