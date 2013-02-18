@@ -6,9 +6,8 @@ import (
 	"hibera/storage"
 )
 
-type Set map[string]bool
-type RevMap map[ClientId]Set
-type RevSet map[ClientId]bool
+type RevSet map[string]uint64
+type ClientMap map[ClientId]RevSet
 
 type Lock struct {
 	*sync.Cond
@@ -49,14 +48,18 @@ type Local struct {
 	data *storage.Backend
 
 	// Synchronization.
+        // The global Mutex protects access to
+        // the map of all locks. We could easily
+        // split this into a more scalable structure
+        // if it becomes a clear bottleneck.
 	sync map[string]*Lock
 	revs map[string]uint64
 	sync.Mutex
 
 	// In-memory data.
-	groups  map[string]*RevMap
-	locks   map[string]*RevMap
-	watches map[string]*RevSet
+        // (Kept synchronized by other modules).
+	groups map[string]*ClientMap
+	locks map[string]*ClientMap
 }
 
 func (l *Local) lock(key string) *Lock {
@@ -117,7 +120,7 @@ func (l *Local) LockAcquire(client *Client, key string, timeout uint64, name str
 	// Get the lock.
 	revmap := l.locks[key]
 	if revmap == nil {
-		newmap := make(RevMap)
+		newmap := make(ClientMap)
 		revmap = &newmap
 		l.locks[key] = revmap
 	}
@@ -125,9 +128,9 @@ func (l *Local) LockAcquire(client *Client, key string, timeout uint64, name str
 	// Already held?
 	_, present := (*revmap)[client.ClientId]
 	if !present {
-		(*revmap)[client.ClientId] = make(Set)
+		(*revmap)[client.ClientId] = make(RevSet)
 	}
-	if (*revmap)[client.ClientId][name] {
+	if (*revmap)[client.ClientId][name] != 0 {
 		return 0, Busy
 	}
 
@@ -154,8 +157,9 @@ func (l *Local) LockAcquire(client *Client, key string, timeout uint64, name str
 	}
 
 	// Acquire it.
-	(*revmap)[client.ClientId][name] = true
-	return l.doWatchFire(key, 0, lock)
+	rev, err := l.doWatchFire(key, 0, lock)
+	(*revmap)[client.ClientId][name] = rev
+        return rev, err
 }
 
 func (l *Local) LockRelease(client *Client, key string) (uint64, error) {
@@ -164,14 +168,14 @@ func (l *Local) LockRelease(client *Client, key string) (uint64, error) {
 
 	// Get the lock.
 	revmap := l.locks[key]
-	if revmap == nil || !(*revmap)[client.ClientId][key] {
+	if revmap == nil || (*revmap)[client.ClientId][key] == 0 {
 		return 0, NotFound
 	}
 
 	// Release it.
 	_, present := (*revmap)[client.ClientId]
 	if !present {
-		(*revmap)[client.ClientId] = make(Set)
+		(*revmap)[client.ClientId] = make(RevSet)
 	}
 	delete((*revmap)[client.ClientId], key)
 	if len(*revmap) == 0 {
@@ -193,24 +197,29 @@ func (l *Local) GroupMembers(group string, name string, limit uint64) ([]string,
 	}
 
 	// Assembly a list of members.
-	members := make([]string, 0, limit)
-	count := uint64(0)
+        indices := make([]uint64, 0)
+	members := make(map[uint64]string, 0)
 	for _, set := range *revmap {
-		for membername := range set {
+		for membername, revjoined := range set {
+                        indices = append(indices, revjoined)
 			if membername == name {
-				members = append(members, "*")
+				members[revjoined] = "*"
 			} else {
-				members = append(members, membername)
-			}
-			count += 1
-			if limit > 0 && count >= limit {
-				break
+				members[revjoined] = membername
 			}
 		}
 	}
 
+        if len(indices) > int(limit) {
+            indices = indices[0:limit]
+        }
+        results := make([]string, 0, len(indices))
+        for _, index := range indices {
+            results = append(results, members[uint64(index)])
+        }
+
 	// Return the members and rev.
-	return members, l.revs[group], nil
+	return results, l.revs[group], nil
 }
 
 func (l *Local) GroupJoin(client *Client, group string, name string) (uint64, error) {
@@ -220,7 +229,7 @@ func (l *Local) GroupJoin(client *Client, group string, name string) (uint64, er
 	// Lookup the group.
 	revmap := l.groups[group]
 	if revmap == nil {
-		newmap := make(RevMap)
+		newmap := make(ClientMap)
 		revmap = &newmap
 		l.groups[group] = revmap
 	}
@@ -228,15 +237,16 @@ func (l *Local) GroupJoin(client *Client, group string, name string) (uint64, er
 	// Lookup the group and see if we're a member.
 	_, present := (*revmap)[client.ClientId]
 	if !present {
-		(*revmap)[client.ClientId] = make(Set)
+		(*revmap)[client.ClientId] = make(RevSet)
 	}
-	if (*revmap)[client.ClientId][name] {
+	if (*revmap)[client.ClientId][name] != 0 {
 		return 0, Busy
 	}
 
 	// Join and fire.
-	(*revmap)[client.ClientId][name] = true
-	return l.doWatchFire(group, 0, lock)
+	rev, err := l.doWatchFire(group, 0, lock)
+	(*revmap)[client.ClientId][name] = rev
+        return rev, err
 }
 
 func (l *Local) GroupLeave(client *Client, group string, name string) (uint64, error) {
@@ -245,14 +255,14 @@ func (l *Local) GroupLeave(client *Client, group string, name string) (uint64, e
 
 	// Lookup the group and see if we're a member.
 	revmap := l.groups[group]
-	if revmap == nil || !(*revmap)[client.ClientId][name] {
+	if revmap == nil || (*revmap)[client.ClientId][name] == 0 {
 		return 0, NotFound
 	}
 
 	// Leave the group.
 	_, present := (*revmap)[client.ClientId]
 	if !present {
-		(*revmap)[client.ClientId] = make(Set)
+		(*revmap)[client.ClientId] = make(RevSet)
 	}
 	delete((*revmap)[client.ClientId], name)
 	if len(*revmap) == 0 {
@@ -362,9 +372,6 @@ func (l *Local) Purge(id ClientId) {
 		}
 		delete(*owners, id)
 	}
-	for _, clients := range l.watches {
-		delete(*clients, id)
-	}
 	l.Mutex.Unlock()
 
 	// Fire watches.
@@ -399,9 +406,8 @@ func NewLocal(backend *storage.Backend) *Local {
 	local.data = backend
 	local.sync = make(map[string]*Lock)
 	local.revs = make(map[string]uint64)
-	local.groups = make(map[string]*RevMap)
-	local.locks = make(map[string]*RevMap)
-	local.watches = make(map[string]*RevSet)
+	local.groups = make(map[string]*ClientMap)
+	local.locks = make(map[string]*ClientMap)
 	err := local.loadRevs()
 	if err != nil {
 		return nil

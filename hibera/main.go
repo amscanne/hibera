@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"log"
 	"strings"
+        "syscall"
 	"hibera/client"
 )
 
@@ -35,8 +36,9 @@ commands:
     lock <key>                   --- Run a process while holding
          [-name <name>]              the given lock.
          [-limit <number>]
-         [-exec <run-script>]
          [-timeout <timeout>]
+         [-exec <run-script>]
+         [<run-script> ...]
 
     owners <key>                 --- Show current lock owners.
          [-name <name>]
@@ -44,12 +46,15 @@ commands:
     join <key>                   --- Run a process while joined to
          [-name <name>]              the given group.
          [-exec <run-script>]
+         [<run-script> ...]
 
     run <key>                    --- Conditionally run up-to <count>
         [-count <count>]             process across the cluster.
         [-start <start-script>]
         [-stop <stop-script>]
+        [-exec <run-script>]
         [-name <name>]
+        [<run-script> ...]
 
     members <key>                --- Show current members of the
             [-limit <number>]        given group. NOTE: members that
@@ -58,11 +63,11 @@ commands:
 
     get <key>                    --- Get the contents of the key.
 
-    set <key>                    --- Set the contents of the key.
+    set <key> [value]            --- Set the contents of the key.
 
     rm <key>                     --- Remove the given key.
 
-    list                         --- List all keys.
+    ls                           --- List all keys.
 
     clear                        --- Clear all data.
 
@@ -119,12 +124,15 @@ func cli_join(c *client.HiberaClient, key string, name string, cmd string) error
 	return do_exec(cmd, nil)
 }
 
-func cli_run(c *client.HiberaClient, key string, name string, count uint, start string, stop string) error {
+func cli_run(c *client.HiberaClient, key string, name string, count uint, start string, stop string, cmd string) error {
 	_, err := c.Join(key, name)
 	if err != nil {
 		return err
 	}
 	defer c.Leave(key, name)
+
+        var proc *exec.Cmd
+        wasactive := false
 
 	for {
 		// List the current members.
@@ -143,10 +151,25 @@ func cli_run(c *client.HiberaClient, key string, name string, count uint, start 
 		}
 
 		// Start or stop appropriately.
-		if active {
+		if active && !wasactive {
 			do_exec(start, nil)
-		} else {
+                        if proc == nil && cmd != "" {
+                            // Start this process on startup.
+                            proc = exec.Command("sh", "-c", cmd)
+                            proc.Start()
+                        }
+                        wasactive = true;
+
+		} else if !active && wasactive {
+                        if proc != nil {
+                            // Kill this process on stop.
+                            // Nothing can be done here to handle errors.
+                            syscall.Kill(proc.Process.Pid, syscall.SIGTERM)
+                            proc.Wait()
+                            proc = nil
+                        }
 			do_exec(stop, nil)
+                        wasactive = false;
 		}
 
 		// Wait for the next update.
@@ -180,11 +203,17 @@ func cli_get(c *client.HiberaClient, key string) error {
 	return nil
 }
 
-func cli_set(c *client.HiberaClient, key string) error {
+func cli_set(c *client.HiberaClient, key string, value *string) error {
 	buf := new(bytes.Buffer)
-	// Fully read input.
-	io.Copy(buf, os.Stdin)
-	_, err := c.Set(key, buf.Bytes(), 0)
+        var err error
+        if value == nil {
+	    // Fully read input.
+	    io.Copy(buf, os.Stdin)
+	    _, err = c.Set(key, buf.Bytes(), 0)
+        } else {
+            // Use the given string.
+	    _, err = c.Set(key, []byte(*value), 0)
+        }
 	return err
 }
 
@@ -193,7 +222,7 @@ func cli_rm(c *client.HiberaClient, key string) error {
 	return err
 }
 
-func cli_list(c *client.HiberaClient) error {
+func cli_ls(c *client.HiberaClient) error {
 	items, err := c.List()
 	if err != nil {
 		return err
@@ -263,7 +292,7 @@ func main() {
 
 	key := ""
 	if command == "info" ||
-		command == "list" ||
+		command == "ls" ||
 		command == "clear" {
 	} else {
 		if len(os.Args) == 1 {
@@ -286,16 +315,31 @@ func main() {
 	case "info":
 		err = cli_info(c)
 	case "lock":
-		err = cli_lock(c, key, *name, *cmd, *timeout, *limit)
+                if flag.NArg() > 0 {
+                    script := strings.Join(flag.Args(), " ")
+		    err = cli_lock(c, key, *name, script, *timeout, *limit)
+                } else {
+		    err = cli_lock(c, key, *name, *cmd, *timeout, *limit)
+                }
 		break
 	case "owners":
 		err = cli_owners(c, key, *name)
 		break
 	case "join":
-		err = cli_join(c, key, *name, *cmd)
+                if flag.NArg() > 0 {
+                    script := strings.Join(flag.Args(), " ")
+		    err = cli_join(c, key, *name, script)
+                } else {
+		    err = cli_join(c, key, *name, *cmd)
+                }
 		break
 	case "run":
-		err = cli_run(c, key, *name, *count, *start, *stop)
+                if flag.NArg() > 0 {
+                    script := strings.Join(flag.Args(), " ")
+		    err = cli_run(c, key, *name, *count, *start, *stop, script)
+                } else {
+		    err = cli_run(c, key, *name, *count, *start, *stop, *cmd)
+                }
 		break
 	case "members":
 		err = cli_members(c, key, *name, *limit)
@@ -304,13 +348,18 @@ func main() {
 		err = cli_get(c, key)
 		break
 	case "set":
-		err = cli_set(c, key)
+                if flag.NArg() > 0 {
+                    value := strings.Join(flag.Args(), " ")
+		    err = cli_set(c, key, &value)
+                } else {
+		    err = cli_set(c, key, nil)
+                }
 		break
 	case "rm":
 		err = cli_rm(c, key)
 		break
-	case "list":
-		err = cli_list(c)
+	case "ls":
+		err = cli_ls(c)
 		break
 	case "clear":
 		err = cli_clear(c)
