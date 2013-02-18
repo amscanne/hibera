@@ -2,6 +2,7 @@ package core
 
 import (
 	"log"
+	"sync"
 	"hibera/storage"
 )
 
@@ -14,7 +15,9 @@ type Core struct {
 
 	// All active clients.
 	clients map[ClientId]*Client
-	ClientId
+	users   map[string]*User
+	nextid  ClientId
+	lock    *sync.Mutex
 
 	cluster *Cluster
 }
@@ -22,35 +25,115 @@ type Core struct {
 type Client struct {
 	ClientId
 	addr string
+	user *User
 	*Core
+}
+
+type User struct {
+	ClientId
+	userid string
+	uuid   string
+	refs   int
 }
 
 func (c *Client) Name(name string) string {
 	if name != "" {
 		return name
 	}
+	if c.user != nil {
+		return c.user.uuid
+	}
 	return c.addr
 }
 
 type Info struct{}
 
+func (c *Core) genid() ClientId {
+	id := c.nextid
+	c.nextid += 1
+	return id
+}
+
 func (c *Core) NewClient(addr string) *Client {
-	id := c.ClientId
-	client := &Client{id, addr, c}
-	c.ClientId += 1
-	c.clients[id] = client
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
+	// Generate client with no user, and
+	// a straight-forward id. The user can
+	// associate some client-id with their
+	// active connection during lookup.
+	client := &Client{c.genid(), addr, nil, c}
+	c.clients[client.ClientId] = client
 	return client
 }
 
-func (c *Core) FindClient(id ClientId) *Client {
+func (c *Core) FindClient(id ClientId, userid string) *Client {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
+	client := c.clients[id]
+	if client == nil {
+		return nil
+	}
+
+	// Create the user if it doesnt exist.
+	if userid != "" {
+		client.user = c.users[userid]
+
+		if client.user == nil {
+			uuid, err := storage.Uuid()
+			if err != nil {
+				// Something's really wrong here.
+				// We'll assume the server is blasting
+				// messages everything when things like
+				// this are happening.
+				return nil
+			}
+
+			// Create and initialize a new user.
+			// This will be the common user for all requests that use the
+			// userid string -- although this string will not necessarily
+			// correspond directly to the uuid we generation for safety.
+			client.user = new(User)
+			client.user.ClientId = c.genid()
+			client.user.userid = userid
+			client.user.uuid = uuid
+			client.user.refs = 1
+			c.users[userid] = client.user
+		} else {
+			// Bump up the reference.
+			client.user.refs += 1
+		}
+	}
+
 	return c.clients[id]
 }
 
 func (c *Core) DropClient(id ClientId) {
-	// Remove the client.
-	delete(c.clients, id)
+	c.lock.Lock()
+	defer c.lock.Unlock()
 
-	// Purge it.
+	// Lookup this client.
+	client := c.clients[id]
+	if client == nil {
+		return
+	}
+
+	// Shuffle userid mappings.
+	if client.user != nil {
+		client.user.refs -= 1
+		if client.user.refs == 0 {
+			// Remove the user from the map and
+			// purge all related keys from the
+			// underlying storage system.
+			delete(c.users, client.user.userid)
+			c.local.Purge(client.user.ClientId)
+			client.user = nil
+		}
+	}
+
+	// Purge the client.
+	delete(c.clients, id)
 	c.local.Purge(id)
 }
 
@@ -58,6 +141,8 @@ func NewCore(domain string, keys uint, backend *storage.Backend) *Core {
 	core := new(Core)
 	core.local = NewLocal(backend)
 	core.clients = make(map[ClientId]*Client)
+	core.users = make(map[string]*User)
+	core.lock = new(sync.Mutex)
 	ids, err := backend.LoadIds(keys)
 	if err != nil {
 		log.Fatal("Unable to load ring: ", err)

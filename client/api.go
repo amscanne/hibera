@@ -14,18 +14,23 @@ import (
 	"encoding/json"
 	"hibera/core"
 	"hibera/server"
+	"hibera/storage"
 )
 
 var NoRevision = errors.New("No X-Revision Found")
 
 type HiberaClient struct {
 	url  string
+	uuid string
 	lock *sync.Mutex
 	http *http.Client
 }
 
-func NewHiberaClient(addr string) *HiberaClient {
+func NewHiberaClient(addr string, clientid string) *HiberaClient {
+	// Allocate our client.
 	client := new(HiberaClient)
+
+	// Generate the URL.
 	idx := strings.Index(addr, ":")
 	port := server.DEFAULT_PORT
 	if idx >= 0 && idx+1 < len(addr) {
@@ -42,10 +47,24 @@ func NewHiberaClient(addr string) *HiberaClient {
 	}
 	client.url = fmt.Sprintf("http://%s:%d", addr, port)
 	client.lock = new(sync.Mutex)
+
+	// Generate a uuid for this client.
+	if clientid == "" {
+		uuid, err := storage.Uuid()
+		if err != nil {
+			return nil
+		}
+		client.uuid = uuid
+	} else {
+		client.uuid = clientid
+	}
+
+	// Create our HTTP transport.
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
 	client.http = &http.Client{Transport: tr}
+
 	return client
 }
 
@@ -108,6 +127,7 @@ func (h *HiberaClient) req(method string, args HttpArgs) (*http.Request, error) 
 	for key, value := range args.headers {
 		req.Header.Add(key, value)
 	}
+	req.Header.Add("X-Client-Id", h.uuid)
 	return req, nil
 }
 

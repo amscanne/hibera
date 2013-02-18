@@ -180,19 +180,24 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
 	// Pull out the relevant client.
 	id, err := strconv.ParseUint(r.RemoteAddr, 0, 64)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("No Id found in '%s'.", r.RemoteAddr), 500)
+		http.Error(w, "", 500)
 		return
 	}
-	client := s.Core.FindClient(core.ClientId(id))
+	clientid := ""
+	clientidhdrs := r.Header["X-Client-Id"]
+	if len(clientidhdrs) > 0 {
+		clientid = clientidhdrs[0]
+	}
+	client := s.Core.FindClient(core.ClientId(id), clientid)
 	if client == nil {
-		http.Error(w, fmt.Sprintf("Client with Id %d not found.", id), 403)
+		http.Error(w, "", 403)
 		return
 	}
 
 	// Read the content.
 	content, err := getContent(r)
 	if err != nil {
-		http.Error(w, "Error reading content.", 500)
+		http.Error(w, "", 500)
 		return
 	}
 

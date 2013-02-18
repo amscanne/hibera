@@ -213,30 +213,58 @@ func (l *Local) GroupMembers(group string, name string, limit uint64) ([]string,
 		return make([]string, 0), l.revs[group], nil
 	}
 
-	// Assembly a list of members.
-	indices := make([]uint64, 0)
-	members := make(map[uint64]string, 0)
+	// Aggregate all members across clients.
+	allmap := make(map[string]uint64, 0)
 	for _, set := range *revmap {
-		for membername, revjoined := range set {
-			indices = append(indices, revjoined)
-			if membername == name {
-				members[revjoined] = "*"
+		for member, revjoined := range set {
+			if member == name {
+				allmap["*"] = revjoined
 			} else {
-				members[revjoined] = membername
+				allmap[member] = revjoined
 			}
 		}
 	}
 
-	if len(indices) > int(limit) {
-		indices = indices[0:limit]
+	// Pull out the correct number from allmap.
+	if len(allmap) < int(limit) {
+		limit = uint64(len(allmap))
 	}
-	results := make([]string, 0, len(indices))
-	for _, index := range indices {
-		results = append(results, members[uint64(index)])
+	members := make([]string, limit, limit)
+	for candidate, revjoined := range allmap {
+		placed := false
+		for i, current := range members {
+			if current == "" {
+				members[i] = candidate
+				placed = true
+				break
+			}
+		}
+		if placed {
+			continue
+		}
+		for i, current := range members {
+			if revjoined <= allmap[current] {
+				members[i] = candidate
+				break
+			}
+		}
+	}
+
+	// Do a simple insertion sort on the set.
+	// This is efficient given the small size.
+	for i, membermin1 := range members {
+		for j, membermin2 := range members {
+			if i < j &&
+				allmap[membermin2] < allmap[membermin1] {
+				// Swap, we're not the right order.
+				members[i] = membermin2
+				members[j] = membermin1
+			}
+		}
 	}
 
 	// Return the members and rev.
-	return results, l.revs[group], nil
+	return members, l.revs[group], nil
 }
 
 func (l *Local) GroupJoin(client *Client, group string, name string) (uint64, error) {

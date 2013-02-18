@@ -12,13 +12,13 @@ import (
 	"strings"
 	"syscall"
 	"hibera/client"
+	"hibera/storage"
 )
 
 var api = flag.String("api", "", "API address.")
 var cmd = flag.String("exec", "", "Script to execute in context.")
 var timeout = flag.Uint("timeout", 0, "Timeout (in ms) for acquiring a lock.")
 var name = flag.String("name", "", "Name to use (other than machine address).")
-var count = flag.Uint("count", 1, "Count for services run via the run command.")
 var start = flag.String("start", "", "Script to start the given service.")
 var stop = flag.String("stop", "", "Script to stop the given service.")
 var limit = flag.Uint("limit", 1, "Limit for machines to run or simultanous locks.")
@@ -48,8 +48,8 @@ commands:
          [-exec <run-script>]
          [<run-script> ...]
 
-    run <key>                    --- Conditionally run up-to <count>
-        [-count <count>]             process across the cluster.
+    run <key>                    --- Conditionally run up-to <limit>
+        [-limit <limit>]             process across the cluster.
         [-start <start-script>]
         [-stop <stop-script>]
         [-exec <run-script>]
@@ -83,6 +83,8 @@ commands:
 func do_exec(command string, input []byte) error {
 	cmd := exec.Command("sh", "-c", command)
 	cmd.Stdin = bytes.NewBuffer(input)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 	return cmd.Run()
 }
 
@@ -124,7 +126,7 @@ func cli_join(c *client.HiberaClient, key string, name string, cmd string) error
 	return do_exec(cmd, nil)
 }
 
-func cli_run(c *client.HiberaClient, key string, name string, count uint, start string, stop string, cmd string) error {
+func cli_run(c *client.HiberaClient, key string, name string, limit uint, start string, stop string, cmd string) error {
 	_, err := c.Join(key, name)
 	if err != nil {
 		return err
@@ -136,7 +138,7 @@ func cli_run(c *client.HiberaClient, key string, name string, count uint, start 
 
 	for {
 		// List the current members.
-		members, rev, err := c.Members(key, name, count)
+		members, rev, err := c.Members(key, name, limit)
 		if err != nil {
 			return err
 		}
@@ -152,10 +154,15 @@ func cli_run(c *client.HiberaClient, key string, name string, count uint, start 
 
 		// Start or stop appropriately.
 		if active && !wasactive {
-			do_exec(start, nil)
+			if start != "" {
+				do_exec(start, nil)
+			}
 			if proc == nil && cmd != "" {
 				// Start this process on startup.
 				proc = exec.Command("sh", "-c", cmd)
+				proc.Stdin = nil
+				proc.Stdout = os.Stdout
+				proc.Stderr = os.Stderr
 				proc.Start()
 			}
 			wasactive = true
@@ -168,7 +175,9 @@ func cli_run(c *client.HiberaClient, key string, name string, count uint, start 
 				proc.Wait()
 				proc = nil
 			}
-			do_exec(stop, nil)
+			if stop != "" {
+				do_exec(stop, nil)
+			}
 			wasactive = false
 		}
 
@@ -283,6 +292,8 @@ func usage() {
 }
 
 func main() {
+	var err error
+
 	// Pull out our arguments.
 	if len(os.Args) == 1 {
 		usage()
@@ -303,14 +314,24 @@ func main() {
 	}
 	flag.Parse()
 
+	// Figure out our client Id.
+	clientid := os.Getenv("HIBERA_CLIENT_ID")
+	if clientid == "" {
+		clientid, err = storage.Uuid()
+		if err != nil {
+			return
+		}
+		// Save for subprocesses.
+		os.Setenv("HIBERA_CLIENT_ID", clientid)
+	}
+
 	// Create our client.
-	c := client.NewHiberaClient(*api)
+	c := client.NewHiberaClient(*api, clientid)
 	if c == nil {
 		return
 	}
 
 	// Do our stuff.
-	var err error
 	switch command {
 	case "info":
 		err = cli_info(c)
@@ -336,9 +357,9 @@ func main() {
 	case "run":
 		if flag.NArg() > 0 {
 			script := strings.Join(flag.Args(), " ")
-			err = cli_run(c, key, *name, *count, *start, *stop, script)
+			err = cli_run(c, key, *name, *limit, *start, *stop, script)
 		} else {
-			err = cli_run(c, key, *name, *count, *start, *stop, *cmd)
+			err = cli_run(c, key, *name, *limit, *start, *stop, *cmd)
 		}
 		break
 	case "members":
