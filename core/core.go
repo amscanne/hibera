@@ -35,7 +35,7 @@ func (c *Core) Info() (Info, error) {
 }
 
 func (c *Core) DataList() ([]string, error) {
-	return nil, nil
+	return make([]string, 0), nil
 }
 
 func (c *Core) DataClear() error {
@@ -43,7 +43,7 @@ func (c *Core) DataClear() error {
 }
 
 func (c *Core) LockOwners(key string) ([]string, uint64, error) {
-	return nil, 0, nil
+	return make([]string, 0), 0, nil
 }
 
 func (c *Core) LockAcquire(client *Client, key string, timeout uint64, name string, limit uint64) (uint64, error) {
@@ -55,7 +55,7 @@ func (c *Core) LockRelease(client *Client, key string) (uint64, error) {
 }
 
 func (c *Core) GroupMembers(group string, name string, limit uint64) ([]string, uint64, error) {
-	return nil, 0, nil
+	return make([]string, 0), 0, nil
 }
 
 func (c *Core) GroupJoin(client *Client, group string, name string) (uint64, error) {

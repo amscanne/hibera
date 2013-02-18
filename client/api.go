@@ -122,7 +122,7 @@ func (h *HiberaClient) doreq(method string, args HttpArgs) (*http.Response, erro
 
 func (h *HiberaClient) Info(base uint) (*core.Info, error) {
 	args := makeArgs("/")
-	args.params["base"] = string(base)
+	args.params["base"] = strconv.FormatUint(uint64(base), 10)
 	resp, err := h.doreq("GET", args)
 	if err != nil {
 		return nil, err
@@ -141,9 +141,9 @@ func (h *HiberaClient) Info(base uint) (*core.Info, error) {
 
 func (h *HiberaClient) Lock(key string, timeout uint, name string, limit uint) (uint64, error) {
 	args := makeArgs(fmt.Sprintf("/locks/%s", key))
-	args.params["timeout"] = string(timeout)
-	args.params["name"] = string(name)
-	args.params["limit"] = string(limit)
+	args.params["timeout"] = strconv.FormatUint(uint64(timeout), 10)
+	args.params["name"] = name
+	args.params["limit"] = strconv.FormatUint(uint64(limit), 10)
 	resp, err := h.doreq("POST", args)
 	if err != nil {
 		return 0, err
@@ -192,7 +192,7 @@ func (h *HiberaClient) Owners(key string) ([]string, uint64, error) {
 
 func (h *HiberaClient) Watch(key string, rev uint64) (uint64, error) {
 	args := makeArgs(fmt.Sprintf("/watches/%s", key))
-	args.params["rev"] = string(rev)
+	args.params["rev"] = strconv.FormatUint(rev, 10)
 	resp, err := h.doreq("GET", args)
 	if err != nil {
 		return 0, err
@@ -206,7 +206,7 @@ func (h *HiberaClient) Watch(key string, rev uint64) (uint64, error) {
 
 func (h *HiberaClient) Join(group string, name string) (uint64, error) {
 	args := makeArgs(fmt.Sprintf("/groups/%s/%s", group, name))
-	args.params["name"] = string(name)
+	args.params["name"] = name
 	resp, err := h.doreq("POST", args)
 	if err != nil {
 		return 0, err
@@ -220,7 +220,7 @@ func (h *HiberaClient) Join(group string, name string) (uint64, error) {
 
 func (h *HiberaClient) Leave(group string, name string) (uint64, error) {
 	args := makeArgs(fmt.Sprintf("/groups/%s/%s", group, name))
-	args.params["name"] = string(name)
+	args.params["name"] = name
 	resp, err := h.doreq("DELETE", args)
 	if err != nil {
 		return 0, err
@@ -234,8 +234,8 @@ func (h *HiberaClient) Leave(group string, name string) (uint64, error) {
 
 func (h *HiberaClient) Members(group string, name string, limit uint) ([]string, uint64, error) {
 	args := makeArgs(fmt.Sprintf("/groups/%s", group))
-	args.params["limit"] = string(limit)
-	args.params["name"] = string(name)
+	args.params["limit"] = strconv.FormatUint(uint64(limit), 10)
+	args.params["name"] = name
 	resp, err := h.doreq("GET", args)
 	if err != nil {
 		return nil, 0, err
@@ -279,7 +279,7 @@ func (h *HiberaClient) Get(key string) (string, uint64, error) {
 }
 
 func (h *HiberaClient) List() ([]string, error) {
-	args := makeArgs("/data/")
+	args := makeArgs("/data")
 	resp, err := h.doreq("GET", args)
 	if err != nil {
 		return nil, err
@@ -301,7 +301,7 @@ func (h *HiberaClient) List() ([]string, error) {
 
 func (h *HiberaClient) Set(key string, value string, rev uint64) (uint64, error) {
 	args := makeArgs(fmt.Sprintf("/data/%s", key))
-	args.params["rev"] = string(rev)
+	args.params["rev"] = strconv.FormatUint(rev, 10)
 	resp, err := h.doreq("POST", args)
 	if err != nil {
 		return 0, err
@@ -315,7 +315,7 @@ func (h *HiberaClient) Set(key string, value string, rev uint64) (uint64, error)
 
 func (h *HiberaClient) Remove(key string, rev uint64) (uint64, error) {
 	args := makeArgs(fmt.Sprintf("/data/%s", key))
-	args.params["rev"] = string(rev)
+	args.params["rev"] = strconv.FormatUint(rev, 10)
 	resp, err := h.doreq("DELETE", args)
 	if err != nil {
 		return 0, err
@@ -328,7 +328,7 @@ func (h *HiberaClient) Remove(key string, rev uint64) (uint64, error) {
 }
 
 func (h *HiberaClient) Clear() error {
-	args := makeArgs("/data/")
+	args := makeArgs("/data")
 	resp, err := h.doreq("DELETE", args)
 	if err != nil {
 		return err
@@ -341,7 +341,7 @@ func (h *HiberaClient) Clear() error {
 
 func (h *HiberaClient) Fire(key string, rev uint64) (uint64, error) {
 	args := makeArgs(fmt.Sprintf("/watches/%s", key))
-	args.params["rev"] = string(rev)
+	args.params["rev"] = strconv.FormatUint(rev, 10)
 	resp, err := h.doreq("POST", args)
 	if err != nil {
 		return 0, err

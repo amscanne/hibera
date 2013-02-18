@@ -181,7 +181,7 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
 
 	// Prepare our response.
 	buf := new(bytes.Buffer)
-	err = errors.New("Unhandled Request")
+	err = errors.New(fmt.Sprintf("Unhandled Requst: %s %s", r.Method, r.URL.Path))
 	rev := uint64(0)
 
 	switch len(parts) {
@@ -240,10 +240,12 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
 				rev, err = s.data_get(parts[1], buf)
 				break
 			case "POST":
-				data, err := ioutil.ReadAll(r.Body)
-				if err == nil {
+				data, newerr := ioutil.ReadAll(r.Body)
+				if newerr == nil {
 					rev, err = s.data_set(parts[1], data, intParam(r, "rev"))
-				}
+				} else {
+                                    err = newerr
+                                }
 				break
 			case "DELETE":
 				rev, err = s.data_remove(parts[1], intParam(r, "rev"))
@@ -264,7 +266,7 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
-		http.Error(w, "", 501)
+		http.Error(w, err.Error(), 501)
 	} else {
 		w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
 		w.Header().Set("X-Revision", strconv.FormatUint(rev, 10))

@@ -179,7 +179,7 @@ func cli_list(c *client.HiberaClient) error {
 		return err
 	}
 	for _, item := range items {
-		fmt.Printf("%s\n", string(item))
+		fmt.Printf("%s\n", item)
 	}
 	return nil
 }
