@@ -134,6 +134,7 @@ func (b *Backend) pivotLogs() error {
 			return err
 		}
 	}
+	b.data.Sync()
 
 	return nil
 }
@@ -168,6 +169,9 @@ func (b *Backend) logWriter() {
 	finished := make([]*Update, 0, MAXIMUM_LOG_BATCH)
 
 	complete := func() {
+		// Ensure we're synced.
+		b.log2.Sync()
+
 		// Notify waiters.
 		for _, update := range finished {
 			update.Cond.Broadcast()
@@ -201,6 +205,8 @@ func (b *Backend) logWriter() {
 
 	for {
 		// Do a non-blocking call.
+		// If there's nothing to do at the moment,
+		// we can call complete() to flush the batch.
 		select {
 		case update := <-b.cs:
 			process(update)
@@ -237,8 +243,8 @@ func (b *Backend) Read(key string) ([]byte, uint64, error) {
 	return val.Value, val.Rev, nil
 }
 
-func (b *Backend) Delete(key string, rev uint64) error {
-	return b.Write(key, nil, rev)
+func (b *Backend) Delete(key string) error {
+	return b.Write(key, nil, 0)
 }
 
 func (b *Backend) List() ([]string, error) {
@@ -251,14 +257,14 @@ func (b *Backend) List() ([]string, error) {
 
 func (b *Backend) Clear() error {
 	keys, err := b.List()
-        if err != nil {
-            return err
-        }
+	if err != nil {
+		return err
+	}
 	for _, k := range keys {
-		err = b.Delete(k, 0)
-                if err != nil {
-                    return err
-                }
+		err = b.Delete(k)
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }

@@ -37,7 +37,7 @@ type HTTPServer struct {
 func (l Listener) Accept() (net.Conn, error) {
 	c, err := l.Listener.Accept()
 	if err == nil {
-		c = Connection{l.Core.NewClient(), c}
+		c = Connection{l.Core.NewClient(c.RemoteAddr().String()), c}
 	}
 	return c, err
 }
@@ -99,9 +99,9 @@ func (s *HTTPServer) lock_release(client *core.Client, key string) (uint64, erro
 	return s.Core.LockRelease(client, key)
 }
 
-func (s *HTTPServer) group_members(group string, output *bytes.Buffer, name string, limit uint64) (uint64, error) {
+func (s *HTTPServer) group_members(client *core.Client, group string, output *bytes.Buffer, name string, limit uint64) (uint64, error) {
 	enc := json.NewEncoder(output)
-	items, rev, err := s.Core.GroupMembers(group, name, limit)
+	items, rev, err := s.Core.GroupMembers(client, group, name, limit)
 	if err != nil {
 		return 0, err
 	}
@@ -168,7 +168,7 @@ func getContent(r *http.Request) ([]byte, error) {
 	}
 	buf := make([]byte, length)
 	n, err := io.ReadFull(r.Body, buf)
-        if n != int(length) || err != nil {
+	if n != int(length) || err != nil {
 		return nil, err
 	}
 	return buf, nil
@@ -187,12 +187,12 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-        // Read the content.
-        content, err := getContent(r)
-        if err != nil {
-	    http.Error(w, "Error reading content.", 500)
-	    return
-        }
+	// Read the content.
+	content, err := getContent(r)
+	if err != nil {
+		http.Error(w, "Error reading content.", 500)
+		return
+	}
 
 	// Extract out parameters.
 	r.ParseForm()
@@ -243,7 +243,7 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
 		case "groups":
 			switch r.Method {
 			case "GET":
-				rev, err = s.group_members(parts[1], buf, strParam(r, "name"), intParam(r, "limit"))
+				rev, err = s.group_members(client, parts[1], buf, strParam(r, "name"), intParam(r, "limit"))
 				break
 			case "POST":
 				rev, err = s.group_join(client, parts[1], strParam(r, "name"))

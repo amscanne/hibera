@@ -5,15 +5,16 @@ import (
 	"fmt"
 	"bytes"
 	"io"
-        "io/ioutil"
+	"io/ioutil"
 	"os"
+	"os/exec"
 	"log"
 	"strings"
 	"hibera/client"
 )
 
 var api = flag.String("api", "", "API address.")
-var exec = flag.String("exec", "", "Script to execute in context.")
+var cmd = flag.String("exec", "", "Script to execute in context.")
 var timeout = flag.Uint("timeout", 0, "Timeout (in ms) for acquiring a lock.")
 var name = flag.String("name", "", "Name to use (other than machine address).")
 var count = flag.Uint("count", 1, "Count for services run via the run command.")
@@ -72,7 +73,9 @@ commands:
 `
 
 func do_exec(command string, input []byte) error {
-	return nil
+	cmd := exec.Command("sh", "-c", command)
+	cmd.Stdin = bytes.NewBuffer(input)
+	return cmd.Run()
 }
 
 func cli_info(c *client.HiberaClient) error {
@@ -83,22 +86,22 @@ func cli_info(c *client.HiberaClient) error {
 	return nil
 }
 
-func cli_lock(c *client.HiberaClient, key string, name string, exec string, timeout uint, limit uint) error {
+func cli_lock(c *client.HiberaClient, key string, name string, cmd string, timeout uint, limit uint) error {
 	_, err := c.Lock(key, timeout, name, limit)
 	if err != nil {
 		return err
 	}
 	defer c.Unlock(key)
-	return do_exec(exec, nil)
+	return do_exec(cmd, nil)
 }
 
-func cli_join(c *client.HiberaClient, key string, name string, exec string) error {
+func cli_join(c *client.HiberaClient, key string, name string, cmd string) error {
 	_, err := c.Join(key, name)
 	if err != nil {
 		return err
 	}
 	defer c.Leave(key, name)
-	return do_exec(exec, nil)
+	return do_exec(cmd, nil)
 }
 
 func cli_run(c *client.HiberaClient, key string, name string, count uint, start string, stop string) error {
@@ -188,7 +191,7 @@ func cli_clear(c *client.HiberaClient) error {
 	return c.Clear()
 }
 
-func cli_sync(c *client.HiberaClient, key string, output string, exec string) error {
+func cli_sync(c *client.HiberaClient, key string, output string, cmd string) error {
 	for {
 		value, rev, err := c.Get(key)
 		if err != nil {
@@ -197,15 +200,15 @@ func cli_sync(c *client.HiberaClient, key string, output string, exec string) er
 
 		if output != "" {
 			// Copy the output to the file.
-	                err = ioutil.WriteFile(output, value, 0644)
+			err = ioutil.WriteFile(output, value, 0644)
 			if err != nil {
 				return err
 			}
 		}
 
-		if exec != "" {
+		if cmd != "" {
 			// Execute with the given output.
-			do_exec(exec, value)
+			do_exec(cmd, value)
 		}
 
 		// Wait for the next update.
@@ -266,10 +269,10 @@ func main() {
 	case "info":
 		err = cli_info(c)
 	case "lock":
-		err = cli_lock(c, key, *name, *exec, *timeout, *limit)
+		err = cli_lock(c, key, *name, *cmd, *timeout, *limit)
 		break
 	case "join":
-		err = cli_join(c, key, *name, *exec)
+		err = cli_join(c, key, *name, *cmd)
 		break
 	case "run":
 		err = cli_run(c, key, *name, *count, *start, *stop)
@@ -293,7 +296,7 @@ func main() {
 		err = cli_clear(c)
 		break
 	case "sync":
-		err = cli_sync(c, key, *output, *exec)
+		err = cli_sync(c, key, *output, *cmd)
 		break
 	case "watch":
 		err = cli_watch(c, key)

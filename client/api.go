@@ -54,7 +54,7 @@ type HttpArgs struct {
 	path    string
 	headers map[string]string
 	params  map[string]string
-        body    io.Reader
+	body    io.Reader
 }
 
 func makeArgs(path string) HttpArgs {
@@ -298,7 +298,7 @@ func (h *HiberaClient) List() ([]string, error) {
 func (h *HiberaClient) Set(key string, value []byte, rev uint64) (uint64, error) {
 	args := makeArgs(fmt.Sprintf("/data/%s", key))
 	args.params["rev"] = strconv.FormatUint(rev, 10)
-        args.body = bytes.NewBuffer(value)
+	args.body = bytes.NewBuffer(value)
 	resp, err := h.doreq("POST", args)
 	if err != nil {
 		return 0, err
