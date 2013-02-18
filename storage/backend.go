@@ -2,15 +2,15 @@ package storage
 
 import (
 	"os"
-        "io"
+	"io"
 	"log"
 	"sync"
 	"path"
 	"bytes"
 	"strings"
-        "syscall"
+	"syscall"
 	"io/ioutil"
-        "encoding/binary"
+	"encoding/binary"
 	"encoding/gob"
 )
 
@@ -35,32 +35,26 @@ type Update struct {
 }
 
 type Backend struct {
+	path   string
 	memory map[string]Val
-	idname string
-
-	data *os.File
-
-	log1name string
-	log1 *os.File
-
-	log2name string
-	log2 *os.File
-
-	cs chan *Update
+	data   *os.File
+	log1   *os.File
+	log2   *os.File
+	cs     chan *Update
 }
 
 func OpenLocked(filename string) (*os.File, error) {
-    file, err := os.OpenFile(filename, os.O_RDWR|os.O_CREATE, 0644)
-    if err != nil {
-        return nil, err
-    }
-    fd := file.Fd()
-    err = syscall.Flock(int(fd), syscall.LOCK_EX)
-    if err != nil {
-        file.Close()
-        return nil, err
-    }
-    return file, nil
+	file, err := os.OpenFile(filename, os.O_RDWR|os.O_CREATE, 0644)
+	if err != nil {
+		return nil, err
+	}
+	fd := file.Fd()
+	err = syscall.Flock(int(fd), syscall.LOCK_EX)
+	if err != nil {
+		file.Close()
+		return nil, err
+	}
+	return file, nil
 }
 
 func NewBackend(p string) *Backend {
@@ -77,126 +71,130 @@ func NewBackend(p string) *Backend {
 
 	// Create our backend.
 	b := new(Backend)
-	b.memory = make(map[string]Val)
-	b.idname = path.Join(p, "id")
-
-	// Open our files.
-	dataf, err := OpenLocked(path.Join(p, "data"))
+	b.path = p
+	err = b.init()
 	if err != nil {
-		log.Print("Error initializing data file: ", err)
 		return nil
 	}
-	err = b.loadFile(dataf)
-        if err != nil {
-		log.Print("Error loading data file: ", err)
-                return nil
-        }
-	log1name := path.Join(p, "log.1")
-	log1, err := OpenLocked(log1name)
-	if err != nil {
-		dataf.Close()
-		log.Print("Error initializing first log file: ", err)
-		return nil
-	}
-	err = b.loadFile(log1)
-	if err != nil {
-		dataf.Close()
-		log.Print("Error loading first log file: ", err)
-		return nil
-        }
-	log2name := path.Join(p, "log.2")
-	log2, err := OpenLocked(log2name)
-	if err != nil {
-		log1.Close()
-		dataf.Close()
-		log.Print("Error initializing second log file: ", err)
-		return nil
-	}
-	err = b.loadFile(log2)
-	if err != nil {
-		dataf.Close()
-		log.Print("Error loading second log file: ", err)
-		return nil
-        }
-
-	// Save our files.
-	b.data = dataf
-	b.log1name = log1name
-	b.log1 = log1
-	b.log2name = log2name
-	b.log2 = log2
-        b.cs = make(chan *Update)
-
-        // After our initial load do a pivot.
-        b.pivotLogs()
-        b.pivotLogs()
-
 	return b
 }
 
+func (b *Backend) init() error {
+	b.memory = make(map[string]Val)
+
+	// Open our files.
+	data, err := OpenLocked(path.Join(b.path, "data"))
+	if err != nil {
+		log.Print("Error initializing data file: ", err)
+		return err
+	}
+	err = b.loadFile(data)
+	if err != nil {
+		log.Print("Error loading data file: ", err)
+		return err
+	}
+	log1, err := OpenLocked(path.Join(b.path, "log.1"))
+	if err != nil {
+		data.Close()
+		log.Print("Error initializing first log file: ", err)
+		return err
+	}
+	err = b.loadFile(log1)
+	if err != nil {
+		data.Close()
+		log.Print("Error loading first log file: ", err)
+		return err
+	}
+	log2, err := OpenLocked(path.Join(b.path, "log.2"))
+	if err != nil {
+		log1.Close()
+		data.Close()
+		log.Print("Error initializing second log file: ", err)
+		return err
+	}
+	err = b.loadFile(log2)
+	if err != nil {
+		data.Close()
+		log.Print("Error loading second log file: ", err)
+		return err
+	}
+
+	// Save our files.
+	b.data = data
+	b.log1 = log1
+	b.log2 = log2
+	b.cs = make(chan *Update)
+
+	// After our initial load do a pivot.
+	b.pivotLogs()
+	b.pivotLogs()
+
+	return nil
+}
+
 func serialize(output *os.File, entry *Entry) error {
-    // Do the encoding.
-    encoded := bytes.NewBuffer(make([]byte, 0))
-    enc := gob.NewEncoder(encoded)
-    err := enc.Encode(entry)
-    if err != nil {
-        return err
-    }
+	// Do the encoding.
+	encoded := bytes.NewBuffer(make([]byte, 0))
+	enc := gob.NewEncoder(encoded)
+	err := enc.Encode(entry)
+	if err != nil {
+		return err
+	}
 
-    // Finish our header.
-    err = binary.Write(output, binary.LittleEndian, uint32(encoded.Len()))
-    if err != nil {
-        return err
-    }
+	// Finish our header.
+	err = binary.Write(output, binary.LittleEndian, uint32(encoded.Len()))
+	if err != nil {
+		return err
+	}
 
-    // Write the full buffer.
-    _, err = output.Write(encoded.Bytes())
-    if err != nil {
-	return err
-    }
+	// Write the full buffer.
+	_, err = output.Write(encoded.Bytes())
+	if err != nil {
+		return err
+	}
 
-    return nil
+	return nil
 }
 
 func deserialize(input *os.File, entry *Entry) error {
-    // Read the header.
-    length := uint32(0)
-    err := binary.Read(input, binary.LittleEndian, &length)
-    if err == io.ErrUnexpectedEOF {
-        return io.EOF
-    } else if err != nil {
-        return err
-    }
+	// Read the header.
+	length := uint32(0)
+	err := binary.Read(input, binary.LittleEndian, &length)
+	if err == io.ErrUnexpectedEOF {
+		return io.EOF
+	} else if err != nil {
+		return err
+	}
 
-    // Read the object.
-    encoded := make([]byte, length, length)
-    n, err := io.ReadFull(input, encoded)
-    if (err == io.EOF || err == io.ErrUnexpectedEOF) && n == int(length) {
-        // Perfect. We got exactly this object.
-    } else if err != nil {
-	return err
-    }
+	// Read the object.
+	encoded := make([]byte, length, length)
+	n, err := io.ReadFull(input, encoded)
+	if (err == io.EOF || err == io.ErrUnexpectedEOF) && n == int(length) {
+		// Perfect. We got exactly this object.
+	} else if err != nil {
+		return err
+	}
 
-    // Do the decoding.
-    dec := gob.NewDecoder(bytes.NewBuffer(encoded))
-    err = dec.Decode(entry)
-    if err != nil {
-        return err
-    }
+	// Do the decoding.
+	dec := gob.NewDecoder(bytes.NewBuffer(encoded))
+	err = dec.Decode(entry)
+	if err != nil {
+		return err
+	}
 
-    return nil
+	return nil
 }
 
 func (b *Backend) pivotLogs() error {
 
 	// Remove the first log.
-	err := os.Remove(b.log1name)
+	err := os.Remove(path.Join(b.path, "log.1"))
 	if err != nil {
 		return err
 	}
 
 	// Pivot the second one to the first by name.
-	err = os.Rename(b.log2name, b.log1name)
+	err = os.Rename(path.Join(b.path, "log.2"), path.Join(b.path, "log.1"))
 	if err != nil {
 		return err
 	}
@@ -204,7 +202,7 @@ func (b *Backend) pivotLogs() error {
 	b.log1 = b.log2
 
 	// Open a new second log.
-	newlog2, err := OpenLocked(b.log2name)
+	newlog2, err := OpenLocked(path.Join(b.path, "log.2"))
 	if err != nil {
 		return err
 	}
@@ -213,10 +211,10 @@ func (b *Backend) pivotLogs() error {
 	// Serialize our current database.
 	b.data.Seek(0, 0)
 	for key, val := range b.memory {
-            err = serialize(b.data, &Entry{key, val})
-            if err != nil {
-                return err
-            }
+		err = serialize(b.data, &Entry{key, val})
+		if err != nil {
+			return err
+		}
 	}
 	b.data.Sync()
 
@@ -230,11 +228,11 @@ func (b *Backend) loadFile(file *os.File) error {
 
 	for {
 		var entry Entry
-                err := deserialize(file, &entry)
-                if err == io.EOF {
-                    break
-                } else if err != nil {
-                    return err
+		err := deserialize(file, &entry)
+		if err == io.EOF {
+			break
+		} else if err != nil {
+			return err
 		}
 
 		// Atomic set on our map.
@@ -279,7 +277,7 @@ func (b *Backend) logWriter() {
 		}
 
 		// Serialize the entry to the log.
-                serialize(b.log2, &update.Entry)
+		serialize(b.log2, &update.Entry)
 
 		// Add it to our list of done.
 		finished = append(finished, update)
@@ -338,24 +336,18 @@ func (b *Backend) List() ([]string, error) {
 }
 
 func (b *Backend) Clear() error {
-	keys, err := b.List()
-	if err != nil {
-		return err
-	}
-	for _, k := range keys {
-		err = b.Delete(k)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+	// Remove all files.
+	os.Remove(path.Join(b.path, "log.2"))
+	os.Remove(path.Join(b.path, "log.1"))
+	os.Remove(path.Join(b.path, "data"))
+	return b.init()
 }
 
 func (b *Backend) LoadIds(number uint) ([]string, error) {
 	ids := make([]string, 0)
 
 	// Read our current set of ids.
-	iddata, err := ioutil.ReadFile(b.idname)
+	iddata, err := ioutil.ReadFile(path.Join(b.path, "id"))
 	if err != nil &&
 		iddata != nil ||
 		len(iddata) > 0 {
@@ -380,7 +372,7 @@ func (b *Backend) LoadIds(number uint) ([]string, error) {
 		buf.WriteString(id)
 		buf.WriteString("\n")
 	}
-	err = ioutil.WriteFile(b.idname, buf.Bytes(), 0644)
+	err = ioutil.WriteFile(path.Join(b.path, "id"), buf.Bytes(), 0644)
 	if err != nil {
 		return nil, err
 	}

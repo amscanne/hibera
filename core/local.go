@@ -48,18 +48,18 @@ type Local struct {
 	data *storage.Backend
 
 	// Synchronization.
-        // The global Mutex protects access to
-        // the map of all locks. We could easily
-        // split this into a more scalable structure
-        // if it becomes a clear bottleneck.
+	// The global Mutex protects access to
+	// the map of all locks. We could easily
+	// split this into a more scalable structure
+	// if it becomes a clear bottleneck.
 	sync map[string]*Lock
 	revs map[string]uint64
 	sync.Mutex
 
 	// In-memory data.
-        // (Kept synchronized by other modules).
+	// (Kept synchronized by other modules).
 	groups map[string]*ClientMap
-	locks map[string]*ClientMap
+	locks  map[string]*ClientMap
 }
 
 func (l *Local) lock(key string) *Lock {
@@ -83,7 +83,24 @@ func (l *Local) DataList() ([]string, error) {
 }
 
 func (l *Local) DataClear() error {
-	return l.data.Clear()
+	l.Mutex.Lock()
+	items, err := l.data.List()
+	if err != nil {
+		l.Mutex.Unlock()
+		return err
+	}
+	err = l.data.Clear()
+	l.Mutex.Unlock()
+	if err != nil {
+		return err
+	}
+
+	// Fire watches.
+	for _, path := range items {
+		l.WatchFire(path, 0)
+	}
+
+	return nil
 }
 
 func (l *Local) LockOwners(key string, name string) ([]string, uint64, error) {
@@ -93,7 +110,7 @@ func (l *Local) LockOwners(key string, name string) ([]string, uint64, error) {
 	// Get the lock.
 	revmap := l.locks[key]
 	if revmap == nil {
-                // This is valid, it's an unheld lock.
+		// This is valid, it's an unheld lock.
 		return make([]string, 0), l.revs[key], nil
 	}
 
@@ -159,7 +176,7 @@ func (l *Local) LockAcquire(client *Client, key string, timeout uint64, name str
 	// Acquire it.
 	rev, err := l.doWatchFire(key, 0, lock)
 	(*revmap)[client.ClientId][name] = rev
-        return rev, err
+	return rev, err
 }
 
 func (l *Local) LockRelease(client *Client, key string) (uint64, error) {
@@ -192,16 +209,16 @@ func (l *Local) GroupMembers(group string, name string, limit uint64) ([]string,
 	// Lookup the group.
 	revmap := l.groups[group]
 	if revmap == nil {
-                // This is valid, it's an empty group.
+		// This is valid, it's an empty group.
 		return make([]string, 0), l.revs[group], nil
 	}
 
 	// Assembly a list of members.
-        indices := make([]uint64, 0)
+	indices := make([]uint64, 0)
 	members := make(map[uint64]string, 0)
 	for _, set := range *revmap {
 		for membername, revjoined := range set {
-                        indices = append(indices, revjoined)
+			indices = append(indices, revjoined)
 			if membername == name {
 				members[revjoined] = "*"
 			} else {
@@ -210,13 +227,13 @@ func (l *Local) GroupMembers(group string, name string, limit uint64) ([]string,
 		}
 	}
 
-        if len(indices) > int(limit) {
-            indices = indices[0:limit]
-        }
-        results := make([]string, 0, len(indices))
-        for _, index := range indices {
-            results = append(results, members[uint64(index)])
-        }
+	if len(indices) > int(limit) {
+		indices = indices[0:limit]
+	}
+	results := make([]string, 0, len(indices))
+	for _, index := range indices {
+		results = append(results, members[uint64(index)])
+	}
 
 	// Return the members and rev.
 	return results, l.revs[group], nil
@@ -246,7 +263,7 @@ func (l *Local) GroupJoin(client *Client, group string, name string) (uint64, er
 	// Join and fire.
 	rev, err := l.doWatchFire(group, 0, lock)
 	(*revmap)[client.ClientId][name] = rev
-        return rev, err
+	return rev, err
 }
 
 func (l *Local) GroupLeave(client *Client, group string, name string) (uint64, error) {
@@ -404,13 +421,17 @@ func (l *Local) loadRevs() error {
 func NewLocal(backend *storage.Backend) *Local {
 	local := new(Local)
 	local.data = backend
-	local.sync = make(map[string]*Lock)
-	local.revs = make(map[string]uint64)
-	local.groups = make(map[string]*ClientMap)
-	local.locks = make(map[string]*ClientMap)
-	err := local.loadRevs()
+	err := local.init()
 	if err != nil {
 		return nil
 	}
 	return local
+}
+
+func (l *Local) init() error {
+	l.sync = make(map[string]*Lock)
+	l.revs = make(map[string]uint64)
+	l.groups = make(map[string]*ClientMap)
+	l.locks = make(map[string]*ClientMap)
+	return l.loadRevs()
 }
