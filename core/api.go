@@ -1,17 +1,26 @@
 package core
 
+type Key string
+type Revision uint64
+type EphemId uint64
+type SubName string
+
 type API interface {
-	Info() (Info, error)
-	DataList() ([]string, error)
+	DataList() (*[]Key, error)
 	DataClear() error
-	LockOwners(key string) ([]string, uint64, error)
-	LockAcquire(client *Client, key string, timeout uint64, name string, limit uint64) (uint64, error)
-	LockRelease(client *Client, key string) (uint64, error)
-	GroupMembers(group string, name string, limit uint64) ([]string, uint64, error)
-	GroupLeave(client *Client, group string, name string) (uint64, error)
-	DataGet(key string) ([]byte, uint64, error)
-	DataSet(key string, value []byte, rev uint64) (uint64, error)
-	DataRemove(key string, rev uint64) (uint64, error)
-	WatchWait(client *Client, key string, rev uint64) (uint64, error)
-	WatchFire(key string, rev uint64) (uint64, error)
+
+	LockOwners(key Key, name SubName) ([]SubName, Revision, error)
+	LockAcquire(id EphemId, key Key, timeout uint64, name SubName, limit uint64) (Revision, error)
+	LockRelease(id EphemId, key Key, name SubName) (Revision, error)
+
+        GroupJoin(id EphemId, group Key, name SubName) (Revision, error)
+	GroupMembers(group Key, name SubName, limit uint64) ([]SubName, Revision, error)
+	GroupLeave(id EphemId, group Key, name SubName) (Revision, error)
+
+	DataGet(key Key) ([]byte, Revision, error)
+	DataSet(key Key, value []byte, rev Revision) (Revision, error)
+	DataRemove(key Key, rev Revision) (Revision, error)
+
+	WatchWait(id EphemId, key Key, rev Revision, timeout uint64) (Revision, error)
+	WatchFire(key Key, rev Revision) (Revision, error)
 }

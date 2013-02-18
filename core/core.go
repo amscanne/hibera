@@ -2,208 +2,170 @@ package core
 
 import (
 	"log"
-	"sync"
+        "sync/atomic"
 	"hibera/storage"
 )
 
+type ConnectionId uint64
+type Connection struct {
+        // A reference to the associated core.
+	core *Core
+
+        // A unique Connection (per-connection).
+        // This is generated automatically and can
+        // not be set by the user (unlike the id for
+        // the conn below).
+	ConnectionId
+
+        // The address associated with this conn.
+	addr string
+
+        // The user associated (if there is one).
+        // This will be looked up on the first if
+        // the user provided a generated ConnectionId.
+	client *Client
+}
+
 type ClientId uint64
+type UserId string
+type Client struct {
+        // A unique ClientId. This is used as the
+        // ephemeralId for the cluster operations.
+        ClientId
+
+        // The user string for identifying the Connection.
+        // This will be passed in via a header.
+        UserId
+
+        // The number of active Connection objects
+        // refering to this User object. The User
+        // objects are reference counted and garbage
+        // collected when all connections disconnect.
+	refs int32
+}
 
 type Core struct {
-	// The local datastore and proxy.
-	local *Local
-	proxy *Proxy
+	// Our connection and conn maps.
+	connections map[ConnectionId]*Connection
+	clients map[UserId]*Client
+	nextid uint64
 
-	// All active clients.
-	clients map[ClientId]*Client
-	users   map[string]*User
-	nextid  ClientId
-	lock    *sync.Mutex
-
+        // The underlying cluster.
+        // This is exposed by the API() call.
 	cluster *Cluster
 }
 
-type Client struct {
-	ClientId
-	addr string
-	user *User
-	*Core
-}
-
-type User struct {
-	ClientId
-	userid string
-	uuid   string
-	refs   int
-}
-
-func (c *Client) Name(name string) string {
+func (c *Connection) Name(name string) SubName {
 	if name != "" {
-		return name
+		return SubName(name)
 	}
-	if c.user != nil {
-		return c.user.uuid
+	if c.client != nil {
+		return SubName(c.client.UserId)
 	}
-	return c.addr
+	return SubName(c.addr)
 }
 
-type Info struct{}
-
-func (c *Core) genid() ClientId {
-	id := c.nextid
-	c.nextid += 1
-	return id
+func (c *Connection) EphemId() EphemId {
+    if c.client != nil {
+        return EphemId(c.client.ClientId)
+    }
+    return EphemId(c.ConnectionId)
 }
 
-func (c *Core) NewClient(addr string) *Client {
-	c.lock.Lock()
-	defer c.lock.Unlock()
+func (c *Core) genid() uint64 {
+        return atomic.AddUint64(&c.nextid, 1)
+}
 
-	// Generate client with no user, and
+func (c *Core) NewConnection(addr string) *Connection {
+	// Generate conn with no user, and
 	// a straight-forward id. The user can
-	// associate some client-id with their
+	// associate some conn-id with their
 	// active connection during lookup.
-	client := &Client{c.genid(), addr, nil, c}
-	c.clients[client.ClientId] = client
-	return client
+	conn := &Connection{c, ConnectionId(c.genid()), addr, nil}
+	c.connections[conn.ConnectionId] = conn
+	return conn
 }
 
-func (c *Core) FindClient(id ClientId, userid string) *Client {
-	c.lock.Lock()
-	defer c.lock.Unlock()
-
-	client := c.clients[id]
-	if client == nil {
+func (c *Core) FindConnection(id ConnectionId, userid UserId) *Connection {
+	conn := c.connections[id]
+	if conn == nil {
 		return nil
 	}
 
 	// Create the user if it doesnt exist.
+        // NOTE: There are some race conditions here between the
+        // map lookup and reference increment / creation. These
+        // should probably be fixed, but by my reckoning the current
+        // outcome of these conditions will be some clients having
+        // failed calls.
 	if userid != "" {
-		client.user = c.users[userid]
-
-		if client.user == nil {
-			uuid, err := storage.Uuid()
-			if err != nil {
-				// Something's really wrong here.
-				// We'll assume the server is blasting
-				// messages everything when things like
-				// this are happening.
-				return nil
-			}
-
+		conn.client = c.clients[userid]
+		if conn.client == nil {
 			// Create and initialize a new user.
-			// This will be the common user for all requests that use the
-			// userid string -- although this string will not necessarily
-			// correspond directly to the uuid we generation for safety.
-			client.user = new(User)
-			client.user.ClientId = c.genid()
-			client.user.userid = userid
-			client.user.uuid = uuid
-			client.user.refs = 1
-			c.users[userid] = client.user
+			conn.client = new(Client)
+			conn.client.ClientId = ClientId(c.genid())
+			conn.client.UserId = userid
+			conn.client.refs = 1
+			c.clients[userid] = conn.client
 		} else {
 			// Bump up the reference.
-			client.user.refs += 1
+			atomic.AddInt32(&conn.client.refs, 1)
 		}
 	}
 
-	return c.clients[id]
+	return c.connections[id]
 }
 
-func (c *Core) DropClient(id ClientId) {
-	c.lock.Lock()
-	defer c.lock.Unlock()
-
-	// Lookup this client.
-	client := c.clients[id]
-	if client == nil {
+func (c *Core) DropConnection(id ConnectionId) {
+	// Lookup this conn.
+	conn := c.connections[id]
+	if conn == nil {
 		return
 	}
 
 	// Shuffle userid mappings.
-	if client.user != nil {
-		client.user.refs -= 1
-		if client.user.refs == 0 {
+	if conn.client != nil {
+		if atomic.AddInt32(&conn.client.refs, -1) == 0 {
 			// Remove the user from the map and
 			// purge all related keys from the
 			// underlying storage system.
-			delete(c.users, client.user.userid)
-			c.local.Purge(client.user.ClientId)
-			client.user = nil
+			delete(c.clients, conn.client.UserId)
+			c.cluster.Purge(EphemId(conn.client.ClientId))
+			conn.client = nil
 		}
 	}
 
-	// Purge the client.
-	delete(c.clients, id)
-	c.local.Purge(id)
+	// Purge the connection.
+	delete(c.connections, id)
+	c.cluster.Purge(EphemId(id))
+}
+
+func (c *Connection) Drop() {
+    c.core.DropConnection(c.ConnectionId)
+}
+
+func (c *Core) Info() ([]byte, error) {
+    return nil, nil
+}
+
+func (c *Core) API() API {
+    return c.cluster
 }
 
 func NewCore(domain string, keys uint, backend *storage.Backend) *Core {
 	core := new(Core)
-	core.local = NewLocal(backend)
-	core.clients = make(map[ClientId]*Client)
-	core.users = make(map[string]*User)
-	core.lock = new(sync.Mutex)
+
+        // Create our connection cache.
+	core.connections = make(map[ConnectionId]*Connection)
+	core.clients = make(map[UserId]*Client)
+
+        // Create our cluster.
 	ids, err := backend.LoadIds(keys)
 	if err != nil {
 		log.Fatal("Unable to load ring: ", err)
 		return nil
 	}
-	core.cluster = NewCluster(domain, ids)
+	core.cluster = NewCluster(backend, domain, ids)
+
 	return core
-}
-
-func (c *Core) Info() (Info, error) {
-	return c.local.Info()
-}
-
-func (c *Core) DataList() ([]string, error) {
-	return c.local.DataList()
-}
-
-func (c *Core) DataClear() error {
-	return c.local.DataClear()
-}
-
-func (c *Core) LockOwners(client *Client, key string, name string) ([]string, uint64, error) {
-	return c.local.LockOwners(key, client.Name(name))
-}
-
-func (c *Core) LockAcquire(client *Client, key string, timeout uint64, name string, limit uint64) (uint64, error) {
-	return c.local.LockAcquire(client, key, timeout, client.Name(name), limit)
-}
-
-func (c *Core) LockRelease(client *Client, key string) (uint64, error) {
-	return c.local.LockRelease(client, key)
-}
-
-func (c *Core) GroupMembers(client *Client, group string, name string, limit uint64) ([]string, uint64, error) {
-	return c.local.GroupMembers(group, client.Name(name), limit)
-}
-
-func (c *Core) GroupJoin(client *Client, group string, name string) (uint64, error) {
-	return c.local.GroupJoin(client, group, client.Name(name))
-}
-
-func (c *Core) GroupLeave(client *Client, group string, name string) (uint64, error) {
-	return c.local.GroupLeave(client, group, client.Name(name))
-}
-
-func (c *Core) DataGet(key string) ([]byte, uint64, error) {
-	return c.local.DataGet(key)
-}
-
-func (c *Core) DataSet(key string, value []byte, rev uint64) (uint64, error) {
-	return c.local.DataSet(key, value, rev)
-}
-
-func (c *Core) DataRemove(key string, rev uint64) (uint64, error) {
-	return c.local.DataRemove(key, rev)
-}
-
-func (c *Core) WatchWait(client *Client, key string, rev uint64, timeout uint64) (uint64, error) {
-	return c.local.WatchWait(client, key, rev, timeout)
-}
-
-func (c *Core) WatchFire(key string, rev uint64) (uint64, error) {
-	return c.local.WatchFire(key, rev)
 }

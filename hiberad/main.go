@@ -13,7 +13,7 @@ var port = flag.Uint("port", server.DEFAULT_PORT, "Bind port for the server.")
 var path = flag.String("path", storage.DEFAULT_PATH, "Backing storage path.")
 var domain = flag.String("domain", core.DEFAULT_DOMAIN, "Failure domain for this server.")
 var keys = flag.Uint("keys", core.DEFAULT_KEYS, "The number of keys for this node (weight).")
-var seeds = flag.String("seeds", "", "Seeds for joining the cluster.")
+var seeds = flag.String("seeds", "255.255.255.255", "Seeds for joining the cluster.")
 
 func main() {
 	flag.Parse()
