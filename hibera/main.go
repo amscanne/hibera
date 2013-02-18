@@ -330,6 +330,5 @@ func main() {
 
 	if err != nil {
 		log.Fatal("Error: ", err)
-		os.Exit(1)
 	}
 }

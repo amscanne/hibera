@@ -303,7 +303,7 @@ func NewHTTPServer(core *core.Core, addr string, port uint) *HTTPServer {
 	}
 	ln, err := net.Listen("tcp", fmt.Sprintf("%s:%d", addr, port))
 	if err != nil {
-		log.Fatal("Unable to bind HTTP server: ", err)
+		log.Print("Unable to bind HTTP server: ", err)
 		return nil
 	}
 	server.Listener = &Listener{core, ln}

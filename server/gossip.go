@@ -55,13 +55,13 @@ func (s *GossipServer) Serve() {
 func NewGossipServer(core *core.Core, addr string, port uint, seeds []string) *GossipServer {
 	udpaddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", addr, port))
 	if err != nil {
-		log.Fatal("Unable to resolve address: ", err)
+		log.Print("Unable to resolve address: ", err)
 		return nil
 	}
 
 	conn, err := net.ListenUDP("udp", udpaddr)
 	if err != nil {
-		log.Fatal("Unable to bind Gossip server: ", err)
+		log.Print("Unable to bind Gossip server: ", err)
 		return nil
 	}
 

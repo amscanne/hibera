@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"log"
 	"strings"
 	"io/ioutil"
 )
@@ -9,7 +8,6 @@ import (
 func Uuid() (string, error) {
 	contents, err := ioutil.ReadFile("/proc/sys/kernel/random/uuid")
 	if err != nil {
-		log.Fatal("UUID generation failed!")
 		return "", err
 	}
 
