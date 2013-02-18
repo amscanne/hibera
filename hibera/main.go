@@ -38,6 +38,9 @@ commands:
          [-exec <run-script>]
          [-timeout <timeout>]
 
+    owners <key>                 --- Show current lock owners.
+         [-name <name>]
+
     join <key>                   --- Run a process while joined to
          [-name <name>]              the given group.
          [-exec <run-script>]
@@ -95,6 +98,18 @@ func cli_lock(c *client.HiberaClient, key string, name string, cmd string, timeo
 	return do_exec(cmd, nil)
 }
 
+func cli_owners(c *client.HiberaClient, key string, name string) error {
+	owners, _, err := c.Owners(key, name)
+	if err != nil {
+		return err
+	}
+        if len(owners) > 0 {
+	    // Output all owners.
+	    fmt.Printf("%s\n", strings.Join(owners, "\n"))
+        }
+	return nil
+}
+
 func cli_join(c *client.HiberaClient, key string, name string, cmd string) error {
 	_, err := c.Join(key, name)
 	if err != nil {
@@ -135,7 +150,7 @@ func cli_run(c *client.HiberaClient, key string, name string, count uint, start 
 		}
 
 		// Wait for the next update.
-		rev, err = c.Watch(key, rev)
+		rev, err = c.Watch(key, rev, 0)
 		if err != nil {
 			return err
 		}
@@ -148,8 +163,10 @@ func cli_members(c *client.HiberaClient, key string, name string, limit uint) er
 	if err != nil {
 		return err
 	}
-	// Output all members.
-	fmt.Printf("%s\n", strings.Join(members, "\n"))
+        if len(members) > 0 {
+	    // Output all members.
+	    fmt.Printf("%s\n", strings.Join(members, "\n"))
+        }
 	return nil
 }
 
@@ -212,7 +229,7 @@ func cli_sync(c *client.HiberaClient, key string, output string, cmd string) err
 		}
 
 		// Wait for the next update.
-		rev, err = c.Watch(key, rev)
+		rev, err = c.Watch(key, rev, 0)
 		if err != nil {
 			return err
 		}
@@ -222,7 +239,7 @@ func cli_sync(c *client.HiberaClient, key string, output string, cmd string) err
 }
 
 func cli_watch(c *client.HiberaClient, key string) error {
-	_, err := c.Watch(key, 0)
+	_, err := c.Watch(key, 0, 0)
 	return err
 }
 
@@ -270,6 +287,9 @@ func main() {
 		err = cli_info(c)
 	case "lock":
 		err = cli_lock(c, key, *name, *cmd, *timeout, *limit)
+		break
+	case "owners":
+		err = cli_owners(c, key, *name)
 		break
 	case "join":
 		err = cli_join(c, key, *name, *cmd)

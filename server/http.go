@@ -14,6 +14,8 @@ import (
 	"hibera/core"
 )
 
+var UnhandledRequest = errors.New("")
+
 type Listener struct {
 	*core.Core
 	net.Listener
@@ -82,9 +84,9 @@ func (s *HTTPServer) data_clear() error {
 	return s.Core.DataClear()
 }
 
-func (s *HTTPServer) lock_owner(key string, output *bytes.Buffer) (uint64, error) {
+func (s *HTTPServer) lock_owners(client *core.Client, key string, name string, output *bytes.Buffer) (uint64, error) {
 	enc := json.NewEncoder(output)
-	owners, rev, err := s.Core.LockOwners(key)
+	owners, rev, err := s.Core.LockOwners(client, key, name)
 	if err != nil {
 		return 0, err
 	}
@@ -133,8 +135,8 @@ func (s *HTTPServer) data_remove(key string, rev uint64) (uint64, error) {
 	return s.Core.DataRemove(key, rev)
 }
 
-func (s *HTTPServer) watch_wait(client *core.Client, key string, rev uint64) (uint64, error) {
-	return s.Core.WatchWait(client, key, rev)
+func (s *HTTPServer) watch_wait(client *core.Client, key string, rev uint64, timeout uint64) (uint64, error) {
+	return s.Core.WatchWait(client, key, rev, timeout)
 }
 
 func (s *HTTPServer) watch_fire(key string, rev uint64) (uint64, error) {
@@ -200,7 +202,7 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
 
 	// Prepare our response.
 	buf := new(bytes.Buffer)
-	err = errors.New(fmt.Sprintf("Unhandled Request: %s %s", r.Method, r.URL.Path))
+	err = UnhandledRequest
 	rev := uint64(0)
 
 	switch len(parts) {
@@ -230,7 +232,7 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
 		case "locks":
 			switch r.Method {
 			case "GET":
-				rev, err = s.lock_owner(parts[1], buf)
+				rev, err = s.lock_owners(client, parts[1], strParam(r, "name"), buf)
 				break
 			case "POST":
 				rev, err = s.lock_acquire(client, parts[1], intParam(r, "timeout"), strParam(r, "name"), intParam(r, "limit"))
@@ -269,7 +271,7 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
 		case "watches":
 			switch r.Method {
 			case "GET":
-				rev, err = s.watch_wait(client, parts[1], intParam(r, "rev"))
+				rev, err = s.watch_wait(client, parts[1], intParam(r, "rev"), intParam(r, "timeout"))
 				break
 			case "POST":
 				rev, err = s.watch_fire(parts[1], intParam(r, "rev"))

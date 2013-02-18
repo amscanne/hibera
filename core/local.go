@@ -2,7 +2,7 @@ package core
 
 import (
 	"sync"
-	"errors"
+	"time"
 	"hibera/storage"
 )
 
@@ -11,19 +11,26 @@ type RevMap map[ClientId]Set
 type RevSet map[ClientId]bool
 
 type Lock struct {
-	sync.Mutex
 	*sync.Cond
 }
 
 func (l *Lock) lock() {
-	l.Mutex.Lock()
+	l.Cond.L.Lock()
 }
 
 func (l *Lock) unlock() {
-	l.Mutex.Unlock()
+	l.Cond.L.Unlock()
 }
 
-func (l *Lock) wait() {
+func (l *Lock) timeout(duration time.Duration) {
+	time.Sleep(duration)
+	l.Cond.Broadcast()
+}
+
+func (l *Lock) wait(timeout bool, duration time.Duration) {
+	if timeout {
+		go l.timeout(duration)
+	}
 	l.Cond.Wait()
 }
 
@@ -33,7 +40,7 @@ func (l *Lock) notify() {
 
 func NewLock() *Lock {
 	lock := new(Lock)
-	lock.Cond = sync.NewCond(&lock.Mutex)
+	lock.Cond = sync.NewCond(new(sync.Mutex))
 	return lock
 }
 
@@ -54,18 +61,15 @@ type Local struct {
 
 func (l *Local) lock(key string) *Lock {
 	l.Mutex.Lock()
+	defer l.Mutex.Unlock()
 	lock := l.sync[key]
 	if lock == nil {
 		lock = NewLock()
 		l.sync[key] = lock
 	}
 	lock.lock()
-	l.Mutex.Unlock()
 	return lock
 }
-
-var NOT_FOUND = errors.New("NOT FOUND")
-var BUSY = errors.New("BUSY")
 
 func (l *Local) Info() (Info, error) {
 	return Info{}, nil
@@ -79,21 +83,26 @@ func (l *Local) DataClear() error {
 	return l.data.Clear()
 }
 
-func (l *Local) LockOwners(key string) ([]string, uint64, error) {
+func (l *Local) LockOwners(key string, name string) ([]string, uint64, error) {
 	lock := l.lock(key)
 	defer lock.unlock()
 
 	// Get the lock.
 	revmap := l.locks[key]
 	if revmap == nil {
-		return nil, 0, nil
+                // This is valid, it's an unheld lock.
+		return make([]string, 0), l.revs[key], nil
 	}
 
 	// Lookup all the owners.
 	owners := make([]string, 0)
-	for _, names := range *revmap {
-		for name := range names {
-			owners = append(owners, name)
+	for _, set := range *revmap {
+		for ownername := range set {
+			if ownername == name {
+				owners = append(owners, "*")
+			} else {
+				owners = append(owners, ownername)
+			}
 		}
 	}
 
@@ -119,16 +128,29 @@ func (l *Local) LockAcquire(client *Client, key string, timeout uint64, name str
 		(*revmap)[client.ClientId] = make(Set)
 	}
 	if (*revmap)[client.ClientId][name] {
-		return 0, BUSY
+		return 0, Busy
 	}
 
-	// Count the number of holders.
-	holders := uint64(0)
-	for _, names := range *revmap {
-		holders += uint64(len(names))
-	}
-	if holders >= limit {
-		return 0, BUSY
+	start := time.Now()
+	end := start.Add(time.Duration(timeout) * time.Millisecond)
+
+	for {
+		now := time.Now()
+		if timeout > 0 && now.After(end) {
+			return 0, Busy
+		}
+
+		// Count the number of holders.
+		holders := uint64(0)
+		for _, names := range *revmap {
+			holders += uint64(len(names))
+		}
+		if holders < limit {
+			break
+		}
+
+		// Wait for a change.
+		lock.wait(timeout > 0, time.Duration(0))
 	}
 
 	// Acquire it.
@@ -143,7 +165,7 @@ func (l *Local) LockRelease(client *Client, key string) (uint64, error) {
 	// Get the lock.
 	revmap := l.locks[key]
 	if revmap == nil || !(*revmap)[client.ClientId][key] {
-		return 0, NOT_FOUND
+		return 0, NotFound
 	}
 
 	// Release it.
@@ -166,15 +188,20 @@ func (l *Local) GroupMembers(group string, name string, limit uint64) ([]string,
 	// Lookup the group.
 	revmap := l.groups[group]
 	if revmap == nil {
-		return nil, 0, nil
+                // This is valid, it's an empty group.
+		return make([]string, 0), l.revs[group], nil
 	}
 
 	// Assembly a list of members.
 	members := make([]string, 0, limit)
 	count := uint64(0)
-	for _, names := range *revmap {
-		for name, _ := range names {
-			members = append(members, name)
+	for _, set := range *revmap {
+		for membername := range set {
+			if membername == name {
+				members = append(members, "*")
+			} else {
+				members = append(members, membername)
+			}
 			count += 1
 			if limit > 0 && count >= limit {
 				break
@@ -204,7 +231,7 @@ func (l *Local) GroupJoin(client *Client, group string, name string) (uint64, er
 		(*revmap)[client.ClientId] = make(Set)
 	}
 	if (*revmap)[client.ClientId][name] {
-		return 0, BUSY
+		return 0, Busy
 	}
 
 	// Join and fire.
@@ -219,7 +246,7 @@ func (l *Local) GroupLeave(client *Client, group string, name string) (uint64, e
 	// Lookup the group and see if we're a member.
 	revmap := l.groups[group]
 	if revmap == nil || !(*revmap)[client.ClientId][name] {
-		return 0, NOT_FOUND
+		return 0, NotFound
 	}
 
 	// Leave the group.
@@ -269,16 +296,26 @@ func (l *Local) DataRemove(key string, rev uint64) (uint64, error) {
 	return 0, l.data.Delete(key)
 }
 
-func (l *Local) WatchWait(client *Client, key string, rev uint64) (uint64, error) {
+func (l *Local) WatchWait(client *Client, key string, rev uint64, timeout uint64) (uint64, error) {
 	lock := l.lock(key)
 	defer lock.unlock()
 
+	start := time.Now()
+	end := start.Add(time.Duration(timeout) * time.Millisecond)
+
 	for {
+		now := time.Now()
+		if timeout > 0 && now.After(end) {
+			return l.revs[key], Busy
+		}
+
 		// Wait until we are no longer on the given rev.
 		if l.revs[key] != rev {
 			break
 		}
-		lock.wait()
+
+		// Wait for a change.
+		lock.wait(timeout > 0, end.Sub(now))
 	}
 
 	// Return the new rev.
@@ -288,7 +325,7 @@ func (l *Local) WatchWait(client *Client, key string, rev uint64) (uint64, error
 func (l *Local) doWatchFire(key string, rev uint64, lock *Lock) (uint64, error) {
 	// Check our condition.
 	if rev != 0 && rev != (l.revs[key]+1) {
-		return 0, NOT_FOUND
+		return 0, NotFound
 	}
 
 	// Update our rev.
@@ -309,12 +346,10 @@ func (l *Local) WatchFire(key string, rev uint64) (uint64, error) {
 }
 
 func (l *Local) Purge(id ClientId) {
-	l.Mutex.Lock()
-	defer l.Mutex.Unlock()
-
 	paths := make([]string, 0)
 
 	// Kill off all ephemeral nodes.
+	l.Mutex.Lock()
 	for group, members := range l.groups {
 		if len((*members)[id]) > 0 {
 			paths = append(paths, group)
@@ -330,6 +365,7 @@ func (l *Local) Purge(id ClientId) {
 	for _, clients := range l.watches {
 		delete(*clients, id)
 	}
+	l.Mutex.Unlock()
 
 	// Fire watches.
 	for _, path := range paths {

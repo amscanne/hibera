@@ -79,8 +79,8 @@ func (c *Core) DataClear() error {
 	return c.local.DataClear()
 }
 
-func (c *Core) LockOwners(key string) ([]string, uint64, error) {
-	return c.local.LockOwners(key)
+func (c *Core) LockOwners(client *Client, key string, name string) ([]string, uint64, error) {
+	return c.local.LockOwners(key, client.Name(name))
 }
 
 func (c *Core) LockAcquire(client *Client, key string, timeout uint64, name string, limit uint64) (uint64, error) {
@@ -115,8 +115,8 @@ func (c *Core) DataRemove(key string, rev uint64) (uint64, error) {
 	return c.local.DataRemove(key, rev)
 }
 
-func (c *Core) WatchWait(client *Client, key string, rev uint64) (uint64, error) {
-	return c.local.WatchWait(client, key, rev)
+func (c *Core) WatchWait(client *Client, key string, rev uint64, timeout uint64) (uint64, error) {
+	return c.local.WatchWait(client, key, rev, timeout)
 }
 
 func (c *Core) WatchFire(key string, rev uint64) (uint64, error) {
