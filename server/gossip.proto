@@ -1,18 +1,25 @@
 package server;
 
 enum TYPE {
+    // Basic gossip.
     PING = 0;
     PONG = 1;
+
+    // All paxos messages.
+    PROPOSE = 2;
+    PROMISE = 3;
+    NOPROMISE = 4;
+    ACCEPT = 5;
+    ACCEPTED = 6;
 };
 
-message ServerInfo {
+message Gossip {
     required string id = 1;
-    required uint32 ipv4 = 2;
-    required uint32 port = 3;
+    repeated string dead = 2;
 }
 
-message Gossip {
+message Message {
     required uint32 type = 1;
     required uint64 version = 2;
-    repeated ServerInfo dead = 3;
+    optional Gossip gossip = 5;
 }

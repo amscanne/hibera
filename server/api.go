@@ -4,21 +4,20 @@ import (
 	"hibera/core"
 )
 
-var DEFAULT_BIND = ""
-var DEFAULT_PORT = uint(2033)
+var DefaultBind = ""
 
 type Server struct {
 	*HTTPServer
 	*GossipServer
 }
 
-func NewServer(core *core.Core, addr string, port uint, seeds []string) *Server {
-	http := NewHTTPServer(core, addr, port)
+func NewServer(hub *core.Hub, cluster *core.Cluster, addr string, port uint, seeds []string) *Server {
+	http := NewHTTPServer(hub, cluster, addr, port)
 	if http == nil {
 		return nil
 	}
 
-	gossip := NewGossipServer(core, addr, port, seeds)
+	gossip := NewGossipServer(cluster, addr, port, seeds)
 	if gossip == nil {
 		return nil
 	}

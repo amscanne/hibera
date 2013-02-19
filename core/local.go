@@ -1,6 +1,7 @@
 package core
 
 import (
+	"errors"
 	"sync"
 	"time"
 	"hibera/storage"
@@ -14,6 +15,9 @@ import (
 type RevisionMap map[Key]Revision
 type NameMap map[SubName]Revision
 type EphemeralSet map[EphemId]NameMap
+
+var NotFound = errors.New("")
+var Busy = errors.New("")
 
 type Lock struct {
 	*sync.Cond
@@ -49,10 +53,7 @@ func NewLock() *Lock {
 	return lock
 }
 
-type Local struct {
-	// Our backend.
-	data *storage.Backend
-
+type local struct {
 	// Synchronization.
 	// The global Mutex protects access to
 	// the map of all locks. We could easily
@@ -62,13 +63,16 @@ type Local struct {
 	revs RevisionMap
 	sync.Mutex
 
-	// In-memory data.
+	// In-memory ephemeral data.
 	// (Kept synchronized by other modules).
-	groups map[Key]*EphemeralSet
-	locks  map[Key]*EphemeralSet
+	keys map[Key]*EphemeralSet
+
+	// Our backend.
+	// This is used to store data keys.
+	data *storage.Backend
 }
 
-func (l *Local) lock(key Key) *Lock {
+func (l *local) lock(key Key) *Lock {
 	l.Mutex.Lock()
 	lock := l.sync[key]
 	if lock == nil {
@@ -80,23 +84,23 @@ func (l *Local) lock(key Key) *Lock {
 	return lock
 }
 
-func (l *Local) Info() (Info, error) {
+func (l *local) Info() (Info, error) {
 	return Info{}, nil
 }
 
-func (l *Local) DataList() (*[]Key, error) {
+func (l *local) DataList() (*[]Key, error) {
 	items, err := l.data.List()
-        if err != nil {
-            return nil, err
-        }
-        keys := make([]Key, len(items), len(items))
-        for i, item := range items {
-            keys[i] = Key(item)
-        }
+	if err != nil {
+		return nil, err
+	}
+	keys := make([]Key, len(items), len(items))
+	for i, item := range items {
+		keys[i] = Key(item)
+	}
 	return &keys, nil
 }
 
-func (l *Local) DataClear() error {
+func (l *local) DataClear() error {
 	l.Mutex.Lock()
 	items, err := l.data.List()
 	if err != nil {
@@ -111,116 +115,22 @@ func (l *Local) DataClear() error {
 
 	// Fire watches.
 	for _, path := range items {
-		l.WatchFire(Key(path), 0)
+		l.EventFire(Key(path), 0)
 	}
 
 	return nil
 }
 
-func (l *Local) LockOwners(key Key, name SubName) ([]SubName, Revision, error) {
+func (l *local) SyncMembers(key Key, name SubName, limit uint64) (int, []SubName, Revision, error) {
 	lock := l.lock(key)
 	defer lock.unlock()
 
-	// Get the lock.
-	revmap := l.locks[key]
+	// Lookup the key.
+	index := -1
+	revmap := l.keys[key]
 	if revmap == nil {
-		// This is valid, it's an unheld lock.
-		return make([]SubName, 0), l.revs[key], nil
-	}
-
-	// Lookup all the owners.
-	owners := make([]SubName, 0)
-	for _, set := range *revmap {
-		for ownername := range set {
-			owners = append(owners, ownername)
-		}
-	}
-
-	// Return the info.
-	return owners, l.revs[key], nil
-}
-
-func (l *Local) LockAcquire(id EphemId, key Key, timeout uint64, name SubName, limit uint64) (Revision, error) {
-	lock := l.lock(key)
-	defer lock.unlock()
-
-	// Get the lock.
-	revmap := l.locks[key]
-	if revmap == nil {
-		newmap := make(EphemeralSet)
-		revmap = &newmap
-		l.locks[key] = revmap
-	}
-
-	// Already held?
-	_, present := (*revmap)[id]
-	if !present {
-		(*revmap)[id] = make(NameMap)
-	}
-	if (*revmap)[id][name] != 0 {
-		return 0, Busy
-	}
-
-	start := time.Now()
-	end := start.Add(time.Duration(timeout) * time.Millisecond)
-
-	for {
-		now := time.Now()
-		if timeout > 0 && now.After(end) {
-			return 0, Busy
-		}
-
-		// Count the number of holders.
-		holders := uint64(0)
-		for _, names := range *revmap {
-			holders += uint64(len(names))
-		}
-		if holders < limit {
-			break
-		}
-
-		// Wait for a change.
-		lock.wait(timeout > 0, time.Duration(0))
-	}
-
-	// Acquire it.
-	rev, err := l.doWatchFire(key, 0, lock)
-	(*revmap)[id][name] = rev
-	return rev, err
-}
-
-func (l *Local) LockRelease(id EphemId, key Key, name SubName) (Revision, error) {
-	lock := l.lock(key)
-	defer lock.unlock()
-
-	// Get the lock.
-	revmap := l.locks[key]
-	if revmap == nil || (*revmap)[id][name] == 0 {
-		return 0, NotFound
-	}
-
-	// Release it.
-	_, present := (*revmap)[id]
-	if !present {
-		(*revmap)[id] = make(NameMap)
-	}
-	delete((*revmap)[id], name)
-	if len(*revmap) == 0 {
-		delete(l.locks, key)
-	}
-
-	return l.doWatchFire(key, 0, lock)
-}
-
-func (l *Local) GroupMembers(group Key, name SubName, limit uint64) ([]SubName, Revision, error) {
-	lock := l.lock(group)
-	defer lock.unlock()
-
-	// Lookup the group.
-	revmap := l.groups[group]
-	if revmap == nil {
-		// This is valid, it's an empty group.
-		return make([]SubName, 0), l.revs[group], nil
+		// This is valid, it's an empty key.
+		return index, make([]SubName, 0), l.revs[key], nil
 	}
 
 	// Aggregate all members across clients.
@@ -235,23 +145,18 @@ func (l *Local) GroupMembers(group Key, name SubName, limit uint64) ([]SubName, 
 	if len(allmap) < int(limit) {
 		limit = uint64(len(allmap))
 	}
+	current := uint64(0)
 	members := make([]SubName, limit, limit)
 	for candidate, revjoined := range allmap {
-		placed := false
-		for i, current := range members {
-			if current == "" {
-				members[i] = candidate
-				placed = true
-				break
-			}
-		}
-		if placed {
-			continue
-		}
-		for i, current := range members {
-			if revjoined <= allmap[current] {
-				members[i] = candidate
-				break
+		if current < limit {
+			members[current] = candidate
+			current += 1
+		} else {
+			for i, current := range members {
+				if revjoined <= allmap[current] {
+					members[i] = candidate
+					break
+				}
 			}
 		}
 	}
@@ -269,88 +174,123 @@ func (l *Local) GroupMembers(group Key, name SubName, limit uint64) ([]SubName, 
 		}
 	}
 
+	// Save the index if it's available.
+	for i, current := range members {
+		if current == name {
+			index = i
+		}
+	}
+
 	// Return the members and rev.
-	return members, l.revs[group], nil
+	return index, members, l.revs[key], nil
 }
 
-func (l *Local) GroupJoin(id EphemId, group Key, name SubName) (Revision, error) {
-	lock := l.lock(group)
+func (l *local) SyncJoin(id EphemId, key Key, name SubName, limit uint, timeout uint) (int, Revision, error) {
+	lock := l.lock(key)
 	defer lock.unlock()
 
-	// Lookup the group.
-	revmap := l.groups[group]
-	if revmap == nil {
-		newmap := make(EphemeralSet)
-		revmap = &newmap
-		l.groups[group] = revmap
-	}
+	// Go through in a safe way.
+	index := -1
+	start := time.Now()
+	end := start.Add(time.Duration(timeout) * time.Millisecond)
+	var revmap *EphemeralSet
+	for {
+		now := time.Now()
+		if timeout > 0 && now.After(end) {
+			return index, 0, Busy
+		}
 
-	// Lookup the group and see if we're a member.
-	_, present := (*revmap)[id]
-	if !present {
-		(*revmap)[id] = make(NameMap)
-	}
-	if (*revmap)[id][name] != 0 {
-		return 0, Busy
+		// Lookup the key.
+		revmap = l.keys[key]
+		if revmap == nil {
+			newmap := make(EphemeralSet)
+			revmap = &newmap
+			l.keys[key] = revmap
+		}
+
+		// Lookup the key and see if we're a member.
+		_, present := (*revmap)[id]
+		if !present {
+			(*revmap)[id] = make(NameMap)
+		}
+
+		// Check that we're still not there already.
+		if (*revmap)[id][name] != 0 {
+			return index, 0, Busy
+		}
+
+		// Count the number of holders.
+		members := uint(0)
+		for _, names := range *revmap {
+			members += uint(len(names))
+		}
+		if limit == 0 || members < limit {
+			// We will be the Nth member.
+			index = int(members)
+			break
+		}
+
+		// Wait for a change.
+		lock.wait(timeout > 0, time.Duration(0))
 	}
 
 	// Join and fire.
-	rev, err := l.doWatchFire(group, 0, lock)
+	rev, err := l.doEventFire(key, 0, lock)
 	(*revmap)[id][name] = rev
-	return rev, err
+	return index, rev, err
 }
 
-func (l *Local) GroupLeave(id EphemId, group Key, name SubName) (Revision, error) {
-	lock := l.lock(group)
+func (l *local) SyncLeave(id EphemId, key Key, name SubName) (Revision, error) {
+	lock := l.lock(key)
 	defer lock.unlock()
 
-	// Lookup the group and see if we're a member.
-	revmap := l.groups[group]
+	// Lookup the key and see if we're a member.
+	revmap := l.keys[key]
 	if revmap == nil || (*revmap)[id][name] == 0 {
 		return 0, NotFound
 	}
 
-	// Leave the group.
+	// Leave the key.
 	_, present := (*revmap)[id]
 	if !present {
 		(*revmap)[id] = make(NameMap)
 	}
 	delete((*revmap)[id], name)
 	if len(*revmap) == 0 {
-		delete(l.groups, group)
+		delete(l.keys, key)
 	}
 
-	return l.doWatchFire(group, 0, lock)
+	return l.doEventFire(key, 0, lock)
 }
 
-func (l *Local) DataGet(key Key) ([]byte, Revision, error) {
+func (l *local) DataGet(key Key) ([]byte, Revision, error) {
 	lock := l.lock(key)
 	defer lock.unlock()
 
 	value, rev, err := l.data.Read(string(key))
-        return value, Revision(rev), err
+	return value, Revision(rev), err
 }
 
-func (l *Local) DataSet(key Key, value []byte, rev Revision) (Revision, error) {
+func (l *local) DataSet(key Key, value []byte, rev Revision) (Revision, error) {
 	lock := l.lock(key)
 	defer lock.unlock()
 
 	// Check the revisions.
-	rev, err := l.doWatchFire(key, rev, lock)
+	rev, err := l.doEventFire(key, rev, lock)
 	if err != nil {
 		return rev, err
 	}
 
-        err = l.data.Write(string(key), value, uint64(rev))
+	err = l.data.Write(string(key), value, uint64(rev))
 	return Revision(rev), err
 }
 
-func (l *Local) DataRemove(key Key, rev Revision) (Revision, error) {
+func (l *local) DataRemove(key Key, rev Revision) (Revision, error) {
 	lock := l.lock(key)
 	defer lock.unlock()
 
 	// Check the revisions.
-	rev, err := l.doWatchFire(key, rev, lock)
+	rev, err := l.doEventFire(key, rev, lock)
 	if err != nil {
 		return rev, err
 	}
@@ -359,7 +299,7 @@ func (l *Local) DataRemove(key Key, rev Revision) (Revision, error) {
 	return 0, l.data.Delete(string(key))
 }
 
-func (l *Local) WatchWait(id EphemId, key Key, rev Revision, timeout uint64) (Revision, error) {
+func (l *local) EventWait(id EphemId, key Key, rev Revision, timeout uint64) (Revision, error) {
 	lock := l.lock(key)
 	defer lock.unlock()
 
@@ -385,7 +325,7 @@ func (l *Local) WatchWait(id EphemId, key Key, rev Revision, timeout uint64) (Re
 	return l.revs[key], nil
 }
 
-func (l *Local) doWatchFire(key Key, rev Revision, lock *Lock) (Revision, error) {
+func (l *local) doEventFire(key Key, rev Revision, lock *Lock) (Revision, error) {
 	// Check our condition.
 	if rev != 0 && rev != (l.revs[key]+1) {
 		return 0, NotFound
@@ -401,39 +341,33 @@ func (l *Local) doWatchFire(key Key, rev Revision, lock *Lock) (Revision, error)
 	return rev, nil
 }
 
-func (l *Local) WatchFire(key Key, rev Revision) (Revision, error) {
+func (l *local) EventFire(key Key, rev Revision) (Revision, error) {
 	lock := l.lock(key)
 	defer lock.unlock()
 
-	return l.doWatchFire(key, rev, lock)
+	return l.doEventFire(key, rev, lock)
 }
 
-func (l *Local) Purge(id EphemId) {
+func (l *local) Purge(id EphemId) {
 	paths := make([]Key, 0)
 
 	// Kill off all ephemeral nodes.
 	l.Mutex.Lock()
-	for group, members := range l.groups {
+	for key, members := range l.keys {
 		if len((*members)[id]) > 0 {
-			paths = append(paths, group)
+			paths = append(paths, key)
 		}
 		delete(*members, id)
-	}
-	for lock, owners := range l.locks {
-		if len((*owners)[id]) > 0 {
-			paths = append(paths, lock)
-		}
-		delete(*owners, id)
 	}
 	l.Mutex.Unlock()
 
 	// Fire watches.
 	for _, path := range paths {
-		l.WatchFire(path, 0)
+		l.EventFire(path, 0)
 	}
 }
 
-func (l *Local) loadRevs() error {
+func (l *local) loadRevs() error {
 	l.Mutex.Lock()
 	defer l.Mutex.Unlock()
 
@@ -454,8 +388,8 @@ func (l *Local) loadRevs() error {
 	return nil
 }
 
-func NewLocal(backend *storage.Backend) *Local {
-	local := new(Local)
+func NewLocal(backend *storage.Backend) *local {
+	local := new(local)
 	local.data = backend
 	err := local.init()
 	if err != nil {
@@ -464,10 +398,9 @@ func NewLocal(backend *storage.Backend) *Local {
 	return local
 }
 
-func (l *Local) init() error {
+func (l *local) init() error {
 	l.sync = make(map[Key]*Lock)
 	l.revs = make(RevisionMap)
-	l.groups = make(map[Key]*EphemeralSet)
-	l.locks = make(map[Key]*EphemeralSet)
+	l.keys = make(map[Key]*EphemeralSet)
 	return l.loadRevs()
 }

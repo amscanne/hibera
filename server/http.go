@@ -12,12 +12,13 @@ import (
 	"errors"
 	"encoding/json"
 	"hibera/core"
+	"hibera/client"
 )
 
 var UnhandledRequest = errors.New("")
 
 type Listener struct {
-	*core.Core
+	*core.Hub
 	net.Listener
 }
 
@@ -31,15 +32,24 @@ type Addr struct {
 }
 
 type HTTPServer struct {
-	*core.Core
+	*core.Hub
+	*core.Cluster
 	*Listener
 	*http.Server
+}
+
+// This type is used only to serialize
+// the JSON version of this object on the
+// wire. The client has a separate def'n.
+type syncInfo struct {
+	Index   int
+	Members []core.SubName
 }
 
 func (l Listener) Accept() (net.Conn, error) {
 	c, err := l.Listener.Accept()
 	if err == nil {
-		c = Connection{l.Core.NewConnection(c.RemoteAddr().String()), c}
+		c = Connection{l.Hub.NewConnection(c.RemoteAddr().String()), c}
 	}
 	return c, err
 }
@@ -97,28 +107,28 @@ func (s *HTTPServer) getContent(r *http.Request) ([]byte, error) {
 
 func (s *HTTPServer) getConnection(r *http.Request) *core.Connection {
 	// Pull out the relevant conn.
-        // NOTE: This is a hack. The underlying connection is our
-        // special connection object -- and we return a string which
-        // is the connection Id. So we turn it back into an integer
-        // and used it to look up the Connection object.
+	// NOTE: This is a hack. The underlying connection is our
+	// special connection object -- and we return a string which
+	// is the connection Id. So we turn it back into an integer
+	// and used it to look up the Connection object.
 	id, err := strconv.ParseUint(r.RemoteAddr, 0, 64)
 	if err != nil {
 		return nil
 	}
 
-        if len(r.Header["X-Client-Id"]) > 0 {
-            // Return a connection with the asssociate conn.
-	    return s.Core.FindConnection(core.ConnectionId(id),
-                                         core.UserId(r.Header["X-Client-Id"][0]))
-        }
+	if len(r.Header["X-Client-Id"]) > 0 {
+		// Return a connection with the asssociate conn.
+		return s.Hub.FindConnection(core.ConnectionId(id),
+			core.UserId(r.Header["X-Client-Id"][0]))
+	}
 
-        // Return a connection with no associated conn.
-        return s.Core.FindConnection(core.ConnectionId(id), "")
+	// Return a connection with no associated conn.
+	return s.Hub.FindConnection(core.ConnectionId(id), "")
 }
 
 func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
-        // Pull out a connection.
-        conn := s.getConnection(r)
+	// Pull out a connection.
+	conn := s.getConnection(r)
 	if conn == nil {
 		http.Error(w, "", 403)
 		return
@@ -132,163 +142,162 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Extract out parameters.
-        // NOTE: We do this after reading the body because we
-        // don't want the parsing code to try to do full extraction
-        // of form parameters from the body.
+	// NOTE: We do this after reading the body because we
+	// don't want the parsing code to try to do full extraction
+	// of form parameters from the body.
 	r.ParseForm()
 	parts := strings.SplitN(r.URL.Path[1:], "/", 2)
 
 	// Prepare our response.
-        // If we don't handle the request in the switch below,
-        // then we default to the Error here which is Unhandled.
+	// If we don't handle the request in the switch below,
+	// then we default to the Error here which is Unhandled.
 	buf := new(bytes.Buffer)
 	enc := json.NewEncoder(buf)
 	err = UnhandledRequest
 	rev := core.Revision(0)
 
-	switch len(parts) {
-	case 1:
+	// Process the request.
+	if len(parts) == 1 {
 		switch parts[0] {
 		case "":
 			switch r.Method {
 			case "GET":
-                            var data []byte
-	                    data, err = s.Core.Info()
-                            if err == nil {
-                                _, err = buf.Write(data)
-                            }
-			    break
+				var data []byte
+				data, err = s.Hub.Info()
+				if err == nil {
+					_, err = buf.Write(data)
+				}
+				break
 			}
 			break
 
 		case "data":
 			switch r.Method {
 			case "GET":
-                            var items *[]core.Key
-	                    items, err = s.Core.API().DataList()
-                            if err == nil {
-	                        err = enc.Encode(items)
-                            }
-			    break
+				var items *[]core.Key
+				items, err = s.Cluster.DataList()
+				if err == nil {
+					err = enc.Encode(items)
+				}
+				break
 			case "DELETE":
-	                    err = s.Core.API().DataClear()
-			    break
+				err = s.Cluster.DataClear()
+				break
 			}
 			break
 		}
-                break
-
-	case 2:
+	} else if len(parts) == 2 {
 		switch parts[0] {
-		case "locks":
+		case "sync":
 			switch r.Method {
 			case "GET":
-                                name := conn.Name(s.strParam(r, "name"))
-                                var owners []core.SubName
-	                        owners, rev, err = s.Core.API().LockOwners(core.Key(parts[1]), name)
-	                        if err == nil {
-                                    err = enc.Encode(owners)
-                                }
+				name := conn.Name(s.strParam(r, "name"))
+				limit := s.intParam(r, "limit")
+				info := syncInfo{}
+				info.Index, info.Members, rev, err = s.Cluster.SyncMembers(core.Key(parts[1]), name, limit)
+				if err == nil {
+					err = enc.Encode(info)
+				}
 				break
 			case "POST":
-                                name := conn.Name(s.strParam(r, "name"))
-                                limit := s.intParam(r, "limit")
-                                timeout := s.intParam(r, "timeout")
-	                        rev, err = s.Core.API().LockAcquire(conn.EphemId(), core.Key(parts[1]), timeout, name, limit)
+				name := conn.Name(s.strParam(r, "name"))
+				limit := uint(s.intParam(r, "limit"))
+				timeout := uint(s.intParam(r, "timeout"))
+				var index int
+				index, rev, err = s.Cluster.SyncJoin(conn.EphemId(), core.Key(parts[1]), name, limit, timeout)
+				if err == nil {
+					err = enc.Encode(index)
+				}
 				break
 			case "DELETE":
-                                name := conn.Name(s.strParam(r, "name"))
-	                        rev, err = s.Core.API().LockRelease(conn.EphemId(), core.Key(parts[1]), name)
-				break
-			}
-			break
-		case "groups":
-			switch r.Method {
-			case "GET":
-                                name := conn.Name(s.strParam(r, "name"))
-                                limit := s.intParam(r, "limit")
-                                var members []core.SubName
-	                        members, rev, err = s.Core.API().GroupMembers(core.Key(parts[1]), name, limit)
-	                        if err == nil {
-                                    err = enc.Encode(members)
-	                        }
-				break
-			case "POST":
-                                name := conn.Name(s.strParam(r, "name"))
-	                        rev, err = s.Core.API().GroupJoin(conn.EphemId(), core.Key(parts[1]), name)
-				break
-			case "DELETE":
-                                name := conn.Name(s.strParam(r, "name"))
-	                        rev, err = s.Core.API().GroupLeave(conn.EphemId(), core.Key(parts[1]), name)
+				name := conn.Name(s.strParam(r, "name"))
+				rev, err = s.Cluster.SyncLeave(conn.EphemId(), core.Key(parts[1]), name)
 				break
 			}
 			break
 		case "data":
 			switch r.Method {
 			case "GET":
-                                var value []byte
-	                        value, rev, err = s.Core.API().DataGet(core.Key(parts[1]))
-	                        if err == nil {
-                                    _, err = buf.Write(value)
-	                        }
+				var value []byte
+				value, rev, err = s.Cluster.DataGet(core.Key(parts[1]))
+				if err == nil {
+					_, err = buf.Write(value)
+				}
 				break
 			case "POST":
-                                rev = core.Revision(s.intParam(r, "rev"))
-	                        rev, err = s.Core.API().DataSet(core.Key(parts[1]), content, rev)
+				rev = core.Revision(s.intParam(r, "rev"))
+				rev, err = s.Cluster.DataSet(core.Key(parts[1]), content, rev)
 				break
 			case "DELETE":
-                                rev = core.Revision(s.intParam(r, "rev"))
-	                        rev, err = s.Core.API().DataRemove(core.Key(parts[1]), rev)
+				rev = core.Revision(s.intParam(r, "rev"))
+				rev, err = s.Cluster.DataRemove(core.Key(parts[1]), rev)
 				break
 			}
 			break
-		case "watches":
+		case "event":
 			switch r.Method {
 			case "GET":
-                                rev = core.Revision(s.intParam(r, "rev"))
-                                timeout := s.intParam(r, "timeout")
-	                        rev, err = s.Core.API().WatchWait(conn.EphemId(), core.Key(parts[1]), rev, timeout)
+				rev = core.Revision(s.intParam(r, "rev"))
+				timeout := s.intParam(r, "timeout")
+				rev, err = s.Cluster.EventWait(conn.EphemId(), core.Key(parts[1]), rev, timeout)
 				break
 			case "POST":
-                                rev = core.Revision(s.intParam(r, "rev"))
-	                        rev, err = s.Core.API().WatchFire(core.Key(parts[1]), rev)
+				rev = core.Revision(s.intParam(r, "rev"))
+				rev, err = s.Cluster.EventFire(core.Key(parts[1]), rev)
 				break
 			}
 			break
 		}
+
+		// Everything went okay.
+		// Check that this cluster is still the right
+		// one to talk to for this key to avoid races.
+		err = s.Cluster.Check(core.Key(parts[1]))
 	}
 
-	if err != nil {
-		http.Error(w, err.Error(), 501)
-	} else {
-                // Always set the appropriate headers on return.
-                // We fully specify the Content-Length that was written
-                // and always return a revision (although often it will
-                // be 0 because the call didn't have a revision).
+	switch err.(type) {
+	case nil:
+		// Always set the appropriate headers on return.
+		// We fully specify the Content-Length that was written
+		// and always return a revision (although often it will
+		// be 0 because the call didn't have a revision).
 		w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
 		w.Header().Set("X-Revision", strconv.FormatUint(uint64(rev), 10))
 		io.Copy(w, buf)
+		break
+	case core.Redirect:
+		// If we've gotten back a redirect error, then
+		// we send the client to where it belongs.
+		// NOTE: We actually use a permentant redirect
+		// so that the next time this key is tried --
+		// smart clients might even try the newly given
+		// location first.
+		http.Redirect(w, r, err.Error(), 301)
+	default:
+		http.Error(w, err.Error(), 501)
+		break
 	}
 }
 
-func NewHTTPServer(core *core.Core, addr string, port uint) *HTTPServer {
+func NewHTTPServer(hub *core.Hub, cluster *core.Cluster, addr string, port uint) *HTTPServer {
 	// Create our object.
 	server := new(HTTPServer)
 
 	// Create our hooked listener.
 	if len(addr) == 0 {
-		addr = DEFAULT_BIND
+		addr = DefaultBind
 	}
 	if port == 0 {
-		port = DEFAULT_PORT
+		port = client.DefaultPort
 	}
 	ln, err := net.Listen("tcp", fmt.Sprintf("%s:%d", addr, port))
 	if err != nil {
 		log.Print("Unable to bind HTTP server: ", err)
 		return nil
 	}
-	server.Listener = &Listener{core, ln}
-	server.Core = core
+	server.Listener = &Listener{hub, ln}
+	server.Hub = hub
+	server.Cluster = cluster
 
 	// Create our http server, and provide connections
 	// using our hook listener to track active clients.

@@ -1,71 +1,114 @@
 package client
 
 import (
-	"sync"
 	"bytes"
 	"strconv"
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"log"
 	"strings"
+	"time"
 	"crypto/tls"
 	"net/url"
 	"net/http"
+	"math/rand"
 	"encoding/json"
 	"hibera/core"
-	"hibera/server"
 	"hibera/storage"
 )
 
 var NoRevision = errors.New("No X-Revision Found")
+var DefaultPort = uint(2033)
+var DefaultHost = "localhost"
 
-type HiberaClient struct {
-	url  string
-	uuid string
-	lock *sync.Mutex
-	http *http.Client
+type HiberaAPI struct {
+	urls     []string
+	clientid string
+	delay    uint
+	*http.Client
 }
 
-func NewHiberaClient(addr string, clientid string) *HiberaClient {
-	// Allocate our client.
-	client := new(HiberaClient)
-
-	// Generate the URL.
-	idx := strings.Index(addr, ":")
-	port := server.DEFAULT_PORT
-	if idx >= 0 && idx+1 < len(addr) {
-		parsed_port, err := strconv.ParseUint(addr[idx+1:], 0, 32)
-		if err != nil {
-			port = server.DEFAULT_PORT
-		} else {
-			port = uint(parsed_port)
+func generateURLs(addrs string) []string {
+	raw := strings.Split(addrs, ",")
+	urls := make([]string, len(raw), len(raw))
+	for i, addr := range raw {
+		idx := strings.Index(addr, ":")
+		port := DefaultPort
+		if idx >= 0 && idx+1 < len(addr) {
+			parsed, err := strconv.ParseUint(addr[idx+1:], 0, 32)
+			if err != nil {
+				port = DefaultPort
+			} else {
+				port = uint(parsed)
+			}
+			addr = addr[0:idx]
 		}
-		addr = addr[0:idx]
+		if len(addr) == 0 {
+			addr = DefaultHost
+		}
+		urls[i] = fmt.Sprintf("http://%s:%d", addr, port)
 	}
-	if len(addr) == 0 {
-		addr = "localhost"
-	}
-	client.url = fmt.Sprintf("http://%s:%d", addr, port)
-	client.lock = new(sync.Mutex)
+	return urls
+}
 
-	// Generate a uuid for this client.
+func generateClientId() string {
+	// Check the environment for an existing Id.
+	clientid := os.Getenv("HIBERA_CLIENT_ID")
 	if clientid == "" {
-		uuid, err := storage.Uuid()
+		var err error
+		clientid, err = storage.Uuid()
 		if err != nil {
-			return nil
+			return ""
 		}
-		client.uuid = uuid
-	} else {
-		client.uuid = clientid
+
+		// Save for other connections within
+		// this process and for any subprocesses.
+		// This matches expected semantics. If
+		// you want more control, you can use the
+		// HiberaAPI class.
+		os.Setenv("HIBERA_CLIENT_ID", clientid)
 	}
+	return clientid
+}
+
+func NewHiberaAPI(urls []string, clientid string, delay uint) *HiberaAPI {
+	// Check the clientId.
+	if clientid == "" {
+		return nil
+	}
+
+	// Allocate our client.
+	api := new(HiberaAPI)
+	api.urls = urls
+	api.clientid = clientid
+	api.delay = delay
 
 	// Create our HTTP transport.
+	// Nothing really special about this, but we may want
+	// to tune parameters for idling connections, etc.
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
-	client.http = &http.Client{Transport: tr}
+	api.Client = &http.Client{Transport: tr}
 
-	return client
+	return api
+}
+
+func NewHiberaClient(addrs string, delay uint) *HiberaAPI {
+	urls := generateURLs(addrs)
+	clientid := generateClientId()
+	return NewHiberaAPI(urls, clientid, delay)
+}
+
+// This object is used to serialize
+// information about members to JSON.
+// The server-side has it's own type,
+// we don't share across.
+type syncInfo struct {
+	Index   int
+	Members []string
 }
 
 type HttpArgs struct {
@@ -75,13 +118,13 @@ type HttpArgs struct {
 	body    io.Reader
 }
 
-func makeArgs(path string) HttpArgs {
+func (h *HiberaAPI) makeArgs(path string) HttpArgs {
 	headers := make(map[string]string)
 	params := make(map[string]string)
 	return HttpArgs{path, headers, params, nil}
 }
 
-func getRev(resp *http.Response) (uint64, error) {
+func (h *HiberaAPI) getRev(resp *http.Response) (uint64, error) {
 	rev := resp.Header["X-Revision"]
 	if len(rev) == 0 {
 		return 0, NoRevision
@@ -89,7 +132,7 @@ func getRev(resp *http.Response) (uint64, error) {
 	return strconv.ParseUint(rev[0], 0, 64)
 }
 
-func getContent(resp *http.Response) ([]byte, error) {
+func (h *HiberaAPI) getContent(resp *http.Response) ([]byte, error) {
 	length := resp.ContentLength
 	if length < 0 {
 		return nil, nil
@@ -102,53 +145,69 @@ func getContent(resp *http.Response) ([]byte, error) {
 	return buf, nil
 }
 
-func (h *HiberaClient) req(method string, args HttpArgs) (*http.Request, error) {
+func (h *HiberaAPI) makeRequest(method string, args HttpArgs) (*http.Request, error) {
+	// Select a random host to make a request.
 	addr := new(bytes.Buffer)
-	addr.WriteString(h.url)
+	addr.WriteString(h.urls[rand.Int()%len(h.urls)])
 	addr.WriteString(args.path)
-	if len(args.params) > 0 {
-		written := 0
-		for key, value := range args.params {
-			if written == 0 {
-				addr.WriteString("?")
-			} else {
-				addr.WriteString("&")
-			}
-			addr.WriteString(url.QueryEscape(key))
-			addr.WriteString("=")
-			addr.WriteString(url.QueryEscape(value))
-			written += 1
+
+	// Append all params.
+	written := 0
+	for key, value := range args.params {
+		if written == 0 {
+			addr.WriteString("?")
+		} else {
+			addr.WriteString("&")
 		}
+		addr.WriteString(url.QueryEscape(key))
+		addr.WriteString("=")
+		addr.WriteString(url.QueryEscape(value))
+		written += 1
 	}
 	req, err := http.NewRequest(method, addr.String(), args.body)
 	if err != nil {
 		return req, err
 	}
+
+	// Append headers.
+	req.Header.Add("X-Client-Id", h.clientid)
 	for key, value := range args.headers {
 		req.Header.Add(key, value)
 	}
-	req.Header.Add("X-Client-Id", h.uuid)
+
 	return req, nil
 }
 
-func (h *HiberaClient) doreq(method string, args HttpArgs) (*http.Response, error) {
-	req, err := h.req(method, args)
-	if err != nil {
-		return nil, err
+func (h *HiberaAPI) doRequest(method string, args HttpArgs) (*http.Response, error) {
+	for {
+		// Try the actual request.
+		var resp *http.Response
+		req, err := h.makeRequest(method, args)
+		if err == nil {
+			resp, err = h.Client.Do(req)
+			if err == nil {
+				return resp, nil
+			}
+		}
+		if h.delay == 0 {
+			return resp, err
+		}
+
+		// Print a message to the console and retry.
+		log.Printf("%s (delaying %d milliseconds)", err, h.delay)
+		time.Sleep(time.Duration(h.delay) * time.Millisecond)
 	}
-	h.lock.Lock()
-	defer h.lock.Unlock()
-	return h.http.Do(req)
+	return nil, nil
 }
 
-func (h *HiberaClient) Info(base uint) (*core.Info, error) {
-	args := makeArgs("/")
+func (h *HiberaAPI) Info(base uint) (*core.Info, error) {
+	args := h.makeArgs("/")
 	args.params["base"] = strconv.FormatUint(uint64(base), 10)
-	resp, err := h.doreq("GET", args)
+	resp, err := h.doRequest("GET", args)
 	if err != nil {
 		return nil, err
 	}
-	content, err := getContent(resp)
+	content, err := h.getContent(resp)
 	if err != nil {
 		return nil, err
 	}
@@ -160,152 +219,111 @@ func (h *HiberaClient) Info(base uint) (*core.Info, error) {
 	return &info, err
 }
 
-func (h *HiberaClient) Lock(key string, timeout uint, name string, limit uint) (uint64, error) {
-	args := makeArgs(fmt.Sprintf("/locks/%s", key))
-	args.params["timeout"] = strconv.FormatUint(uint64(timeout), 10)
-	args.params["name"] = name
-	args.params["limit"] = strconv.FormatUint(uint64(limit), 10)
-	resp, err := h.doreq("POST", args)
-	if err != nil {
-		return 0, err
-	}
-	if resp.StatusCode != 200 {
-		return 0, errors.New(resp.Status)
-	}
-	rev, err := getRev(resp)
-	return rev, err
-}
-
-func (h *HiberaClient) Unlock(key string) (uint64, error) {
-	args := makeArgs(fmt.Sprintf("/locks/%s", key))
-	resp, err := h.doreq("DELETE", args)
-	if err != nil {
-		return 0, err
-	}
-	if resp.StatusCode != 200 {
-		return 0, errors.New(resp.Status)
-	}
-	rev, err := getRev(resp)
-	return rev, err
-}
-
-func (h *HiberaClient) Owners(key string, name string) ([]string, uint64, error) {
-	args := makeArgs(fmt.Sprintf("/locks/%s", key))
-	args.params["name"] = name
-	resp, err := h.doreq("GET", args)
-	if err != nil {
-		return nil, 0, err
-	}
-	if resp.StatusCode != 200 {
-		return nil, 0, errors.New(resp.Status)
-	}
-	content, err := getContent(resp)
-	if err != nil {
-		return nil, 0, err
-	}
-	var owners []string
-	err = json.Unmarshal(content, &owners)
-	if err != nil {
-		return nil, 0, err
-	}
-	rev, err := getRev(resp)
-	return owners, rev, err
-}
-
-func (h *HiberaClient) Watch(key string, rev uint64, timeout uint) (uint64, error) {
-	args := makeArgs(fmt.Sprintf("/watches/%s", key))
+func (h *HiberaAPI) Wait(key string, rev uint64, timeout uint) (uint64, error) {
+	args := h.makeArgs(fmt.Sprintf("/event/%s", key))
 	args.params["rev"] = strconv.FormatUint(rev, 10)
 	args.params["timeout"] = strconv.FormatUint(uint64(timeout), 10)
-	resp, err := h.doreq("GET", args)
+	resp, err := h.doRequest("GET", args)
 	if err != nil {
 		return 0, err
 	}
 	if resp.StatusCode != 200 {
 		return 0, errors.New(resp.Status)
 	}
-	rev, err = getRev(resp)
+	rev, err = h.getRev(resp)
 	return rev, err
 }
 
-func (h *HiberaClient) Join(group string, name string) (uint64, error) {
-	args := makeArgs(fmt.Sprintf("/groups/%s", group))
+func (h *HiberaAPI) Join(key string, name string, limit uint, timeout uint) (int, uint64, error) {
+	args := h.makeArgs(fmt.Sprintf("/sync/%s", key))
 	args.params["name"] = name
-	resp, err := h.doreq("POST", args)
-	if err != nil {
-		return 0, err
-	}
-	if resp.StatusCode != 200 {
-		return 0, errors.New(resp.Status)
-	}
-	rev, err := getRev(resp)
-	return rev, err
-}
-
-func (h *HiberaClient) Leave(group string, name string) (uint64, error) {
-	args := makeArgs(fmt.Sprintf("/groups/%s", group))
-	args.params["name"] = name
-	resp, err := h.doreq("DELETE", args)
-	if err != nil {
-		return 0, err
-	}
-	if resp.StatusCode != 200 {
-		return 0, errors.New(resp.Status)
-	}
-	rev, err := getRev(resp)
-	return rev, err
-}
-
-func (h *HiberaClient) Members(group string, name string, limit uint) ([]string, uint64, error) {
-	args := makeArgs(fmt.Sprintf("/groups/%s", group))
 	args.params["limit"] = strconv.FormatUint(uint64(limit), 10)
-	args.params["name"] = name
-	resp, err := h.doreq("GET", args)
+	args.params["timeout"] = strconv.FormatUint(uint64(timeout), 10)
+	resp, err := h.doRequest("POST", args)
 	if err != nil {
-		return nil, 0, err
+		return -1, 0, err
 	}
 	if resp.StatusCode != 200 {
-		return nil, 0, errors.New(resp.Status)
+		return -1, 0, errors.New(resp.Status)
 	}
-	content, err := getContent(resp)
+	content, err := h.getContent(resp)
 	if err != nil {
-		return nil, 0, err
+		return -1, 0, err
 	}
-	var members []string
-	err = json.Unmarshal(content, &members)
+	var index int
+	err = json.Unmarshal(content, &index)
 	if err != nil {
-		return nil, 0, err
+		return -1, 0, err
 	}
-	rev, err := getRev(resp)
-	return members, rev, err
+	rev, err := h.getRev(resp)
+	return index, rev, err
 }
 
-func (h *HiberaClient) Get(key string) ([]byte, uint64, error) {
-	args := makeArgs(fmt.Sprintf("/data/%s", key))
-	resp, err := h.doreq("GET", args)
+func (h *HiberaAPI) Leave(key string, name string) (uint64, error) {
+	args := h.makeArgs(fmt.Sprintf("/sync/%s", key))
+	args.params["name"] = name
+	resp, err := h.doRequest("DELETE", args)
+	if err != nil {
+		return 0, err
+	}
+	if resp.StatusCode != 200 {
+		return 0, errors.New(resp.Status)
+	}
+	rev, err := h.getRev(resp)
+	return rev, err
+}
+
+func (h *HiberaAPI) Members(key string, name string, limit uint) (int, []string, uint64, error) {
+	args := h.makeArgs(fmt.Sprintf("/sync/%s", key))
+	args.params["name"] = name
+	args.params["limit"] = strconv.FormatUint(uint64(limit), 10)
+	resp, err := h.doRequest("GET", args)
+	if err != nil {
+		return -1, nil, 0, err
+	}
+	if resp.StatusCode != 200 {
+		return -1, nil, 0, errors.New(resp.Status)
+	}
+	content, err := h.getContent(resp)
+	if err != nil {
+		return -1, nil, 0, err
+	}
+	var info syncInfo
+	err = json.Unmarshal(content, &info)
+	if err != nil {
+		return -1, nil, 0, err
+	}
+	rev, err := h.getRev(resp)
+	return info.Index, info.Members, rev, err
+}
+
+func (h *HiberaAPI) Get(key string) ([]byte, uint64, error) {
+	args := h.makeArgs(fmt.Sprintf("/data/%s", key))
+	resp, err := h.doRequest("GET", args)
 	if err != nil {
 		return nil, 0, err
 	}
 	if resp.StatusCode != 200 {
 		return nil, 0, errors.New(resp.Status)
 	}
-	content, err := getContent(resp)
+	content, err := h.getContent(resp)
 	if err != nil {
 		return nil, 0, err
 	}
-	rev, err := getRev(resp)
+	rev, err := h.getRev(resp)
 	return content, rev, err
 }
 
-func (h *HiberaClient) List() ([]string, error) {
-	args := makeArgs("/data")
-	resp, err := h.doreq("GET", args)
+func (h *HiberaAPI) List() ([]string, error) {
+	args := h.makeArgs("/data")
+	resp, err := h.doRequest("GET", args)
 	if err != nil {
 		return nil, err
 	}
 	if resp.StatusCode != 200 {
 		return nil, errors.New(resp.Status)
 	}
-	content, err := getContent(resp)
+	content, err := h.getContent(resp)
 	if err != nil {
 		return nil, err
 	}
@@ -317,38 +335,38 @@ func (h *HiberaClient) List() ([]string, error) {
 	return items, nil
 }
 
-func (h *HiberaClient) Set(key string, value []byte, rev uint64) (uint64, error) {
-	args := makeArgs(fmt.Sprintf("/data/%s", key))
+func (h *HiberaAPI) Set(key string, value []byte, rev uint64) (uint64, error) {
+	args := h.makeArgs(fmt.Sprintf("/data/%s", key))
 	args.params["rev"] = strconv.FormatUint(rev, 10)
 	args.body = bytes.NewBuffer(value)
-	resp, err := h.doreq("POST", args)
+	resp, err := h.doRequest("POST", args)
 	if err != nil {
 		return 0, err
 	}
 	if resp.StatusCode != 200 {
 		return 0, errors.New(resp.Status)
 	}
-	rev, err = getRev(resp)
+	rev, err = h.getRev(resp)
 	return rev, err
 }
 
-func (h *HiberaClient) Remove(key string, rev uint64) (uint64, error) {
-	args := makeArgs(fmt.Sprintf("/data/%s", key))
+func (h *HiberaAPI) Remove(key string, rev uint64) (uint64, error) {
+	args := h.makeArgs(fmt.Sprintf("/data/%s", key))
 	args.params["rev"] = strconv.FormatUint(rev, 10)
-	resp, err := h.doreq("DELETE", args)
+	resp, err := h.doRequest("DELETE", args)
 	if err != nil {
 		return 0, err
 	}
 	if resp.StatusCode != 200 {
 		return 0, errors.New(resp.Status)
 	}
-	rev, err = getRev(resp)
+	rev, err = h.getRev(resp)
 	return rev, err
 }
 
-func (h *HiberaClient) Clear() error {
-	args := makeArgs("/data")
-	resp, err := h.doreq("DELETE", args)
+func (h *HiberaAPI) Clear() error {
+	args := h.makeArgs("/data")
+	resp, err := h.doRequest("DELETE", args)
 	if err != nil {
 		return err
 	}
@@ -358,16 +376,16 @@ func (h *HiberaClient) Clear() error {
 	return nil
 }
 
-func (h *HiberaClient) Fire(key string, rev uint64) (uint64, error) {
-	args := makeArgs(fmt.Sprintf("/watches/%s", key))
+func (h *HiberaAPI) Fire(key string, rev uint64) (uint64, error) {
+	args := h.makeArgs(fmt.Sprintf("/event/%s", key))
 	args.params["rev"] = strconv.FormatUint(rev, 10)
-	resp, err := h.doreq("POST", args)
+	resp, err := h.doRequest("POST", args)
 	if err != nil {
 		return 0, err
 	}
 	if resp.StatusCode != 200 {
 		return 0, errors.New(resp.Status)
 	}
-	rev, err = getRev(resp)
+	rev, err = h.getRev(resp)
 	return rev, err
 }

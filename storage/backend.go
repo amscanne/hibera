@@ -14,9 +14,9 @@ import (
 	"encoding/gob"
 )
 
-var DEFAULT_PATH = "/var/lib/hibera"
-var MAXIMUM_LOG_BATCH = 256
-var MAXIMUM_LOG_SIZE = int64(1024 * 1024)
+var DefaultPath = "/var/lib/hibera"
+var MaximumLogBatch = 256
+var MaximumLogSize = int64(1024 * 1024)
 
 type Val struct {
 	Rev   uint64
@@ -59,7 +59,7 @@ func OpenLocked(filename string) (*os.File, error) {
 
 func NewBackend(p string) *Backend {
 	if len(p) == 0 {
-		p = DEFAULT_PATH
+		p = DefaultPath
 	}
 
 	// Create the directory.
@@ -248,7 +248,7 @@ func (b *Backend) loadFile(file *os.File) error {
 
 func (b *Backend) logWriter() {
 
-	finished := make([]*Update, 0, MAXIMUM_LOG_BATCH)
+	finished := make([]*Update, 0, MaximumLogBatch)
 
 	complete := func() {
 		// Ensure we're synced.
@@ -262,7 +262,7 @@ func (b *Backend) logWriter() {
 
 		// Kick off a pivot if we've exceed our size.
 		off, err := b.log2.Seek(0, 1)
-		if err != nil && off > MAXIMUM_LOG_SIZE {
+		if err != nil && off > MaximumLogSize {
 			b.pivotLogs()
 		}
 	}
@@ -300,7 +300,7 @@ func (b *Backend) logWriter() {
 		update := <-b.cs
 		process(update)
 
-		if len(finished) == MAXIMUM_LOG_BATCH {
+		if len(finished) == MaximumLogBatch {
 			complete()
 		}
 	}

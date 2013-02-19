@@ -12,54 +12,63 @@ import (
 	"strings"
 	"syscall"
 	"hibera/client"
-	"hibera/storage"
 )
 
 var api = flag.String("api", "", "API address.")
-var cmd = flag.String("exec", "", "Script to execute in context.")
 var timeout = flag.Uint("timeout", 0, "Timeout (in ms) for acquiring a lock.")
 var name = flag.String("name", "", "Name to use (other than machine address).")
 var start = flag.String("start", "", "Script to start the given service.")
 var stop = flag.String("stop", "", "Script to stop the given service.")
 var limit = flag.Uint("limit", 1, "Limit for machines to run or simultanous locks.")
 var output = flag.String("output", "", "Output file for sync.")
+var delay = flag.Uint("delay", 1000, "Delay and retry failed requests.")
+var data = flag.Bool("data", false, "Use the synchronization group data mapping.")
 
 var usagemsg = `usage: hibera <command> <key> [options]
 
 options for all commands:
+
     [-api <address:port>]        --- The API address.
 
-commands:
+    [-delay <delay>]             --- Delay in milliseconds to
+
+cluster commands:
 
     info                         --- Show cluster info.
+
+synchronization commands:
 
     lock <key>                   --- Run a process while holding
          [-name <name>]              the given lock.
          [-limit <number>]
          [-timeout <timeout>]
-         [-exec <run-script>]
+         [-data]
          [<run-script> ...]
 
-    owners <key>                 --- Show current lock owners.
-         [-name <name>]
-
     join <key>                   --- Run a process while joined to
-         [-name <name>]              the given group.
-         [-exec <run-script>]
+         [-name <name>]              the given synchronization group.
+         [-data]
          [<run-script> ...]
 
     run <key>                    --- Conditionally run up-to <limit>
-        [-limit <limit>]             process across the cluster.
+        [-name <name>]               process across the cluster.
+        [-limit <limit>]
         [-start <start-script>]
         [-stop <stop-script>]
-        [-exec <run-script>]
-        [-name <name>]
+        [-data]
         [<run-script> ...]
 
     members <key>                --- Show current members of the
-            [-limit <number>]        given group. NOTE: members that
-            [-name <name>]           match this node's name will be
-                                     prefixed with a '*'.
+            [-name <name>]           given group. The first line will
+            [-limit <number>]        be this connections index in the
+                                     list.
+
+    in <key>                     --- If this process is part of
+         [-name <name>]              the synchronization group named,
+         [-limit <limit>]            fetch the associated data. If
+                                     not in the set, exit with in error.
+
+data commands:
 
     get <key>                    --- Get the contents of the key.
 
@@ -73,7 +82,9 @@ commands:
 
     sync <key>                   --- Synchronize a key, either as
          [-output <file>]            stdin to a named script to
-         [-exec <run-script>]        directly to the named file.
+         [<run-script> ...]          directly to the named file.
+
+event commands:
 
     watch <key>                  --- Wait for an update of the key.
 
@@ -88,7 +99,7 @@ func do_exec(command string, input []byte) error {
 	return cmd.Run()
 }
 
-func cli_info(c *client.HiberaClient) error {
+func cli_info(c *client.HiberaAPI) error {
 	_, err := c.Info(0)
 	if err != nil {
 		return err
@@ -96,78 +107,68 @@ func cli_info(c *client.HiberaClient) error {
 	return nil
 }
 
-func cli_lock(c *client.HiberaClient, key string, name string, cmd string, timeout uint, limit uint) error {
-	_, err := c.Lock(key, timeout, name, limit)
-	if err != nil {
-		return err
-	}
-	defer c.Unlock(key)
-	return do_exec(cmd, nil)
-}
-
-func cli_owners(c *client.HiberaClient, key string, name string) error {
-	owners, _, err := c.Owners(key, name)
-	if err != nil {
-		return err
-	}
-	if len(owners) > 0 {
-		// Output all owners.
-		fmt.Printf("%s\n", strings.Join(owners, "\n"))
-	}
-	return nil
-}
-
-func cli_join(c *client.HiberaClient, key string, name string, cmd string) error {
-	_, err := c.Join(key, name)
+func cli_lock(c *client.HiberaAPI, key string, name string, limit uint, timeout uint, cmd string, dodata bool) error {
+	index, _, err := c.Join(key, name, limit, timeout)
 	if err != nil {
 		return err
 	}
 	defer c.Leave(key, name)
-	return do_exec(cmd, nil)
+	var value []byte
+	if dodata {
+		value, _, err = c.Get(fmt.Sprintf("%s.%d", key, index))
+		if err != nil {
+			return err
+		}
+	}
+	return do_exec(cmd, value)
 }
 
-func cli_run(c *client.HiberaClient, key string, name string, limit uint, start string, stop string, cmd string) error {
-	_, err := c.Join(key, name)
+func cli_join(c *client.HiberaAPI, key string, name string, cmd string, dodata bool) error {
+	index, _, err := c.Join(key, name, 0, 0)
+	if err != nil {
+		return err
+	}
+	defer c.Leave(key, name)
+	var value []byte
+	if dodata {
+		value, _, err = c.Get(fmt.Sprintf("%s.%d", key, index))
+		if err != nil {
+			return err
+		}
+	}
+	return do_exec(cmd, value)
+}
+
+func cli_run(c *client.HiberaAPI, key string, name string, limit uint, start string, stop string, cmd string, dodata bool) error {
+	oldindex, _, err := c.Join(key, name, 0, 0)
 	if err != nil {
 		return err
 	}
 	defer c.Leave(key, name)
 
 	var proc *exec.Cmd
-	wasactive := false
-
+	var value []byte
 	for {
 		// List the current members.
-		members, rev, err := c.Members(key, name, limit)
+		newindex, _, rev, err := c.Members(key, name, limit)
 		if err != nil {
 			return err
 		}
 
-		// Check if we're in the list.
-		active := false
-		for _, member := range members {
-			if member[0] == '*' {
-				active = true
-				break
+		// Update the mapped data.
+		if newindex >= 0 && dodata {
+			// Opportunistic.
+			value, _, err = c.Get(fmt.Sprintf("%s.%d", key, newindex))
+			if err != nil {
+				value = nil
 			}
+		} else {
+			// No input.
+			value = nil
 		}
 
-		// Start or stop appropriately.
-		if active && !wasactive {
-			if start != "" {
-				do_exec(start, nil)
-			}
-			if proc == nil && cmd != "" {
-				// Start this process on startup.
-				proc = exec.Command("sh", "-c", cmd)
-				proc.Stdin = nil
-				proc.Stdout = os.Stdout
-				proc.Stderr = os.Stderr
-				proc.Start()
-			}
-			wasactive = true
-
-		} else if !active && wasactive {
+		// If something has changed, stop the running process.
+		if newindex < 0 || (newindex != oldindex && dodata) {
 			if proc != nil {
 				// Kill this process on stop.
 				// Nothing can be done here to handle errors.
@@ -175,14 +176,32 @@ func cli_run(c *client.HiberaClient, key string, name string, limit uint, start 
 				proc.Wait()
 				proc = nil
 			}
+		}
+		if newindex < 0 && (oldindex != newindex) {
 			if stop != "" {
-				do_exec(stop, nil)
+				do_exec(stop, value)
 			}
-			wasactive = false
+		}
+
+		// Start or stop appropriately.
+		if newindex >= 0 && (newindex != oldindex) {
+			if start != "" {
+				do_exec(start, value)
+			}
+		}
+		if newindex >= 0 || (newindex != oldindex && dodata) {
+			if proc == nil && cmd != "" {
+				// Ensure our process is running.
+				proc = exec.Command("sh", "-c", cmd)
+				proc.Stdin = bytes.NewBuffer(value)
+				proc.Stdout = os.Stdout
+				proc.Stderr = os.Stderr
+				proc.Start()
+			}
 		}
 
 		// Wait for the next update.
-		rev, err = c.Watch(key, rev, 0)
+		rev, err = c.Wait(key, rev, 0)
 		if err != nil {
 			return err
 		}
@@ -190,19 +209,34 @@ func cli_run(c *client.HiberaClient, key string, name string, limit uint, start 
 	return nil
 }
 
-func cli_members(c *client.HiberaClient, key string, name string, limit uint) error {
-	members, _, err := c.Members(key, name, limit)
+func cli_members(c *client.HiberaAPI, key string, name string, limit uint) error {
+	index, members, _, err := c.Members(key, name, limit)
 	if err != nil {
 		return err
 	}
 	if len(members) > 0 {
 		// Output all members.
-		fmt.Printf("%s\n", strings.Join(members, "\n"))
+		fmt.Printf("%d\n%s\n", index, strings.Join(members, "\n"))
 	}
 	return nil
 }
 
-func cli_get(c *client.HiberaClient, key string) error {
+func cli_in(c *client.HiberaAPI, key string, name string, limit uint) (bool, error) {
+	index, _, _, err := c.Members(key, name, limit)
+	if err != nil {
+		return false, err
+	}
+	if index >= 0 {
+		value, _, err := c.Get(fmt.Sprintf("%s.%d", key, index))
+		if err == nil {
+			os.Stdout.Write(value)
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+func cli_get(c *client.HiberaAPI, key string) error {
 	value, _, err := c.Get(key)
 	if err != nil {
 		return err
@@ -212,7 +246,7 @@ func cli_get(c *client.HiberaClient, key string) error {
 	return nil
 }
 
-func cli_set(c *client.HiberaClient, key string, value *string) error {
+func cli_set(c *client.HiberaAPI, key string, value *string) error {
 	buf := new(bytes.Buffer)
 	var err error
 	if value == nil {
@@ -226,12 +260,12 @@ func cli_set(c *client.HiberaClient, key string, value *string) error {
 	return err
 }
 
-func cli_rm(c *client.HiberaClient, key string) error {
+func cli_rm(c *client.HiberaAPI, key string) error {
 	_, err := c.Remove(key, 0)
 	return err
 }
 
-func cli_ls(c *client.HiberaClient) error {
+func cli_ls(c *client.HiberaAPI) error {
 	items, err := c.List()
 	if err != nil {
 		return err
@@ -242,11 +276,11 @@ func cli_ls(c *client.HiberaClient) error {
 	return nil
 }
 
-func cli_clear(c *client.HiberaClient) error {
+func cli_clear(c *client.HiberaAPI) error {
 	return c.Clear()
 }
 
-func cli_sync(c *client.HiberaClient, key string, output string, cmd string) error {
+func cli_sync(c *client.HiberaAPI, key string, output string, cmd string) error {
 	for {
 		value, rev, err := c.Get(key)
 		if err != nil {
@@ -267,7 +301,7 @@ func cli_sync(c *client.HiberaClient, key string, output string, cmd string) err
 		}
 
 		// Wait for the next update.
-		rev, err = c.Watch(key, rev, 0)
+		rev, err = c.Wait(key, rev, 0)
 		if err != nil {
 			return err
 		}
@@ -276,12 +310,12 @@ func cli_sync(c *client.HiberaClient, key string, output string, cmd string) err
 	return nil
 }
 
-func cli_watch(c *client.HiberaClient, key string) error {
-	_, err := c.Watch(key, 0, 0)
+func cli_watch(c *client.HiberaAPI, key string) error {
+	_, err := c.Wait(key, 0, 0)
 	return err
 }
 
-func cli_fire(c *client.HiberaClient, key string) error {
+func cli_fire(c *client.HiberaAPI, key string) error {
 	_, err := c.Fire(key, 0)
 	return err
 }
@@ -314,19 +348,8 @@ func main() {
 	}
 	flag.Parse()
 
-	// Figure out our client Id.
-	clientid := os.Getenv("HIBERA_CLIENT_ID")
-	if clientid == "" {
-		clientid, err = storage.Uuid()
-		if err != nil {
-			return
-		}
-		// Save for subprocesses.
-		os.Setenv("HIBERA_CLIENT_ID", clientid)
-	}
-
 	// Create our client.
-	c := client.NewHiberaClient(*api, clientid)
+	c := client.NewHiberaClient(*api, *delay)
 	if c == nil {
 		return
 	}
@@ -336,34 +359,26 @@ func main() {
 	case "info":
 		err = cli_info(c)
 	case "lock":
-		if flag.NArg() > 0 {
-			script := strings.Join(flag.Args(), " ")
-			err = cli_lock(c, key, *name, script, *timeout, *limit)
-		} else {
-			err = cli_lock(c, key, *name, *cmd, *timeout, *limit)
-		}
-		break
-	case "owners":
-		err = cli_owners(c, key, *name)
+		script := strings.Join(flag.Args(), " ")
+		err = cli_lock(c, key, *name, *timeout, *limit, script, *data)
 		break
 	case "join":
-		if flag.NArg() > 0 {
-			script := strings.Join(flag.Args(), " ")
-			err = cli_join(c, key, *name, script)
-		} else {
-			err = cli_join(c, key, *name, *cmd)
-		}
+		script := strings.Join(flag.Args(), " ")
+		err = cli_join(c, key, *name, script, *data)
 		break
 	case "run":
-		if flag.NArg() > 0 {
-			script := strings.Join(flag.Args(), " ")
-			err = cli_run(c, key, *name, *limit, *start, *stop, script)
-		} else {
-			err = cli_run(c, key, *name, *limit, *start, *stop, *cmd)
-		}
+		script := strings.Join(flag.Args(), " ")
+		err = cli_run(c, key, *name, *limit, *start, *stop, script, *data)
 		break
 	case "members":
 		err = cli_members(c, key, *name, *limit)
+		break
+	case "in":
+		var in bool
+		in, err = cli_in(c, key, *name, *limit)
+		if err == nil && !in {
+			os.Exit(1)
+		}
 		break
 	case "get":
 		err = cli_get(c, key)
@@ -386,7 +401,8 @@ func main() {
 		err = cli_clear(c)
 		break
 	case "sync":
-		err = cli_sync(c, key, *output, *cmd)
+		script := strings.Join(flag.Args(), " ")
+		err = cli_sync(c, key, *output, script)
 		break
 	case "watch":
 		err = cli_watch(c, key)
