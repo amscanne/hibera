@@ -2,12 +2,12 @@ package core
 
 import (
 	"net"
-        "sync"
+	"sync"
 )
 
 var DropLimit = uint(10)
 
-type node struct {
+type Node struct {
 	// The node address.
 	addr *net.UDPAddr
 
@@ -38,122 +38,134 @@ type node struct {
 	accepted uint64
 }
 
-func (n *node) Id() string {
-	return ""
+func (n *Node) Id() string {
+	return n.id
 }
 
-func (n *node) Ids() []string {
+func (n *Node) Ids() []string {
 	return nil
 }
 
-type nodes struct {
-	nodes map[string]*node
-        sync.Mutex
+func (n *Node) Addr() *net.UDPAddr {
+	return n.addr
 }
 
-func (nds *nodes) markSeen(addr *net.UDPAddr, version uint64, id string) *node {
-    nds.Mutex.Lock()
-    defer nds.Mutex.Unlock()
+func (n *Node) String() string {
+	return n.addr.String()
+}
 
-	n := nds.nodes[addr.String()]
-	if n == nil {
-		n = new(node)
-		n.id = id
-		n.addr = addr
-		n.active = false
-		n.dropped = 0
-		n.promised = 0
-		n.accepted = 0
-		nds.nodes[addr.String()] = n
+type Nodes struct {
+	all map[string]*Node
+	sync.Mutex
+}
+
+func (nodes *Nodes) markSeen(addr *net.UDPAddr, version uint64, id string) *Node {
+	nodes.Mutex.Lock()
+	defer nodes.Mutex.Unlock()
+
+	node := nodes.all[addr.String()]
+	if node == nil {
+		node = new(Node)
+		node.id = id
+		node.addr = addr
+		node.active = false
+		node.dropped = 0
+		node.promised = 0
+		node.accepted = 0
+		nodes.all[addr.String()] = node
 	} else {
-		n.dropped = 0
+		node.dropped = 0
 	}
-	if n.version < version {
-		n.version = version
+	if node.version < version {
+		node.version = version
 	}
-	return n
+	return node
 }
 
-func (nds *nodes) markDrop(addr *net.UDPAddr) {
-    nds.Mutex.Lock()
-    defer nds.Mutex.Unlock()
+func (nodes *Nodes) markDrop(addr *net.UDPAddr) {
+	nodes.Mutex.Lock()
+	defer nodes.Mutex.Unlock()
 
-	n := nds.nodes[addr.String()]
+	n := nodes.all[addr.String()]
 	if n != nil {
 		n.dropped += 1
 	}
 }
 
-func (nds *nodes) markDead(nodes []string) {
-    nds.Mutex.Lock()
-    defer nds.Mutex.Unlock()
+func (nodes *Nodes) markDead(dead []string) {
+	nodes.Mutex.Lock()
+	defer nodes.Mutex.Unlock()
 
-	for _, node := range nodes {
-		n := nds.nodes[node]
+	for _, node := range dead {
+		n := nodes.all[node]
 		if n != nil {
 			n.dropped += 1
 		}
 	}
 }
 
-func (nds *nodes) Active() []*node {
-    nds.Mutex.Lock()
-    defer nds.Mutex.Unlock()
+func (nodes *Nodes) Active() []*Node {
+	nodes.Mutex.Lock()
+	defer nodes.Mutex.Unlock()
 
-    nodes := make([]*node, 0)
-    for _, node := range nodes {
-        if node.active && node.dropped < DropLimit {
-            nodes = append(nodes, node)
-        }
-    }
-    return nodes
+	active := make([]*Node, 0)
+	for _, node := range nodes.all {
+		if node.active && node.dropped < DropLimit {
+			active = append(active, node)
+		}
+	}
+	return active
 }
 
-func (nds *nodes) Dead() []*node {
-    nds.Mutex.Lock()
-    defer nds.Mutex.Unlock()
+func (nodes *Nodes) Dead() []string {
+	nodes.Mutex.Lock()
+	defer nodes.Mutex.Unlock()
 
-    nodes := make([]*node, 0)
-    for _, node := range nodes {
-        if node.active && node.dropped > DropLimit {
-            nodes = append(nodes, node)
-        }
-    }
-    return nodes
+	dead := make([]string, 0)
+	for _, node := range nodes.all {
+		if node.active && node.dropped > DropLimit {
+			dead = append(dead, node.String())
+		}
+	}
+	return dead
 }
 
-func (nds *nodes) Unknown() []*node {
-    nds.Mutex.Lock()
-    defer nds.Mutex.Unlock()
+func (nodes *Nodes) GenerateUpdate() *ClusterUpdate {
+	nodes.Mutex.Lock()
+	defer nodes.Mutex.Unlock()
 
-    nodes := make([]*node, 0)
-    for _, node := range nodes {
-        if !node.active && node.dropped < DropLimit {
-            nodes = append(nodes, node)
-        }
-    }
-    return nodes
+	dead := make([]string, 0)
+	unknown := make([]string, 0)
+	for _, node := range nodes.all {
+		if node.active && node.dropped > DropLimit {
+			dead = append(dead, node.String())
+		}
+		if !node.active && node.dropped < DropLimit {
+			unknown = append(unknown, node.String())
+		}
+	}
+
+	if len(dead) == 0 && len(unknown) == 0 {
+		return nil
+	}
+
+	return &ClusterUpdate{dead, unknown}
 }
 
-func (nds *nodes) Update(added []string, dropped []string) error {
-    nds.Mutex.Lock()
-    defer nds.Mutex.Unlock()
+func (nodes *Nodes) ApplyUpdate(update *ClusterUpdate) {
+	nodes.Mutex.Lock()
+	defer nodes.Mutex.Unlock()
 
-    for _, addr := range added {
-	n := nds.nodes[addr]
-	if n != nil {
-            n.active = true
-        }
-    }
-    for _, addr := range added {
-	delete(nds.nodes, addr)
-    }
-
-    return nil
+	for _, node := range update.add {
+		nodes.all[node].active = true
+	}
+	for _, node := range update.remove {
+		delete(nodes.all, node)
+	}
 }
 
-func NewNodes() *nodes {
-	nds := new(nodes)
-	nds.nodes = make(map[string]*node)
-	return nds
+func NewNodes() *Nodes {
+	nodes := new(Nodes)
+	nodes.all = make(map[string]*Node)
+	return nodes
 }

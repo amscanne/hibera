@@ -8,11 +8,13 @@ import (
 	"time"
 	"code.google.com/p/goprotobuf/proto"
 	"hibera/core"
+	"hibera/client"
 )
 
 type GossipServer struct {
 	*core.Cluster
-	conn *net.UDPConn
+	conn  *net.UDPConn
+	seeds []string
 }
 
 var DefaultSeeds = "255.255.255.255"
@@ -34,8 +36,8 @@ func (s *GossipServer) process(addr *net.UDPAddr, m *Message) {
 	case uint32(TYPE_PING):
 		gossip := m.GetGossip()
 		s.Cluster.OnPing(addr, m.GetVersion(), *gossip.Id, gossip.Dead)
-		// Response to the ping.
-		s.sendPing(addr, true)
+		// Respond to the ping.
+		go s.sendPing(addr, true)
 		break
 
 	case uint32(TYPE_PONG):
@@ -44,7 +46,11 @@ func (s *GossipServer) process(addr *net.UDPAddr, m *Message) {
 		break
 
 	case uint32(TYPE_PROPOSE):
-		s.Cluster.OnPropose(addr, m.GetVersion())
+		if s.Cluster.OnPropose(addr, m.GetVersion()) {
+			go s.sendPromise(addr, m.GetVersion(), true)
+		} else {
+			go s.sendPromise(addr, m.GetVersion(), false)
+		}
 		break
 
 	case uint32(TYPE_PROMISE):
@@ -56,7 +62,9 @@ func (s *GossipServer) process(addr *net.UDPAddr, m *Message) {
 		break
 
 	case uint32(TYPE_ACCEPT):
-		s.Cluster.OnAccept(addr, m.GetVersion())
+		if s.Cluster.OnAccept(addr, m.GetVersion()) {
+			go s.sendAccepted(addr, m.GetVersion())
+		}
 		break
 
 	case uint32(TYPE_ACCEPTED):
@@ -70,43 +78,51 @@ func (s *GossipServer) blast() {
 	if s.Cluster.IsProposePhase() {
 		nodes := s.Cluster.PaxosNodes()
 		version := s.Cluster.ProposeVersion()
-		for _, addr := range nodes {
+		for _, node := range nodes {
 			t := uint32(TYPE_PROPOSE)
 			m := &Message{&t, &version, nil, nil}
-			s.send(addr, m)
+			s.send(node.Addr(), m)
 		}
 
 		// Send our accept requests.
 	} else if s.Cluster.IsAcceptPhase() {
 		nodes := s.Cluster.PaxosNodes()
 		version := s.Cluster.ProposeVersion()
-		for _, addr := range nodes {
+		for _, node := range nodes {
 			t := uint32(TYPE_ACCEPT)
 			m := &Message{&t, &version, nil, nil}
-			s.send(addr, m)
+			s.send(node.Addr(), m)
 		}
 	}
 
 	// Pick a random node and send a ping.
-	nodes := s.Cluster.AllNodes()
-	addr := nodes[rand.Int()%len(nodes)]
-	s.sendPing(addr, false)
+	nodes := s.Cluster.ActiveNodes()
+	var addr *net.UDPAddr
+	if len(nodes) == 0 && len(s.seeds) != 0 {
+		seedaddr, seedport := client.ParseAddr(s.seeds[rand.Int()%len(s.seeds)])
+		addr, _ = net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", seedaddr, seedport))
+	} else if len(nodes) != 0 {
+		addr = nodes[rand.Int()%len(nodes)].Addr()
+	}
+	if addr != nil {
+		go s.sendPing(addr, false)
+	}
 }
 
 func (s *GossipServer) sendPing(addr *net.UDPAddr, pong bool) {
 	// Construct our list of dead nodes.
 	dead := s.Cluster.DeadNodes()
-	deadcount := len(dead)
-	if deadcount > DeadServers {
-		deadcount = DeadServers
-	}
 	perm := rand.Perm(len(dead))
-	perm = perm[0:deadcount]
+	if len(dead) > DeadServers {
+		dead = dead[0:DeadServers]
+		perm = perm[0:DeadServers]
+	}
 	gossip := make([]string, len(dead))
 	for i, v := range perm {
-		gossip[i] = dead[v].String()
+		gossip[i] = dead[v]
 	}
 
+	// Build our ping message.
 	version := s.Cluster.Version()
 	id := s.Cluster.Id()
 	t := uint32(TYPE_PING)
@@ -118,6 +134,23 @@ func (s *GossipServer) sendPing(addr *net.UDPAddr, pong bool) {
 	// Assume the packet has dropped,
 	// we'll fix it when we get the response.
 	s.Cluster.OnDrop(addr)
+	s.send(addr, m)
+}
+
+func (s *GossipServer) sendPromise(addr *net.UDPAddr, version uint64, positive bool) {
+	// Build our promise message.
+	t := uint32(TYPE_PROMISE)
+	if !positive {
+		t = uint32(TYPE_NOPROMISE)
+	}
+	m := &Message{&t, &version, nil, nil}
+	s.send(addr, m)
+}
+
+func (s *GossipServer) sendAccepted(addr *net.UDPAddr, version uint64) {
+	// Build our accepted message.
+	t := uint32(TYPE_ACCEPTED)
+	m := &Message{&t, &version, nil, nil}
 	s.send(addr, m)
 }
 
@@ -140,7 +173,7 @@ func (s *GossipServer) Serve() {
 	}
 }
 
-func (s *GossipServer) Ping() {
+func (s *GossipServer) Sender() {
 	for {
 		time.Sleep(time.Duration(Heartbeat) * time.Millisecond)
 		s.blast()
@@ -160,10 +193,10 @@ func NewGossipServer(cluster *core.Cluster, addr string, port uint, seeds []stri
 		return nil
 	}
 
-	return &GossipServer{cluster, conn}
+	return &GossipServer{cluster, conn, seeds}
 }
 
 func (s *GossipServer) Run() {
-	go s.Ping()
+	go s.Sender()
 	s.Serve()
 }

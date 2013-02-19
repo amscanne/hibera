@@ -144,8 +144,6 @@ func (c *Connection) Drop() {
 	c.Hub.DropConnection(c.ConnectionId)
 }
 
-type Node struct{}
-
 func (c *Connection) Redirect(key Key) *Node {
 	return nil
 }

@@ -15,7 +15,6 @@ import (
 	"net/http"
 	"math/rand"
 	"encoding/json"
-	"hibera/core"
 	"hibera/storage"
 )
 
@@ -30,24 +29,29 @@ type HiberaAPI struct {
 	*http.Client
 }
 
+func ParseAddr(addr string) (string, uint) {
+	idx := strings.Index(addr, ":")
+	port := DefaultPort
+	if idx >= 0 && idx+1 < len(addr) {
+		parsed, err := strconv.ParseUint(addr[idx+1:], 0, 32)
+		if err != nil {
+			port = DefaultPort
+		} else {
+			port = uint(parsed)
+		}
+		addr = addr[0:idx]
+	}
+	if len(addr) == 0 {
+		addr = DefaultHost
+	}
+	return addr, port
+}
+
 func generateURLs(addrs string) []string {
 	raw := strings.Split(addrs, ",")
 	urls := make([]string, len(raw), len(raw))
 	for i, addr := range raw {
-		idx := strings.Index(addr, ":")
-		port := DefaultPort
-		if idx >= 0 && idx+1 < len(addr) {
-			parsed, err := strconv.ParseUint(addr[idx+1:], 0, 32)
-			if err != nil {
-				port = DefaultPort
-			} else {
-				port = uint(parsed)
-			}
-			addr = addr[0:idx]
-		}
-		if len(addr) == 0 {
-			addr = DefaultHost
-		}
+		addr, port := ParseAddr(addr)
 		urls[i] = fmt.Sprintf("http://%s:%d", addr, port)
 	}
 	return urls
@@ -200,7 +204,7 @@ func (h *HiberaAPI) doRequest(method string, args HttpArgs) (*http.Response, err
 	return nil, nil
 }
 
-func (h *HiberaAPI) Info(base uint) (*core.Info, error) {
+func (h *HiberaAPI) Info(base uint) (*[]byte, error) {
 	args := h.makeArgs("/")
 	args.params["base"] = strconv.FormatUint(uint64(base), 10)
 	resp, err := h.doRequest("GET", args)
@@ -211,12 +215,7 @@ func (h *HiberaAPI) Info(base uint) (*core.Info, error) {
 	if err != nil {
 		return nil, err
 	}
-	var info core.Info
-	err = json.Unmarshal(content, &info)
-	if err != nil {
-		return nil, err
-	}
-	return &info, err
+	return &content, err
 }
 
 func (h *HiberaAPI) Wait(key string, rev uint64, timeout uint) (uint64, error) {

@@ -24,19 +24,31 @@ type ring struct {
 	// Our node map.
 	// The id map is computed from the node
 	// map whenever it officially changes.
-	*nodes
+	*Nodes
 }
 
-func NewRing(n *nodes) *ring {
+func NewRing(n *Nodes) *ring {
 	r := new(ring)
-	r.nodes = n
+	r.Nodes = n
 	r.Recompute()
 	return r
 }
 
 func (r *ring) Recompute() {
 	r.IdMap = make(map[string][]string)
-	for _, node := range r.nodes.Active() {
+	for _, node := range r.Nodes.Active() {
 		r.IdMap[node.Id()] = node.Ids()
 	}
+}
+
+func (r *ring) IsMaster(key Key) bool {
+	return false
+}
+
+func (r *ring) MasterFor(key Key) *Node {
+	return nil
+}
+
+func (r *ring) NodesFor(key Key) []*Node {
+	return nil
 }

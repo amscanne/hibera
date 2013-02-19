@@ -84,10 +84,6 @@ func (l *local) lock(key Key) *Lock {
 	return lock
 }
 
-func (l *local) Info() (Info, error) {
-	return Info{}, nil
-}
-
 func (l *local) DataList() (*[]Key, error) {
 	items, err := l.data.List()
 	if err != nil {
