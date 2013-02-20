@@ -186,7 +186,14 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
 			}
 			break
 		}
-	} else if len(parts) == 2 {
+        }
+
+	if len(parts) == 2 {
+                // Check that this is the right cluster to route to.
+		err = s.Cluster.Check(core.Key(parts[1]))
+        }
+
+        if len(parts) == 2 && err == nil {
 		switch parts[0] {
 		case "sync":
 			switch r.Method {

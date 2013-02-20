@@ -8,9 +8,8 @@ enum TYPE {
     // All paxos messages.
     PROPOSE = 2;
     PROMISE = 3;
-    NOPROMISE = 4;
+    NACK = 4;
     ACCEPT = 5;
-    ACCEPTED = 6;
 };
 
 message Gossip {

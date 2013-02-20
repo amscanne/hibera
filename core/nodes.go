@@ -3,9 +3,10 @@ package core
 import (
 	"net"
 	"sync"
+        "sync/atomic"
 )
 
-var DropLimit = uint(10)
+var DropLimit = uint32(10)
 
 type Node struct {
 	// The node address.
@@ -14,8 +15,8 @@ type Node struct {
 	// The node id.
 	id string
 
-	// The latest seen version.
-	version uint64
+        // The node keys.
+        keys []string
 
 	// Active is whether or not this node
 	// is in the ring. If active is false
@@ -27,22 +28,14 @@ type Node struct {
 	// us hearing a peep back from the node.
 	// When this reaches a maximum, we consider
 	// the node no longer alive.
-	dropped uint
-
-	// The last promise message revision we
-	// received from this node.
-	promised uint64
-
-	// The last accept message revision we
-	// received from this node.
-	accepted uint64
+	dropped uint32
 }
 
 func (n *Node) Id() string {
 	return n.id
 }
 
-func (n *Node) Ids() []string {
+func (n *Node) Keys() []string {
 	return nil
 }
 
@@ -50,8 +43,29 @@ func (n *Node) Addr() *net.UDPAddr {
 	return n.addr
 }
 
-func (n *Node) String() string {
-	return n.addr.String()
+func (n *Node) Active() bool {
+        return n.active
+}
+
+func (n *Node) Dropped() {
+        atomic.AddUint32(&n.dropped, 1)
+}
+
+func (n *Node) Heartbeat() {
+        atomic.StoreUint32(&n.dropped, 0)
+}
+
+func (n *Node) Alive() bool {
+        return atomic.LoadUint32(&n.dropped) > DropLimit
+}
+
+func NewNode(addr *net.UDPAddr, id string) *Node {
+	node := new(Node)
+        node.addr = addr
+	node.id = id
+        node.active = false
+        node.dropped = 0
+	return node
 }
 
 type Nodes struct {
@@ -59,49 +73,17 @@ type Nodes struct {
 	sync.Mutex
 }
 
-func (nodes *Nodes) markSeen(addr *net.UDPAddr, version uint64, id string) *Node {
+func (nodes *Nodes) Heartbeat(addr *net.UDPAddr, id string) {
 	nodes.Mutex.Lock()
 	defer nodes.Mutex.Unlock()
 
 	node := nodes.all[addr.String()]
 	if node == nil {
-		node = new(Node)
-		node.id = id
-		node.addr = addr
-		node.active = false
-		node.dropped = 0
-		node.promised = 0
-		node.accepted = 0
+		node = NewNode(addr, id)
 		nodes.all[addr.String()] = node
-	} else {
-		node.dropped = 0
 	}
-	if node.version < version {
-		node.version = version
-	}
-	return node
-}
 
-func (nodes *Nodes) markDrop(addr *net.UDPAddr) {
-	nodes.Mutex.Lock()
-	defer nodes.Mutex.Unlock()
-
-	n := nodes.all[addr.String()]
-	if n != nil {
-		n.dropped += 1
-	}
-}
-
-func (nodes *Nodes) markDead(dead []string) {
-	nodes.Mutex.Lock()
-	defer nodes.Mutex.Unlock()
-
-	for _, node := range dead {
-		n := nodes.all[node]
-		if n != nil {
-			n.dropped += 1
-		}
-	}
+        node.Heartbeat()
 }
 
 func (nodes *Nodes) Active() []*Node {
@@ -110,58 +92,26 @@ func (nodes *Nodes) Active() []*Node {
 
 	active := make([]*Node, 0)
 	for _, node := range nodes.all {
-		if node.active && node.dropped < DropLimit {
+		if node.Active() {
 			active = append(active, node)
 		}
 	}
+
 	return active
 }
 
-func (nodes *Nodes) Dead() []string {
+func (nodes *Nodes) Dead() []*Node {
 	nodes.Mutex.Lock()
 	defer nodes.Mutex.Unlock()
 
-	dead := make([]string, 0)
+	dead := make([]*Node, 0)
 	for _, node := range nodes.all {
-		if node.active && node.dropped > DropLimit {
-			dead = append(dead, node.String())
+		if node.Active() && !node.Alive() {
+			dead = append(dead, node)
 		}
 	}
+
 	return dead
-}
-
-func (nodes *Nodes) GenerateUpdate() *ClusterUpdate {
-	nodes.Mutex.Lock()
-	defer nodes.Mutex.Unlock()
-
-	dead := make([]string, 0)
-	unknown := make([]string, 0)
-	for _, node := range nodes.all {
-		if node.active && node.dropped > DropLimit {
-			dead = append(dead, node.String())
-		}
-		if !node.active && node.dropped < DropLimit {
-			unknown = append(unknown, node.String())
-		}
-	}
-
-	if len(dead) == 0 && len(unknown) == 0 {
-		return nil
-	}
-
-	return &ClusterUpdate{dead, unknown}
-}
-
-func (nodes *Nodes) ApplyUpdate(update *ClusterUpdate) {
-	nodes.Mutex.Lock()
-	defer nodes.Mutex.Unlock()
-
-	for _, node := range update.add {
-		nodes.all[node].active = true
-	}
-	for _, node := range update.remove {
-		delete(nodes.all, node)
-	}
 }
 
 func NewNodes() *Nodes {

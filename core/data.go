@@ -53,15 +53,15 @@ func NewLock() *Lock {
 	return lock
 }
 
-type local struct {
+type Data struct {
 	// Synchronization.
-	// The global Mutex protects access to
+	// The global.Cond.L protects access to
 	// the map of all locks. We could easily
 	// split this into a more scalable structure
 	// if it becomes a clear bottleneck.
 	sync map[Key]*Lock
 	revs RevisionMap
-	sync.Mutex
+	*sync.Cond
 
 	// In-memory ephemeral data.
 	// (Kept synchronized by other modules).
@@ -69,23 +69,23 @@ type local struct {
 
 	// Our backend.
 	// This is used to store data keys.
-	data *storage.Backend
+	store *storage.Backend
 }
 
-func (l *local) lock(key Key) *Lock {
-	l.Mutex.Lock()
+func (l *Data) lock(key Key) *Lock {
+	l.Cond.L.Lock()
 	lock := l.sync[key]
 	if lock == nil {
 		lock = NewLock()
 		l.sync[key] = lock
 	}
-	l.Mutex.Unlock()
+	l.Cond.L.Unlock()
 	lock.lock()
 	return lock
 }
 
-func (l *local) DataList() (*[]Key, error) {
-	items, err := l.data.List()
+func (l *Data) DataList() (*[]Key, error) {
+	items, err := l.store.List()
 	if err != nil {
 		return nil, err
 	}
@@ -96,15 +96,15 @@ func (l *local) DataList() (*[]Key, error) {
 	return &keys, nil
 }
 
-func (l *local) DataClear() error {
-	l.Mutex.Lock()
-	items, err := l.data.List()
+func (l *Data) DataClear() error {
+	l.Cond.L.Lock()
+	items, err := l.store.List()
 	if err != nil {
-		l.Mutex.Unlock()
+		l.Cond.L.Unlock()
 		return err
 	}
-	err = l.data.Clear()
-	l.Mutex.Unlock()
+	err = l.store.Clear()
+	l.Cond.L.Unlock()
 	if err != nil {
 		return err
 	}
@@ -117,7 +117,7 @@ func (l *local) DataClear() error {
 	return nil
 }
 
-func (l *local) SyncMembers(key Key, name SubName, limit uint64) (int, []SubName, Revision, error) {
+func (l *Data) SyncMembers(key Key, name SubName, limit uint64) (int, []SubName, Revision, error) {
 	lock := l.lock(key)
 	defer lock.unlock()
 
@@ -181,7 +181,7 @@ func (l *local) SyncMembers(key Key, name SubName, limit uint64) (int, []SubName
 	return index, members, l.revs[key], nil
 }
 
-func (l *local) SyncJoin(id EphemId, key Key, name SubName, limit uint, timeout uint) (int, Revision, error) {
+func (l *Data) SyncJoin(id EphemId, key Key, name SubName, limit uint, timeout uint) (int, Revision, error) {
 	lock := l.lock(key)
 	defer lock.unlock()
 
@@ -236,7 +236,7 @@ func (l *local) SyncJoin(id EphemId, key Key, name SubName, limit uint, timeout 
 	return index, rev, err
 }
 
-func (l *local) SyncLeave(id EphemId, key Key, name SubName) (Revision, error) {
+func (l *Data) SyncLeave(id EphemId, key Key, name SubName) (Revision, error) {
 	lock := l.lock(key)
 	defer lock.unlock()
 
@@ -259,15 +259,15 @@ func (l *local) SyncLeave(id EphemId, key Key, name SubName) (Revision, error) {
 	return l.doEventFire(key, 0, lock)
 }
 
-func (l *local) DataGet(key Key) ([]byte, Revision, error) {
+func (l *Data) DataGet(key Key) ([]byte, Revision, error) {
 	lock := l.lock(key)
 	defer lock.unlock()
 
-	value, rev, err := l.data.Read(string(key))
+	value, rev, err := l.store.Read(string(key))
 	return value, Revision(rev), err
 }
 
-func (l *local) DataSet(key Key, value []byte, rev Revision) (Revision, error) {
+func (l *Data) DataSet(key Key, value []byte, rev Revision) (Revision, error) {
 	lock := l.lock(key)
 	defer lock.unlock()
 
@@ -277,11 +277,11 @@ func (l *local) DataSet(key Key, value []byte, rev Revision) (Revision, error) {
 		return rev, err
 	}
 
-	err = l.data.Write(string(key), value, uint64(rev))
+	err = l.store.Write(string(key), value, uint64(rev))
 	return Revision(rev), err
 }
 
-func (l *local) DataRemove(key Key, rev Revision) (Revision, error) {
+func (l *Data) DataRemove(key Key, rev Revision) (Revision, error) {
 	lock := l.lock(key)
 	defer lock.unlock()
 
@@ -292,10 +292,10 @@ func (l *local) DataRemove(key Key, rev Revision) (Revision, error) {
 	}
 
 	// Delete and set the revision.
-	return 0, l.data.Delete(string(key))
+	return 0, l.store.Delete(string(key))
 }
 
-func (l *local) EventWait(id EphemId, key Key, rev Revision, timeout uint64) (Revision, error) {
+func (l *Data) EventWait(id EphemId, key Key, rev Revision, timeout uint64) (Revision, error) {
 	lock := l.lock(key)
 	defer lock.unlock()
 
@@ -321,7 +321,7 @@ func (l *local) EventWait(id EphemId, key Key, rev Revision, timeout uint64) (Re
 	return l.revs[key], nil
 }
 
-func (l *local) doEventFire(key Key, rev Revision, lock *Lock) (Revision, error) {
+func (l *Data) doEventFire(key Key, rev Revision, lock *Lock) (Revision, error) {
 	// Check our condition.
 	if rev != 0 && rev != (l.revs[key]+1) {
 		return 0, NotFound
@@ -337,25 +337,25 @@ func (l *local) doEventFire(key Key, rev Revision, lock *Lock) (Revision, error)
 	return rev, nil
 }
 
-func (l *local) EventFire(key Key, rev Revision) (Revision, error) {
+func (l *Data) EventFire(key Key, rev Revision) (Revision, error) {
 	lock := l.lock(key)
 	defer lock.unlock()
 
 	return l.doEventFire(key, rev, lock)
 }
 
-func (l *local) Purge(id EphemId) {
+func (l *Data) Purge(id EphemId) {
 	paths := make([]Key, 0)
 
 	// Kill off all ephemeral nodes.
-	l.Mutex.Lock()
+	l.Cond.L.Lock()
 	for key, members := range l.keys {
 		if len((*members)[id]) > 0 {
 			paths = append(paths, key)
 		}
 		delete(*members, id)
 	}
-	l.Mutex.Unlock()
+	l.Cond.L.Unlock()
 
 	// Fire watches.
 	for _, path := range paths {
@@ -363,18 +363,55 @@ func (l *local) Purge(id EphemId) {
 	}
 }
 
-func (l *local) loadRevs() error {
-	l.Mutex.Lock()
-	defer l.Mutex.Unlock()
+type UpdateFn func(key Key) bool
+func (l *Data) Update(fn UpdateFn) error {
+	l.Cond.L.Lock()
+	defer l.Cond.L.Unlock()
 
-	items, err := l.data.List()
+        // Schedule an update for every key.
+	items, err := l.store.List()
+	if err != nil {
+		return err
+	}
+        for _, item := range items {
+            // Grab every lock.
+            key := Key(item)
+	    lock := l.sync[key]
+	    if lock == nil {
+		lock = NewLock()
+		l.sync[key] = lock
+	    }
+            lock.lock()
+
+            // Construct our bottom halves.
+            doupdate := func() {
+                if !fn(key) {
+                    delete(l.sync, key)
+                    delete(l.keys, key)
+                    delete(l.revs, key)
+	            l.store.Delete(string(key))
+                }
+                lock.notify()
+                lock.unlock()
+            }
+            go doupdate()
+        }
+
+        return nil
+}
+
+func (l *Data) loadRevs() error {
+	l.Cond.L.Lock()
+	defer l.Cond.L.Unlock()
+
+	items, err := l.store.List()
 	if err != nil {
 		return err
 	}
 
 	for _, item := range items {
 		// Save the revision into our map.
-		_, rev, err := l.data.Read(item)
+		_, rev, err := l.store.Read(item)
 		if err != nil {
 			return err
 		}
@@ -384,17 +421,18 @@ func (l *local) loadRevs() error {
 	return nil
 }
 
-func NewLocal(backend *storage.Backend) *local {
-	local := new(local)
-	local.data = backend
-	err := local.init()
+func NewData(store *storage.Backend) *Data {
+	Data := new(Data)
+        Data.Cond = sync.NewCond(new(sync.Mutex))
+	Data.store = store
+	err := Data.init()
 	if err != nil {
 		return nil
 	}
-	return local
+	return Data
 }
 
-func (l *local) init() error {
+func (l *Data) init() error {
 	l.sync = make(map[Key]*Lock)
 	l.revs = make(RevisionMap)
 	l.keys = make(map[Key]*EphemeralSet)
