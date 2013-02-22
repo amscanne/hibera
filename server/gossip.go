@@ -59,13 +59,13 @@ func (s *GossipServer) sendPingPong(addr *net.UDPAddr, pong bool) {
 	}
 	gossip := make([]string, len(dead))
 	for i, v := range perm {
-		gossip[i] = dead[v].Id()
+		gossip[i] = dead[v].Id
 	}
 
 	// Build our ping message.
-	version := s.Cluster.Revision()
-	id := s.Cluster.Id()
+	version := s.Cluster.Revision
 	t := uint32(TYPE_PING)
+	id := s.Cluster.Id()
 	if pong {
 		t = uint32(TYPE_PONG)
 	}
@@ -106,10 +106,10 @@ func (s *GossipServer) heartbeat() {
 
 		if len(nodes) != 0 {
                         node := nodes[rand.Int()%len(nodes)]
-			addr = node.Addr()
+			addr = node.Addr
 	                // Assume the packet has dropped,
 	                // we'll fix it when we get the response.
-	                node.Dropped()
+	                node.IncDropped()
 		}
 	} else {
 		// Pick a seed and send a ping.
@@ -158,11 +158,12 @@ func (s *GossipServer) process(addr *net.UDPAddr, m *Message) {
 	s.Mutex.Lock()
 	defer s.Mutex.Unlock()
 
-	gossip := m.GetGossip()
-	if gossip != nil && *gossip.Id == s.Cluster.Id() {
-		return
-	}
+        // Check if it's a broadcast return.
+        if addr.String() == s.conn.LocalAddr().String() {
+            return
+        }
 
+	gossip := m.GetGossip()
 	if gossip != nil {
 		log.Printf("RECV %s (addr=%s,version=%d,id=%s)",
 			TYPE_name[int32(m.GetType())], addr, m.GetVersion(), *gossip.Id)

@@ -53,7 +53,7 @@ func NewLock() *Lock {
 	return lock
 }
 
-type Data struct {
+type data struct {
 	// Synchronization.
 	// The global.Cond.L protects access to
 	// the map of all locks. We could easily
@@ -72,7 +72,7 @@ type Data struct {
 	store *storage.Backend
 }
 
-func (l *Data) lock(key Key) *Lock {
+func (l *data) lock(key Key) *Lock {
 	l.Cond.L.Lock()
 	lock := l.sync[key]
 	if lock == nil {
@@ -84,7 +84,7 @@ func (l *Data) lock(key Key) *Lock {
 	return lock
 }
 
-func (l *Data) DataList() (*[]Key, error) {
+func (l *data) DataList() (*[]Key, error) {
 	items, err := l.store.List()
 	if err != nil {
 		return nil, err
@@ -96,7 +96,7 @@ func (l *Data) DataList() (*[]Key, error) {
 	return &keys, nil
 }
 
-func (l *Data) DataClear() error {
+func (l *data) DataClear() error {
 	l.Cond.L.Lock()
 	items, err := l.store.List()
 	if err != nil {
@@ -117,7 +117,7 @@ func (l *Data) DataClear() error {
 	return nil
 }
 
-func (l *Data) SyncMembers(key Key, name SubName, limit uint64) (int, []SubName, Revision, error) {
+func (l *data) SyncMembers(key Key, name SubName, limit uint64) (int, []SubName, Revision, error) {
 	lock := l.lock(key)
 	defer lock.unlock()
 
@@ -181,7 +181,7 @@ func (l *Data) SyncMembers(key Key, name SubName, limit uint64) (int, []SubName,
 	return index, members, l.revs[key], nil
 }
 
-func (l *Data) SyncJoin(id EphemId, key Key, name SubName, limit uint, timeout uint) (int, Revision, error) {
+func (l *data) SyncJoin(id EphemId, key Key, name SubName, limit uint, timeout uint) (int, Revision, error) {
 	lock := l.lock(key)
 	defer lock.unlock()
 
@@ -236,7 +236,7 @@ func (l *Data) SyncJoin(id EphemId, key Key, name SubName, limit uint, timeout u
 	return index, rev, err
 }
 
-func (l *Data) SyncLeave(id EphemId, key Key, name SubName) (Revision, error) {
+func (l *data) SyncLeave(id EphemId, key Key, name SubName) (Revision, error) {
 	lock := l.lock(key)
 	defer lock.unlock()
 
@@ -259,7 +259,7 @@ func (l *Data) SyncLeave(id EphemId, key Key, name SubName) (Revision, error) {
 	return l.doEventFire(key, 0, lock)
 }
 
-func (l *Data) DataGet(key Key) ([]byte, Revision, error) {
+func (l *data) DataGet(key Key) ([]byte, Revision, error) {
 	lock := l.lock(key)
 	defer lock.unlock()
 
@@ -267,7 +267,7 @@ func (l *Data) DataGet(key Key) ([]byte, Revision, error) {
 	return value, Revision(rev), err
 }
 
-func (l *Data) DataSet(key Key, value []byte, rev Revision) (Revision, error) {
+func (l *data) DataSet(key Key, value []byte, rev Revision) (Revision, error) {
 	lock := l.lock(key)
 	defer lock.unlock()
 
@@ -281,7 +281,7 @@ func (l *Data) DataSet(key Key, value []byte, rev Revision) (Revision, error) {
 	return Revision(rev), err
 }
 
-func (l *Data) DataRemove(key Key, rev Revision) (Revision, error) {
+func (l *data) DataRemove(key Key, rev Revision) (Revision, error) {
 	lock := l.lock(key)
 	defer lock.unlock()
 
@@ -295,7 +295,7 @@ func (l *Data) DataRemove(key Key, rev Revision) (Revision, error) {
 	return 0, l.store.Delete(string(key))
 }
 
-func (l *Data) EventWait(id EphemId, key Key, rev Revision, timeout uint64) (Revision, error) {
+func (l *data) EventWait(id EphemId, key Key, rev Revision, timeout uint64) (Revision, error) {
 	lock := l.lock(key)
 	defer lock.unlock()
 
@@ -321,7 +321,7 @@ func (l *Data) EventWait(id EphemId, key Key, rev Revision, timeout uint64) (Rev
 	return l.revs[key], nil
 }
 
-func (l *Data) doEventFire(key Key, rev Revision, lock *Lock) (Revision, error) {
+func (l *data) doEventFire(key Key, rev Revision, lock *Lock) (Revision, error) {
 	// Check our condition.
 	if rev != 0 && rev != (l.revs[key]+1) {
 		return 0, NotFound
@@ -337,14 +337,14 @@ func (l *Data) doEventFire(key Key, rev Revision, lock *Lock) (Revision, error) 
 	return rev, nil
 }
 
-func (l *Data) EventFire(key Key, rev Revision) (Revision, error) {
+func (l *data) EventFire(key Key, rev Revision) (Revision, error) {
 	lock := l.lock(key)
 	defer lock.unlock()
 
 	return l.doEventFire(key, rev, lock)
 }
 
-func (l *Data) Purge(id EphemId) {
+func (l *data) Purge(id EphemId) {
 	paths := make([]Key, 0)
 
 	// Kill off all ephemeral nodes.
@@ -364,7 +364,7 @@ func (l *Data) Purge(id EphemId) {
 }
 
 type UpdateFn func(key Key) bool
-func (l *Data) Update(fn UpdateFn) error {
+func (l *data) Update(fn UpdateFn) error {
 	l.Cond.L.Lock()
 	defer l.Cond.L.Unlock()
 
@@ -400,7 +400,7 @@ func (l *Data) Update(fn UpdateFn) error {
         return nil
 }
 
-func (l *Data) loadRevs() error {
+func (l *data) loadRevs() error {
 	l.Cond.L.Lock()
 	defer l.Cond.L.Unlock()
 
@@ -421,18 +421,18 @@ func (l *Data) loadRevs() error {
 	return nil
 }
 
-func NewData(store *storage.Backend) *Data {
-	Data := new(Data)
-        Data.Cond = sync.NewCond(new(sync.Mutex))
-	Data.store = store
-	err := Data.init()
+func NewData(store *storage.Backend) *data {
+	d := new(data)
+        d.Cond = sync.NewCond(new(sync.Mutex))
+	d.store = store
+	err := d.init()
 	if err != nil {
 		return nil
 	}
-	return Data
+	return d
 }
 
-func (l *Data) init() error {
+func (l *data) init() error {
 	l.sync = make(map[Key]*Lock)
 	l.revs = make(RevisionMap)
 	l.keys = make(map[Key]*EphemeralSet)

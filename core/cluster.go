@@ -2,8 +2,9 @@ package core
 
 import (
 	"net"
-	"sync"
+        "bytes"
 	"hibera/storage"
+	"encoding/json"
 )
 
 type Key string
@@ -26,16 +27,6 @@ func (r Redirect) Error() string {
 	return r.URL
 }
 
-type ClusterUpdate struct {
-	// Nodes to be added/activated in the cluster.
-	// These strings store the nodeIds, not the addresses.
-	add []string
-
-	// Nodes to be dropped/deactivated in the cluster.
-	// Similarly, nodes are removed by nodeId, not the address.
-	remove []string
-}
-
 type Cluster struct {
 	// This node.
 	self *Node
@@ -45,12 +36,13 @@ type Cluster struct {
 	// we've just started and not yet seen any active nodes
 	// or participated in a paxos round) then this number
 	// will be zero.
-	revision uint64
+	Revision uint64
 
 	// Our local datastore.
 	// Some of these functions are exported and used directly
 	// by the calling servers (HTTPServer).
-	*Data
+        // NOTE: Not exported so that it is not serialized.
+	*data
 
 	// Our node map.
 	// This represents the consensus of what the cluster looks
@@ -62,13 +54,19 @@ type Cluster struct {
 	// Our ring.
 	// This routes requests, etc.
 	// This is computed each round based on the node map above.
+        // NOTE: Not exported so that it is not serialized.
 	*ring
-
-        sync.Mutex
 }
 
 func (c *Cluster) Id() string {
-	return c.self.Id()
+	return c.self.Id
+}
+
+func (c *Cluster) Info() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	enc := json.NewEncoder(buf)
+	err := enc.Encode(&c)
+	return buf.Bytes(), err
 }
 
 func NewCluster(backend *storage.Backend, domain string, ids []string) *Cluster {
@@ -78,29 +76,22 @@ func NewCluster(backend *storage.Backend, domain string, ids []string) *Cluster 
 	}
 
 	c := new(Cluster)
-	c.self = NewNode(nil, uuid)
 	c.Nodes = NewNodes()
-	c.Data = NewData(backend)
+        c.self = c.Nodes.Add(nil, uuid, ids)
+	c.data = NewData(backend)
 	c.ring = NewRing(c.self, c.Nodes)
 
 	return c
 }
 
-func (c *Cluster) Revision() uint64 {
-	return c.revision
-}
-
 func (c *Cluster) IsActive() bool {
-	return c.revision != 0
+	return c.Revision != 0
 }
 
 func (c *Cluster) Activate(addr *net.UDPAddr, revision uint64) {
-        c.Mutex.Lock()
-        defer c.Mutex.Unlock()
-
 	// Mark this cluster version.
-	if c.revision == 0 {
-		c.revision = revision
+	if c.Revision == 0 {
+		c.Revision = revision
 	}
 }
 

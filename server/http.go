@@ -163,7 +163,7 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
 			switch r.Method {
 			case "GET":
 				var data []byte
-				data, err = s.Hub.Info()
+				data, err = s.Cluster.Info()
 				if err == nil {
 					_, err = buf.Write(data)
 				}

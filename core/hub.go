@@ -144,14 +144,6 @@ func (c *Connection) Drop() {
 	c.Hub.DropConnection(c.ConnectionId)
 }
 
-func (c *Connection) Redirect(key Key) *Node {
-	return nil
-}
-
-func (c *Hub) Info() ([]byte, error) {
-	return nil, nil
-}
-
 func NewHub(cluster *Cluster) *Hub {
 	hub := new(Hub)
 	hub.connections = make(map[ConnectionId]*Connection)

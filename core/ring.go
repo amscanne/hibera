@@ -4,6 +4,8 @@ import (
 	"os"
 	"sync"
 	"sort"
+        "io"
+        "crypto/sha1"
 )
 
 func defaultDomain() string {
@@ -34,7 +36,7 @@ type ring struct {
 
 	// Our cache.
 	// This is a simple cache of Key to the appropriate nodes.
-	cache map[Key][]*Node
+	cache map[string][]*Node
 
 	sync.Mutex
 }
@@ -47,26 +49,35 @@ func NewRing(self *Node, nodes *Nodes) *ring {
 	return r
 }
 
-func (r *ring) Recompute() {
-	r.Mutex.Lock()
-	defer r.Mutex.Unlock()
+func (r *ring) hash(id string) string {
+                        h := sha1.New()
+                        io.WriteString(h,id)
+                        return string(h.Sum(nil))
+}
 
+func (r *ring) Recompute() {
 	// Make a new keymap.
-	r.keymap = make(map[string]*Node)
-	r.sorted = make([]string, 0)
+	keymap := make(map[string]*Node)
+	sorted := make([]string, 0)
 	for _, node := range r.nodes.Active() {
-		keys := node.Keys()
-		for _, id := range keys {
-			r.keymap[id] = node
-			r.sorted = append(r.sorted, id)
+		for _, id := range node.Keys {
+                        h := r.hash(id)
+			keymap[h] = node
+			sorted = append(sorted, h)
 		}
 	}
 
 	// Make a new sorted map.
-	sort.Sort(sort.StringSlice(r.sorted))
+	sort.Sort(sort.StringSlice(sorted))
+
+	r.Mutex.Lock()
+	defer r.Mutex.Unlock()
+
+        r.keymap = keymap
+        r.sorted = sorted
 
 	// Clear the cache.
-	r.cache = make(map[Key][]*Node)
+	r.cache = make(map[string][]*Node)
 }
 
 func (r *ring) IsMaster(key Key) bool {
@@ -85,19 +96,10 @@ func (r *ring) MasterFor(key Key) *Node {
 	return nodes[0]
 }
 
-func (r *ring) NodesFor(key Key) []*Node {
-	r.Mutex.Lock()
-	defer r.Mutex.Unlock()
-
-	// Check if it's been cached.
-	cached := r.cache[key]
-	if cached != nil {
-		return cached
-	}
-
+func (r *ring) lookup(h string) []*Node {
 	// Search in our sorted array.
 	nodes := make([]*Node, 0)
-	start := sort.SearchStrings(r.sorted, string(key))
+	start := sort.SearchStrings(r.sorted, h)
 	current := start
 
 	for {
@@ -112,7 +114,24 @@ func (r *ring) NodesFor(key Key) []*Node {
 		}
 	}
 
+        return nodes
+}
+
+func (r *ring) NodesFor(key Key) []*Node {
+	r.Mutex.Lock()
+	defer r.Mutex.Unlock()
+
+	// Check if it's been cached.
+        h := r.hash(string(key))
+	cached := r.cache[h]
+	if cached != nil {
+		return cached
+	}
+
+        // Do a manual lookup.
+        nodes := r.lookup(h)
+
 	// Cache the value.
-	r.cache[key] = nodes
+	r.cache[h] = nodes
 	return nodes
 }
