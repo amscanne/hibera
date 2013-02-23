@@ -1,23 +1,21 @@
 package core
 
 import (
-        "testing"
+    "testing"
 )
 
 var DefaultSize = uint(128)
 
 func Setup(size uint, keys uint) *ring {
-    nodes := NewTestNodes(size+1, keys+1)
-    self := nodes.Active()[0]
-    return NewRing(self, nodes)
+    nodes := NewTestNodes(size+1, keys+1, domains("test"))
+    return NewRing(nodes)
 }
 
 func TestHash(t *testing.T) {
-    r := Setup(0, 0)
-    if r.hash("a") == r.hash("b") {
+    if hash("a") == hash("b") {
         t.Fail()
     }
-    if r.hash("a") != r.hash("a") {
+    if hash("a") != hash("a") {
         t.Fail()
     }
 }
@@ -40,6 +38,6 @@ func BenchmarkCached(b *testing.B) {
 func BenchmarkUncached(b *testing.B) {
     r := Setup(DefaultSize, DefaultKeys)
     for i := 0; i < b.N; i += 1 {
-        r.lookup(r.hash(""))
+        r.lookup(hash(""))
     }
 }

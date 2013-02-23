@@ -1,13 +1,15 @@
 package main
 
 import (
-	"flag"
-	"log"
-	"strings"
-	"hibera/storage"
-	"hibera/server"
-	"hibera/client"
-	"hibera/core"
+    "flag"
+    "log"
+    "strings"
+    "time"
+    "math/rand"
+    "hibera/storage"
+    "hibera/server"
+    "hibera/client"
+    "hibera/core"
 )
 
 var bind = flag.String("bind", server.DefaultBind, "Bind address for the server.")
@@ -18,38 +20,43 @@ var keys = flag.Uint("keys", core.DefaultKeys, "The number of keys for this node
 var seeds = flag.String("seeds", server.DefaultSeeds, "Seeds for joining the cluster.")
 
 func main() {
-	flag.Parse()
+    // NOTE: We need the random number generator,
+    // as it will be seed with 1 by default (and
+    // hence always exhibit the same sequence).
+    rand.Seed(time.Now().UTC().UnixNano())
 
-	// Initialize our storage.
-	backend := storage.NewBackend(*path)
-	if backend == nil {
-		return
-	}
+    flag.Parse()
 
-	// Create our cluster.
-	// We load our keys from the persistent storage.
-	ids, err := backend.LoadIds(*keys)
-	if err != nil {
-		log.Fatal("Unable to load keys: ", err)
-	}
-	cluster := core.NewCluster(backend, *domain, ids)
-	if cluster == nil {
-		return
-	}
+    // Initialize our storage.
+    backend := storage.NewBackend(*path)
+    if backend == nil {
+        return
+    }
+    go backend.Run()
 
-	// Initialize our hub.
-	hub := core.NewHub(cluster)
-	if hub == nil {
-		return
-	}
+    // Create our cluster.
+    // We load our keys from the persistent storage.
+    ids, err := backend.LoadIds(*keys)
+    if err != nil {
+        log.Fatal("Unable to load keys: ", err)
+    }
+    cluster := core.NewCluster(backend, *domain, ids)
+    if cluster == nil {
+        return
+    }
 
-	// Startup our server.
-	s := server.NewServer(hub, cluster, *bind, *port, strings.Split(*seeds, ","))
-	if s == nil {
-		return
-	}
+    // Initialize our hub.
+    hub := core.NewHub(cluster)
+    if hub == nil {
+        return
+    }
 
-	// Run our server.
-	go backend.Run()
-	s.Run()
+    // Startup our server.
+    s := server.NewServer(hub, cluster, *bind, *port, strings.Split(*seeds, ","))
+    if s == nil {
+        return
+    }
+
+    // Run our server.
+    s.Run()
 }
