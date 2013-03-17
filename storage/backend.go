@@ -305,10 +305,10 @@ func (b *Backend) logWriter() {
                 break
             }
 
-        // Something in the queue?
-        // Do a non-blocking call. If we don't
-        // find anything right now, then we do
-        // a flush log to complete this batch.
+            // Something in the queue?
+            // Do a non-blocking call. If we don't
+            // find anything right now, then we do
+            // a flush log to complete this batch.
         } else if len(finished) < MaximumLogBatch {
             select {
             case update := <-b.cs:
@@ -319,8 +319,8 @@ func (b *Backend) logWriter() {
                 break
             }
 
-        // We're at a full batch.
-        // We have to do a flush of the log.
+            // We're at a full batch.
+            // We have to do a flush of the log.
         } else {
             complete()
         }

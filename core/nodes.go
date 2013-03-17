@@ -17,7 +17,7 @@ type Node struct {
     Addr string
 
     // The node Id (computed and cached).
-    id string
+    id  string
 
     // The node domain.
     Domains []string
@@ -308,7 +308,7 @@ func (nodes *Nodes) Decode(data []byte) (bool, error) {
     for id, node := range na {
         orig_active := (nodes.all[id] != nil && nodes.all[id].Active)
         if nodes.all[id] == nil ||
-           nodes.all[id].Modified < node.Modified {
+            nodes.all[id].Modified < node.Modified {
             if id == nodes.self.Id() {
                 nodes.self = node
             }

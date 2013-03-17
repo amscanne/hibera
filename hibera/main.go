@@ -133,7 +133,7 @@ func cli_run(c *client.HiberaAPI, key string, name string, limit uint, timeout u
         // means that the new node may have lost all ephemeral
         // information and membership may be completely new.
         utils.Print("CLIENT", "JOINING key=%s name=%s limit=%d timeout=%d",
-                    string(key), name, limit, timeout)
+            string(key), name, limit, timeout)
         oldindex, _, err := c.Join(key, name, limit, timeout)
         if err != nil {
             return err
@@ -141,7 +141,7 @@ func cli_run(c *client.HiberaAPI, key string, name string, limit uint, timeout u
 
         // List the current members.
         utils.Print("CLIENT", "MEMBERS key=%s name=%s limit=%d",
-                    string(key), name, limit)
+            string(key), name, limit)
         newindex, _, rev, err := c.Members(key, name, limit)
         if err != nil {
             return err

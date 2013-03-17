@@ -8,10 +8,10 @@ import (
 )
 
 type QuorumResult struct {
-    node *Node
+    node  *Node
     value []byte
-    rev Revision
-    err error
+    rev   Revision
+    err   error
 }
 
 func (c *Cluster) doSet(node *Node, key Key, value []byte, rev Revision) (Revision, error) {
@@ -126,11 +126,11 @@ func (c *Cluster) quorum(ring *ring, key Key, fn func(*Node, chan<- *QuorumResul
     for rev, count := range revcounts {
 
         // If the remote nodes cover quorum.
-        if count > (len(nodes)/2) {
+        if count > (len(nodes) / 2) {
             utils.Print("QUORUM", "SUCCESS rev=%d", uint(rev))
             return revrefs[rev], nil
 
-        // If the local node is one of the quorum.
+            // If the local node is one of the quorum.
         } else if self != nil && (count+1) > (len(nodes)/2) {
 
             // Try the local node.
@@ -228,7 +228,7 @@ func (c *Cluster) quorumRemove(ring *ring, key Key, rev Revision) (Revision, err
 
 type ListResult struct {
     items []Key
-    err error
+    err   error
 }
 
 func (c *Cluster) doList(node *Node) ([]Key, error) {

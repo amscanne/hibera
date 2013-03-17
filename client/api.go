@@ -154,7 +154,7 @@ func (h *HiberaAPI) doRequest(method string, args HttpArgs) (*http.Response, err
         var resp *http.Response
         req, err := h.makeRequest(method, args)
 
-        for ; err == nil ; {
+        for err == nil {
 
             utils.Print("CLIENT", "%s %s", method, req.URL.String())
             resp, err = h.Client.Do(req)
@@ -164,9 +164,9 @@ func (h *HiberaAPI) doRequest(method string, args HttpArgs) (*http.Response, err
             utils.Print("CLIENT", "%s", resp.Status)
 
             if resp.StatusCode == http.StatusMovedPermanently ||
-               resp.StatusCode == http.StatusFound ||
-               resp.StatusCode == http.StatusSeeOther ||
-               resp.StatusCode == http.StatusTemporaryRedirect {
+                resp.StatusCode == http.StatusFound ||
+                resp.StatusCode == http.StatusSeeOther ||
+                resp.StatusCode == http.StatusTemporaryRedirect {
                 // Read the next location.
                 location := resp.Header.Get("Location")
                 utils.Print("CLIENT", "Redirecting to %s...", location)
@@ -178,7 +178,7 @@ func (h *HiberaAPI) doRequest(method string, args HttpArgs) (*http.Response, err
 
                 // Change the request.
                 req, err = h.makeRequest(method, args)
-                req.URL  = u
+                req.URL = u
                 req.Host = u.Host
             } else {
                 return resp, err

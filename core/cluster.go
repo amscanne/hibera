@@ -78,7 +78,7 @@ func (c *Cluster) doSync(id string, addr *net.UDPAddr) {
     data, rev, err := cl.Info(uint64(c.rev))
     if err != nil {
         utils.Print("CLUSTER", "SYNC-CLIENT-ERROR id=%s %s",
-                    id, err.Error())
+            id, err.Error())
         return
     }
 
@@ -90,7 +90,7 @@ func (c *Cluster) doSync(id string, addr *net.UDPAddr) {
     c.Nodes.Update(id, addr)
     if err != nil {
         utils.Print("CLUSTER", "SYNC-DATA-ERROR id=%s %s",
-                    id, err.Error())
+            id, err.Error())
     }
 
     // Update our revision.
@@ -104,7 +104,7 @@ func (c *Cluster) Heartbeat(id string, addr *net.UDPAddr, rev Revision, nodes ui
 
     // Update our nodes.
     if !c.Nodes.Heartbeat(id) ||
-       (rev > c.rev || (rev == c.rev && nodes > uint64(c.Count()))) {
+        (rev > c.rev || (rev == c.rev && nodes > uint64(c.Count()))) {
         // We don't know about this node.
         // Refresh addr will go get info
         // from this node by address.
@@ -132,8 +132,8 @@ func (c *Cluster) syncData(ring *ring, key Key, quorum bool) {
         // Set the full cluster.
         rev, err = c.quorumSet(ring, key, value, rev)
         if err != nil {
-            // It's possible that the cluster has changed again by the time this 
-            // set has actually had a chance to run. That's okay, at some point 
+            // It's possible that the cluster has changed again by the time this
+            // set has actually had a chance to run. That's okay, at some point
             // the most recent quorumSet will work (setting the most recent ring).
             utils.Print("CLUSTER", "SYNC-QUORUM-ERROR key=%s rev=%d %s", string(key), uint64(rev), err.Error())
             return
@@ -154,9 +154,9 @@ func (c *Cluster) syncData(ring *ring, key Key, quorum bool) {
 func (c *Cluster) dumpCluster() {
     // Output all nodes.
     utils.Print("CLUSTER", "CLUSTER (rev=%d,master=%t,failover=%t)",
-               c.rev,
-               c.ring.IsMaster(HiberaKey),
-               c.ring.IsFailover(HiberaKey))
+        c.rev,
+        c.ring.IsMaster(HiberaKey),
+        c.ring.IsFailover(HiberaKey))
     if c.ring.MasterFor(HiberaKey) != nil {
         utils.Print("CLUSTER", "MASTER %s", c.ring.MasterFor(HiberaKey).Id())
     }
@@ -206,24 +206,24 @@ func (c *Cluster) changeRevision(rev Revision, force bool) {
                 go c.syncData(c.ring, key, true)
             }
 
-        // Ensure that the master is aware of this key.
-        // This happens if the new master was not in the
-        // ring previously, but is now in the ring.
+            // Ensure that the master is aware of this key.
+            // This happens if the new master was not in the
+            // ring previously, but is now in the ring.
         } else if c.ring.IsFailover(key) &&
-           !old_ring.IsNode(key, c.ring.MasterFor(key)) {
+            !old_ring.IsNode(key, c.ring.MasterFor(key)) {
             if key != HiberaKey {
                 go c.syncData(c.ring, key, true)
             }
 
-        // We're a slave for this key, make sure we're
-        // synchronized (this may generate some extra
-        // traffic, but whatever).
+            // We're a slave for this key, make sure we're
+            // synchronized (this may generate some extra
+            // traffic, but whatever).
         } else if new_slave {
             go c.syncData(c.ring, key, false)
         }
 
         if (old_master || old_slave) &&
-           (!new_slave && !new_master) {
+            (!new_slave && !new_master) {
             c.data.DataRemove(key, 0)
         }
     }
@@ -260,7 +260,7 @@ func (c *Cluster) Healthcheck() {
         bytes, err := c.Nodes.Encode(0, false)
 
         orig_rev := c.rev
-        target_rev := c.rev+1
+        target_rev := c.rev + 1
         ring := c.ring
 
         c.Mutex.Unlock()
@@ -274,7 +274,7 @@ func (c *Cluster) Healthcheck() {
             rev, err := c.quorumSet(ring, HiberaKey, bytes, target_rev)
             if err != nil {
                 if rev > 0 {
-                    target_rev = rev+1
+                    target_rev = rev + 1
                     continue
                 } else {
                     utils.Print("CLUSTER", "WRITE-ERROR %s", err.Error())

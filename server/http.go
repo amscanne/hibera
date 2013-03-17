@@ -274,7 +274,7 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
         // so that the next time this key is tried --
         // smart clients might even try the newly given
         // location first.
-        url := utils.MakeURL(err.Error(), r.URL.Path + "?" + r.URL.RawQuery, nil)
+        url := utils.MakeURL(err.Error(), r.URL.Path+"?"+r.URL.RawQuery, nil)
         http.Redirect(w, r, url, 301)
 
     default:
