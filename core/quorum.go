@@ -9,20 +9,20 @@ import (
 
 type QuorumResult struct {
     node  *Node
-    value []byte
     rev   Revision
+    value []byte
     err   error
 }
 
-func (c *Cluster) doSet(node *Node, key Key, value []byte, rev Revision) (Revision, error) {
+func (c *Cluster) doSet(node *Node, key Key, rev Revision, value []byte) (Revision, error) {
     if node == c.Nodes.Self() {
-        return c.data.DataSet(key, value, rev)
+        return c.data.DataSet(key, rev, value)
     }
 
     urls := make([]string, 1, 1)
     urls[0] = utils.MakeURL(node.Addr, "", nil)
     cl := client.NewHiberaAPI(urls, c.Id(), 0)
-    rrev, err := cl.Set(string(key), value, uint64(rev))
+    rrev, err := cl.Set(string(key), uint64(rev), value)
     return Revision(rrev), err
 }
 
@@ -190,7 +190,7 @@ func (c *Cluster) quorum(ring *ring, key Key, fn func(*Node, chan<- *QuorumResul
 func (c *Cluster) quorumGet(ring *ring, key Key) ([]byte, Revision, error) {
     fn := func(node *Node, res chan<- *QuorumResult) {
         value, rev, err := c.doGet(node, key)
-        res <- &QuorumResult{node, value, rev, err}
+        res <- &QuorumResult{node, rev, value, err}
     }
     qr, err := c.quorum(ring, key, fn)
     var value []byte
@@ -202,10 +202,10 @@ func (c *Cluster) quorumGet(ring *ring, key Key) ([]byte, Revision, error) {
     return value, rev, err
 }
 
-func (c *Cluster) quorumSet(ring *ring, key Key, value []byte, rev Revision) (Revision, error) {
+func (c *Cluster) quorumSet(ring *ring, key Key, rev Revision, value []byte) (Revision, error) {
     fn := func(node *Node, res chan<- *QuorumResult) {
-        rev, err := c.doSet(node, key, value, rev)
-        res <- &QuorumResult{node, value, rev, err}
+        rev, err := c.doSet(node, key, rev, value)
+        res <- &QuorumResult{node, rev, value, err}
     }
     qr, err := c.quorum(ring, key, fn)
     if qr != nil {
@@ -217,7 +217,7 @@ func (c *Cluster) quorumSet(ring *ring, key Key, value []byte, rev Revision) (Re
 func (c *Cluster) quorumRemove(ring *ring, key Key, rev Revision) (Revision, error) {
     fn := func(node *Node, res chan<- *QuorumResult) {
         rev, err := c.doRemove(node, key, rev)
-        res <- &QuorumResult{node, nil, rev, err}
+        res <- &QuorumResult{node, rev, nil, err}
     }
     qr, err := c.quorum(ring, key, fn)
     if qr != nil {

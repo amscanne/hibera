@@ -249,7 +249,7 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
                 break
             case "POST":
                 rev = core.Revision(s.intParam(r, "rev"))
-                rev, err = s.Cluster.DataSet(conn, core.Key(parts[1]), content, rev)
+                rev, err = s.Cluster.DataSet(conn, core.Key(parts[1]), rev, content)
                 break
             case "DELETE":
                 rev = core.Revision(s.intParam(r, "rev"))

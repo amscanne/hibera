@@ -294,7 +294,7 @@ func (l *data) SyncJoin(id EphemId, key Key, name string, limit uint, timeout ui
     }
 
     // Join and fire.
-    rev, err := l.doEventFire(key, 0, lock)
+    rev, err := l.doFire(key, 0, lock)
     (*revmap)[id][name] = rev
     utils.Print("DATA", "JOIN key=%s index=%d id=%d", string(key), index, uint64(id))
     return index, rev, err
@@ -323,78 +323,102 @@ func (l *data) SyncLeave(id EphemId, key Key, name string) (Revision, error) {
     }
 
     utils.Print("DATA", "LEAVE key=%s id=%d", string(key), uint64(id))
-    return l.doEventFire(key, 0, lock)
+    return l.doFire(key, 0, lock)
 }
 
 func (l *data) DataGet(key Key) ([]byte, Revision, error) {
     lock := l.lock(key)
     defer lock.unlock(key)
 
+    // Return the local value.
     value, rev, err := l.store.Read(string(key))
     return value, Revision(rev), err
 }
 
-func (l *data) DataSet(key Key, value []byte, rev Revision) (Revision, error) {
+func (l *data) DataModify(key Key, rev Revision, mod func(Revision) error) (Revision, error) {
     lock := l.lock(key)
     defer lock.unlock(key)
 
-    // Check the revisions.
-    rev, err := l.doEventFire(key, rev, lock)
+    // Read the existing data.
+    _, orev, err := l.store.Read(string(key))
     if err != nil {
-        return rev, err
+        return Revision(orev), err
+    }
+    if rev == 0 {
+        rev = Revision(orev) + 1
+    }
+    if rev != 0 && rev <= Revision(orev) {
+        return Revision(orev), err
     }
 
-    err = l.store.Write(string(key), value, uint64(rev))
-    return Revision(rev), err
+    // Fire an event on the sync channel.
+    _, err = l.doFire(key, 0, lock)
+
+    // Do the operation.
+    return rev, mod(rev)
+}
+
+func (l *data) DataSet(key Key, rev Revision, value []byte) (Revision, error) {
+    return l.DataModify(key, rev, func(rev Revision) error {
+        return l.store.Write(string(key), value, uint64(rev))
+    })
 }
 
 func (l *data) DataRemove(key Key, rev Revision) (Revision, error) {
-    lock := l.lock(key)
-    defer lock.unlock(key)
-
-    // Check the revisions.
-    rev, err := l.doEventFire(key, rev, lock)
-    if err != nil {
-        return rev, err
-    }
-
-    // Delete and set the revision.
-    return 0, l.store.Delete(string(key))
+    return l.DataModify(key, rev, func(rev Revision) error {
+        err := l.store.Delete(string(key))
+        if err == nil {
+            delete(l.revs, key)
+        }
+        return err
+    })
 }
 
 func (l *data) EventWait(id EphemId, key Key, rev Revision, timeout uint, alive func() bool) (Revision, error) {
     lock := l.lock(key)
     defer lock.unlock(key)
 
+    getrev := func() Revision {
+        _, lrev, err := l.store.Read(string(key))
+        if err == nil && lrev > 0 {
+            return Revision(lrev)
+        }
+        return l.revs[key]
+    }
+
     // If the rev is 0, then we start waiting on the current rev.
     if rev == 0 {
-        rev = l.revs[key]
+        rev = getrev()
     }
 
     start := time.Now()
     end := start.Add(time.Duration(timeout) * time.Millisecond)
 
+    var currev Revision
     for {
+        // Get the current revision.
+        currev = getrev()
+
         // Wait until we are no longer on the given rev.
-        if l.revs[key] != rev {
+        if currev != rev {
             break
         }
 
         // Wait for a change.
         now := time.Now()
         if timeout > 0 && now.After(end) {
-            return l.revs[key], nil
+            return currev, nil
         }
         if !lock.wait(key, timeout > 0, end.Sub(now), alive) {
-            return l.revs[key], nil
+            return currev, nil
         }
     }
 
     // Return the new rev.
-    return l.revs[key], nil
+    return currev, nil
 }
 
-func (l *data) doEventFire(key Key, rev Revision, lock *Lock) (Revision, error) {
+func (l *data) doFire(key Key, rev Revision, lock *Lock) (Revision, error) {
     // Check our condition.
     if rev != 0 && rev <= l.revs[key] {
         return l.revs[key], NotFound
@@ -416,7 +440,17 @@ func (l *data) EventFire(key Key, rev Revision) (Revision, error) {
     lock := l.lock(key)
     defer lock.unlock(key)
 
-    return l.doEventFire(key, rev, lock)
+    // Check if we're talking about a local data item.
+    // We don't allow arbitrary event firing on a set 
+    // data item, this actually requires a full set (with
+    // quorum, etc.) in order to fire an event.
+    _, lrev, err := l.store.Read(string(key))
+    if err == nil && lrev > 0 {
+        return Revision(lrev), NotFound
+    }
+
+    // Fire on a synchronization item.
+    return l.doFire(key, rev, lock)
 }
 
 func (l *data) Purge(id EphemId) {

@@ -336,7 +336,7 @@ func (h *HiberaAPI) List() ([]string, error) {
     return items, nil
 }
 
-func (h *HiberaAPI) Set(key string, value []byte, rev uint64) (uint64, error) {
+func (h *HiberaAPI) Set(key string, rev uint64, value []byte) (uint64, error) {
     args := h.makeArgs(fmt.Sprintf("/data/%s", key))
     args.params["rev"] = strconv.FormatUint(rev, 10)
     args.body = value

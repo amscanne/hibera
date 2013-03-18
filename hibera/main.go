@@ -91,11 +91,13 @@ data commands:
 
     sync <key>                   --- Synchronize a key, either as
          [-output <file>]            stdin to a named script to
-         [<run-script> ...]          directly to the named file.
+         [-timeout <timeout>]        directly to the named file.
+         [<run-script> ...]
 
 event commands:
 
     watch <key>                  --- Wait for an update of the key.
+         [-timeout <timeout>]
 
     fire <key>                   --- Notify all waiters on the key.
 `
@@ -311,10 +313,10 @@ func cli_set(c *client.HiberaAPI, key string, value *string) error {
     if value == nil {
         // Fully read input.
         io.Copy(buf, os.Stdin)
-        _, err = c.Set(key, buf.Bytes(), 0)
+        _, err = c.Set(key, 0, buf.Bytes())
     } else {
         // Use the given string.
-        _, err = c.Set(key, []byte(*value), 0)
+        _, err = c.Set(key, 0, []byte(*value))
     }
     return err
 }
@@ -339,8 +341,9 @@ func cli_clear(c *client.HiberaAPI) error {
     return c.Clear()
 }
 
-func cli_sync(c *client.HiberaAPI, key string, output string, cmd string) error {
+func cli_sync(c *client.HiberaAPI, key string, output string, cmd string, timeout uint) error {
     for {
+        // Get the current value.
         value, rev, err := c.Get(key)
         if err != nil {
             return err
@@ -360,7 +363,7 @@ func cli_sync(c *client.HiberaAPI, key string, output string, cmd string) error 
         }
 
         // Wait for the next update.
-        rev, err = c.Wait(key, rev, 0)
+        rev, err = c.Wait(key, rev, timeout)
         if err != nil {
             return err
         }
@@ -369,8 +372,8 @@ func cli_sync(c *client.HiberaAPI, key string, output string, cmd string) error 
     return nil
 }
 
-func cli_watch(c *client.HiberaAPI, key string) error {
-    _, err := c.Wait(key, 0, 0)
+func cli_watch(c *client.HiberaAPI, key string, timeout uint) error {
+    _, err := c.Wait(key, 0, timeout)
     return err
 }
 
@@ -466,10 +469,10 @@ func main() {
         break
     case "sync":
         script := strings.Join(flag.Args(), " ")
-        err = cli_sync(c, key, *output, script)
+        err = cli_sync(c, key, *output, script, *timeout)
         break
     case "watch":
-        err = cli_watch(c, key)
+        err = cli_watch(c, key, *timeout)
         break
     case "fire":
         err = cli_fire(c, key)

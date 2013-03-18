@@ -65,7 +65,7 @@ func (c *Cluster) Activate(rev Revision) {
 
     // Write the cluster data.
     bytes, err := c.Nodes.Encode(0, false)
-    rev, err = c.data.DataSet(HiberaKey, bytes, rev)
+    rev, err = c.data.DataSet(HiberaKey, rev, bytes)
     if err != nil {
         utils.Print("CLUSTER", "WRITE-ERROR %s", err.Error())
         return
@@ -137,7 +137,7 @@ func (c *Cluster) syncData(ring *ring, key Key, quorum bool) {
 
     if quorum {
         // Set the full cluster.
-        rev, err = c.quorumSet(ring, key, value, rev)
+        rev, err = c.quorumSet(ring, key, rev, value)
         if err != nil {
             // It's possible that the cluster has changed again by the time this
             // set has actually had a chance to run. That's okay, at some point
@@ -147,7 +147,7 @@ func (c *Cluster) syncData(ring *ring, key Key, quorum bool) {
         }
     } else {
         // Set the local data.
-        rev, err = c.data.DataSet(key, value, rev)
+        rev, err = c.data.DataSet(key, rev, value)
         if err != nil {
             // Same as per above.
             utils.Print("CLUSTER", "SYNC-LOCAL-ERROR key=%s rev=%d %s", string(key), uint64(rev), err.Error())
@@ -203,10 +203,6 @@ func (c *Cluster) changeRevision(rev Revision, force bool) {
         old_slave := old_ring.IsSlave(key)
         new_slave := c.ring.IsSlave(key)
 
-        if old_master && !new_master {
-            c.data.EventFire(key, 0)
-        }
-
         // We're the new master for this key.
         if !old_master && new_master {
             if key != HiberaKey {
@@ -232,6 +228,10 @@ func (c *Cluster) changeRevision(rev Revision, force bool) {
         if (old_master || old_slave) &&
             (!new_slave && !new_master) {
             c.data.DataRemove(key, 0)
+        }
+
+        if old_master && !new_master {
+            c.data.EventFire(key, 0)
         }
     }
 }
@@ -278,7 +278,7 @@ func (c *Cluster) Healthcheck() {
             // contact a quorum of nodes to ensure that we're in the
             // majority still.
             utils.Print("CLUSTER", "SET-CLUSTER %d", uint64(target_rev))
-            rev, err := c.quorumSet(ring, HiberaKey, bytes, target_rev)
+            rev, err := c.quorumSet(ring, HiberaKey, target_rev, bytes)
             if err != nil {
                 if rev > 0 {
                     target_rev = rev + 1

@@ -58,16 +58,16 @@ func (c *Cluster) DataGet(conn *Connection, key Key) ([]byte, Revision, error) {
     return c.data.DataGet(key)
 }
 
-func (c *Cluster) DataSet(conn *Connection, key Key, value []byte, rev Revision) (Revision, error) {
+func (c *Cluster) DataSet(conn *Connection, key Key, rev Revision, value []byte) (Revision, error) {
     utils.Print("CLUSTER", "DATA-SET key=%s len(value)=%d rev=%d", string(key), len(value), uint64(rev))
     server, err := c.doRedirect(conn, key)
     if err != nil {
         return Revision(0), err
     }
     if server {
-        return c.data.DataSet(key, value, rev)
+        return c.data.DataSet(key, rev, value)
     }
-    return c.quorumSet(c.ring, key, value, rev)
+    return c.quorumSet(c.ring, key, rev, value)
 }
 
 func (c *Cluster) DataRemove(conn *Connection, key Key, rev Revision) (Revision, error) {
@@ -105,7 +105,8 @@ func (c *Cluster) SyncJoin(conn *Connection, key Key, name string, limit uint, t
     if err != nil || server {
         return -1, Revision(0), err
     }
-    return c.data.SyncJoin(conn.EphemId(), key, name, limit, timeout, conn.alive)
+    alive := func() bool { return conn.alive() && c.ring.IsMaster(key) }
+    return c.data.SyncJoin(conn.EphemId(), key, name, limit, timeout, alive)
 }
 
 func (c *Cluster) SyncLeave(conn *Connection, key Key, name string) (Revision, error) {
@@ -123,7 +124,8 @@ func (c *Cluster) EventWait(conn *Connection, key Key, rev Revision, timeout uin
     if err != nil || server {
         return Revision(0), err
     }
-    return c.data.EventWait(conn.EphemId(), key, rev, timeout, conn.alive)
+    alive := func() bool { return conn.alive() && c.ring.IsMaster(key) }
+    return c.data.EventWait(conn.EphemId(), key, rev, timeout, alive)
 }
 
 func (c *Cluster) EventFire(conn *Connection, key Key, rev Revision) (Revision, error) {
