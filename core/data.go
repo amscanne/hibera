@@ -21,7 +21,6 @@ var NotFound = errors.New("Key not found or inconsistent")
 
 type Lock struct {
     *sync.Cond
-    waiters uint
 }
 
 func (l *Lock) lock(key Key) {
@@ -35,30 +34,75 @@ func (l *Lock) unlock(key Key) {
     l.Cond.L.Unlock()
 }
 
-func (l *Lock) timeout(duration time.Duration) {
-    time.Sleep(duration)
-    l.Cond.Broadcast()
-}
+func (l *Lock) wait(key Key, timeout bool, duration time.Duration, alive func() bool) bool {
+    // Setup some basic channels for doing our wait
+    // on this lock. We keep waiting as long as there 
+    // is someone on the other end of the connection.
+    // NOTE: When this function returns, we do *not*
+    // want to call alive() anymore.
+    timeoutchan := make(chan bool)
+    deadconnchan := make(chan bool)
+    wakeupchan := make(chan bool)
+    go func() {
+        if timeout {
+            time.Sleep(duration)
+            timeoutchan <- true
+        }
+    }()
+    go func() {
+        for {
+            time.Sleep(time.Second)
+            if !alive() {
+                deadconnchan <- true
+                break
+            }
+        }
+    }()
+    go func() {
+        l.Cond.Wait()
+        wakeupchan <- true
+    }()
 
-func (l *Lock) wait(key Key, timeout bool, duration time.Duration) {
-    if timeout {
-        go l.timeout(duration)
+    utils.Print("DATA", "WAIT key=%s", string(key))
+
+    rval := true
+    select {
+        case <- timeoutchan:
+            utils.Print("DATA", "WAIT TIMEOUT key=%s", string(key))
+            // Ensure the connection channel is drained.
+            alive = func() bool { return false }
+            <- deadconnchan
+            // Ensure that wakeup chan is done.
+            l.Cond.Broadcast()
+            <- wakeupchan
+            rval = true
+            break
+        case <- deadconnchan:
+            // Ensure the wakeup chan is done.
+            l.Cond.Broadcast()
+            <- wakeupchan
+            utils.Print("DATA", "WAIT DEAD key=%s", string(key))
+            rval = false
+            break
+        case <- wakeupchan:
+            // Ensure the connection chan is drained.
+            alive = func() bool { return false }
+            <- deadconnchan
+            utils.Print("DATA", "WAIT WAKE key=%s", string(key))
+            rval = true
+            break
     }
-    l.waiters += 1
-    utils.Print("DATA", "WAIT key=%s waiters=%d", string(key), l.waiters)
-    l.Cond.Wait()
-    l.waiters -= 1
+    return rval
 }
 
 func (l *Lock) notify(key Key) {
-    utils.Print("DATA", "NOTIFY key=%s waiters=%d", string(key), l.waiters)
+    utils.Print("DATA", "NOTIFY key=%s", string(key))
     l.Cond.Broadcast()
 }
 
 func NewLock() *Lock {
     lock := new(Lock)
     lock.Cond = sync.NewCond(new(sync.Mutex))
-    lock.waiters = 0
     return lock
 }
 
@@ -197,7 +241,7 @@ func (l *data) computeIndex(revmap *EphemeralSet, name string, limit uint) (int,
     return index, members
 }
 
-func (l *data) SyncJoin(id EphemId, key Key, name string, limit uint, timeout uint) (int, Revision, error) {
+func (l *data) SyncJoin(id EphemId, key Key, name string, limit uint, timeout uint, alive func() bool) (int, Revision, error) {
     lock := l.lock(key)
     defer lock.unlock(key)
 
@@ -243,7 +287,10 @@ func (l *data) SyncJoin(id EphemId, key Key, name string, limit uint, timeout ui
             index, _ := l.computeIndex(revmap, name, limit)
             return index, l.revs[key], nil
         }
-        lock.wait(key, timeout > 0, end.Sub(now))
+        if !lock.wait(key, timeout > 0, end.Sub(now), alive) {
+            index, _ := l.computeIndex(revmap, name, limit)
+            return index, l.revs[key], nil
+        }
     }
 
     // Join and fire.
@@ -315,7 +362,7 @@ func (l *data) DataRemove(key Key, rev Revision) (Revision, error) {
     return 0, l.store.Delete(string(key))
 }
 
-func (l *data) EventWait(id EphemId, key Key, rev Revision, timeout uint) (Revision, error) {
+func (l *data) EventWait(id EphemId, key Key, rev Revision, timeout uint, alive func() bool) (Revision, error) {
     lock := l.lock(key)
     defer lock.unlock(key)
 
@@ -338,7 +385,9 @@ func (l *data) EventWait(id EphemId, key Key, rev Revision, timeout uint) (Revis
         if timeout > 0 && now.After(end) {
             return l.revs[key], nil
         }
-        lock.wait(key, timeout > 0, end.Sub(now))
+        if !lock.wait(key, timeout > 0, end.Sub(now), alive) {
+            return l.revs[key], nil
+        }
     }
 
     // Return the new rev.

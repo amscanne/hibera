@@ -20,6 +20,10 @@ type Connection struct {
     // The address associated with this conn.
     addr string
 
+    // A closure to check whether or not this
+    // connection is currently alive.
+    alive func() bool
+
     // The user associated (if there is one).
     // This will be looked up on the first if
     // the user provided a generated ConnectionId.
@@ -87,12 +91,12 @@ func (c *Hub) genid() uint64 {
     return atomic.AddUint64(&c.nextid, 1)
 }
 
-func (c *Hub) NewConnection(addr string) *Connection {
+func (c *Hub) NewConnection(addr string, alive func() bool) *Connection {
     // Generate conn with no user, and
     // a straight-forward id. The user can
     // associate some conn-id with their
     // active connection during lookup.
-    conn := &Connection{c, ConnectionId(c.genid()), addr, nil, false}
+    conn := &Connection{c, ConnectionId(c.genid()), addr, alive, nil, false}
 
     c.Mutex.Lock()
     defer c.Mutex.Unlock()
@@ -175,8 +179,8 @@ func (c *Hub) dumpHub() {
         } else {
             clid = uint64(0)
         }
-        utils.Print("HUB", "CONNECTION id=%d addr=%s client=%d",
-                    uint64(conn.ConnectionId), conn.addr, clid)
+        utils.Print("HUB", "CONNECTION id=%d addr=%s client=%d alive=%t",
+                    uint64(conn.ConnectionId), conn.addr, clid, conn.alive())
     }
     for _, client := range c.clients {
         utils.Print("HUB", "CLIENT id=%d userid=%s refs=%d",

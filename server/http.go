@@ -10,6 +10,7 @@ import (
     "strings"
     "net/http"
     "errors"
+    "time"
     "encoding/json"
     "hibera/core"
     "hibera/client"
@@ -48,10 +49,27 @@ type syncInfo struct {
 
 func (l Listener) Accept() (net.Conn, error) {
     c, err := l.Listener.Accept()
-    if err == nil {
-        c = Connection{l.Cluster.NewConnection(c.RemoteAddr().String()), c}
+    if err != nil {
+        return c, err
     }
-    return c, err
+
+    // NOTE: This function should only be called from
+    // contexts where we are not expecting anything to
+    // be read from the socket. i.e. from within the
+    // request handler itself. If it is called from other
+    // places, there is the possibility that it will eat
+    // actual useful input from the user.
+    alive := func() bool {
+        c.SetReadDeadline(time.Now())
+        if _, err := c.Read(make([]byte, 1, 1)); err == io.EOF {
+            return false
+        } else {
+            var zero time.Time
+            c.SetReadDeadline(zero)
+        }
+        return true
+    }
+    return Connection{l.Cluster.NewConnection(c.RemoteAddr().String(), alive), c}, nil
 }
 
 func (c Connection) RemoteAddr() net.Addr {

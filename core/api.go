@@ -105,7 +105,7 @@ func (c *Cluster) SyncJoin(conn *Connection, key Key, name string, limit uint, t
     if err != nil || server {
         return -1, Revision(0), err
     }
-    return c.data.SyncJoin(conn.EphemId(), key, name, limit, timeout)
+    return c.data.SyncJoin(conn.EphemId(), key, name, limit, timeout, conn.alive)
 }
 
 func (c *Cluster) SyncLeave(conn *Connection, key Key, name string) (Revision, error) {
@@ -123,7 +123,7 @@ func (c *Cluster) EventWait(conn *Connection, key Key, rev Revision, timeout uin
     if err != nil || server {
         return Revision(0), err
     }
-    return c.data.EventWait(conn.EphemId(), key, rev, timeout)
+    return c.data.EventWait(conn.EphemId(), key, rev, timeout, conn.alive)
 }
 
 func (c *Cluster) EventFire(conn *Connection, key Key, rev Revision) (Revision, error) {
