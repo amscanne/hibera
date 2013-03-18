@@ -18,7 +18,6 @@ type NameMap map[string]Revision
 type EphemeralSet map[EphemId]NameMap
 
 var NotFound = errors.New("Key not found or inconsistent")
-var Busy = errors.New("Busy or timeout expired")
 
 type Lock struct {
     *sync.Cond
@@ -140,6 +139,12 @@ func (l *data) SyncMembers(key Key, name string, limit uint) (int, []string, Rev
         return index, make([]string, 0), l.revs[key], nil
     }
 
+    // Return the members and rev.
+    index, members := l.computeIndex(revmap, name, limit)
+    return index, members, l.revs[key], nil
+}
+
+func (l *data) computeIndex(revmap *EphemeralSet, name string, limit uint) (int, []string) {
     // Aggregate all members across clients.
     allmap := make(map[string]Revision, 0)
     for _, set := range *revmap {
@@ -182,14 +187,14 @@ func (l *data) SyncMembers(key Key, name string, limit uint) (int, []string, Rev
     }
 
     // Save the index if it's available.
+    index := -1
     for i, current := range members {
         if current == name {
             index = i
         }
     }
 
-    // Return the members and rev.
-    return index, members, l.revs[key], nil
+    return index, members
 }
 
 func (l *data) SyncJoin(id EphemId, key Key, name string, limit uint, timeout uint) (int, Revision, error) {
@@ -204,7 +209,8 @@ func (l *data) SyncJoin(id EphemId, key Key, name string, limit uint, timeout ui
     for {
         now := time.Now()
         if timeout > 0 && now.After(end) {
-            return index, 0, Busy
+            index, _ := l.computeIndex(revmap, name, limit)
+            return index, l.revs[key], nil
         }
 
         // Lookup the key.
@@ -222,8 +228,9 @@ func (l *data) SyncJoin(id EphemId, key Key, name string, limit uint, timeout ui
         }
 
         // Check that we're still not there already.
-        if (*revmap)[id][name] != 0 {
-            return index, 0, Busy
+        if (*revmap)[id][name] > 0 {
+            index, _ := l.computeIndex(revmap, name, limit)
+            return index, l.revs[key], nil
         }
 
         // Count the number of holders.
@@ -254,16 +261,18 @@ func (l *data) SyncLeave(id EphemId, key Key, name string) (Revision, error) {
 
     // Lookup the key and see if we're a member.
     revmap := l.keys[key]
-    if revmap == nil || (*revmap)[id][name] == 0 {
+    if revmap == nil {
         return 0, NotFound
     }
 
     // Leave the key.
     _, present := (*revmap)[id]
-    if !present {
-        (*revmap)[id] = make(NameMap)
+    if present {
+        delete((*revmap)[id], name)
+        if len((*revmap)[id]) == 0 {
+            delete((*revmap), id)
+        }
     }
-    delete((*revmap)[id], name)
     if len(*revmap) == 0 {
         delete(l.keys, key)
     }
@@ -323,7 +332,7 @@ func (l *data) EventWait(id EphemId, key Key, rev Revision, timeout uint) (Revis
     for {
         now := time.Now()
         if timeout > 0 && now.After(end) {
-            return l.revs[key], Busy
+            return l.revs[key], nil
         }
 
         // Wait until we are no longer on the given rev.

@@ -123,6 +123,8 @@ func cli_run(c *client.HiberaAPI, key string, name string, limit uint, timeout u
     var proc *exec.Cmd
     procchan := make(chan error)
     watchchan := make(chan error)
+    oldindex := -1
+    oldrev := uint64(0)
 
     defer c.Leave(key, name)
 
@@ -134,86 +136,86 @@ func cli_run(c *client.HiberaAPI, key string, name string, limit uint, timeout u
         // information and membership may be completely new.
         utils.Print("CLIENT", "JOINING key=%s name=%s limit=%d timeout=%d",
             string(key), name, limit, timeout)
-        oldindex, _, err := c.Join(key, name, limit, timeout)
+        newindex, newrev, err := c.Join(key, name, limit, timeout)
         if err != nil {
             return err
         }
+        utils.Print("CLIENT", "INDEX=%d REV=%d", newindex, newrev)
 
-        // List the current members.
-        utils.Print("CLIENT", "MEMBERS key=%s name=%s limit=%d",
-            string(key), name, limit)
-        newindex, _, rev, err := c.Members(key, name, limit)
-        if err != nil {
-            return err
-        }
-        utils.Print("CLIENT", "INDEX %d", newindex)
-
-        // Update the mapped data.
-        if newindex >= 0 && dodata {
-            // Opportunistic.
-            value, _, err = c.Get(fmt.Sprintf("%s.%d", key, newindex))
-            if err != nil {
+        if newindex != oldindex || newrev != oldrev {
+            // Update the mapped data.
+            if newindex >= 0 && dodata {
+                // Opportunistic.
+                value, _, err = c.Get(fmt.Sprintf("%s.%d", key, newindex))
+                if err != nil {
+                    value = nil
+                }
+            } else {
+                // No input.
                 value = nil
             }
-        } else {
-            // No input.
-            value = nil
-        }
-        if value != nil {
-            utils.Print("CLIENT", "DATA len=%d", len(value))
-        } else {
-            utils.Print("CLIENT", "NODATA")
-        }
-
-        // If something has changed, stop the running process.
-        if newindex < 0 || (newindex != oldindex && dodata) {
-            if proc != nil {
-                utils.Print("CLIENT", "PROC-STOP")
-                // Kill this process on stop.
-                // Nothing can be done here to handle errors.
-                syscall.Kill(proc.Process.Pid, syscall.SIGTERM)
-                // Pull the exit status.
-                // NOTE: This doesn't count as a natural exit
-                // of the running process as per below. So we
-                // won't return but rather we will wait until
-                // we own this node again and we will restart
-                // the process.
-                <-procchan
-                proc = nil
+            if value != nil {
+                utils.Print("CLIENT", "DATA len=%d", len(value))
+            } else {
+                utils.Print("CLIENT", "NODATA")
             }
-        }
-        if newindex < 0 && (oldindex != newindex) {
-            if stop != "" {
-                utils.Print("CLIENT", "EXEC-STOP")
-                do_exec(stop, value)
-            }
-        }
 
-        // Start or stop appropriately.
-        if newindex >= 0 && (newindex != oldindex) {
-            if start != "" {
-                utils.Print("CLIENT", "EXEC-START")
-                do_exec(start, value)
-            }
-        }
-        if newindex >= 0 || (newindex != oldindex && dodata) {
-            if proc == nil && cmd != "" {
-                // Ensure our process is running.
-                utils.Print("CLIENT", "PROC-START")
-                proc = exec.Command("sh", "-c", cmd)
-                proc.Stdin = bytes.NewBuffer(value)
-                proc.Stdout = os.Stdout
-                proc.Stderr = os.Stderr
-                proc.Start()
-
-                // Start waiting for the process.
-                dowait := func() {
-                    utils.Print("CLIENT", "PROC-WAIT")
-                    procchan <- proc.Wait()
-                    utils.Print("CLIENT", "PROC-EXIT")
+            // If something has changed, stop the running process.
+            if newindex < 0 || (newindex != oldindex && dodata) {
+                if proc != nil {
+                    utils.Print("CLIENT", "PROC-STOP")
+                    // Kill this process on stop.
+                    // Nothing can be done here to handle errors.
+                    syscall.Kill(proc.Process.Pid, syscall.SIGTERM)
+                    // Pull the exit status.
+                    // NOTE: This doesn't count as a natural exit
+                    // of the running process as per below. So we
+                    // won't return but rather we will wait until
+                    // we own this node again and we will restart
+                    // the process.
+                    <-procchan
+                    proc = nil
                 }
-                go dowait()
             }
+            if newindex < 0 && (oldindex != newindex) {
+                if stop != "" {
+                    utils.Print("CLIENT", "EXEC-STOP")
+                    do_exec(stop, value)
+                }
+            }
+
+            // Start or stop appropriately.
+            if newindex >= 0 && (newindex != oldindex) {
+                if start != "" {
+                    utils.Print("CLIENT", "EXEC-START")
+                    do_exec(start, value)
+                }
+            }
+            if newindex >= 0 || (newindex != oldindex && dodata) {
+                if proc == nil && cmd != "" {
+                    // Ensure our process is running.
+                    utils.Print("CLIENT", "PROC-START")
+                    proc = exec.Command("sh", "-c", cmd)
+                    proc.SysProcAttr = &syscall.SysProcAttr{
+                        Chroot: "",
+                        Pdeathsig: syscall.SIGTERM}
+                    proc.Stdin = bytes.NewBuffer(value)
+                    proc.Stdout = os.Stdout
+                    proc.Stderr = os.Stderr
+                    proc.Start()
+
+                    // Start waiting for the process.
+                    dowait := func() {
+                        utils.Print("CLIENT", "PROC-WAIT")
+                        procchan <- proc.Wait()
+                        utils.Print("CLIENT", "PROC-EXIT")
+                    }
+                    go dowait()
+                }
+            }
+
+            oldindex = newindex
+            oldrev = newrev
         }
 
         // Wait for the next update.
@@ -223,7 +225,7 @@ func cli_run(c *client.HiberaAPI, key string, name string, limit uint, timeout u
         // the process exits, then we will leave anyways.
         dowatch := func() {
             utils.Print("CLIENT", "WATCH-START")
-            _, err := c.Wait(key, rev, 0)
+            _, err := c.Wait(key, newrev, timeout)
             utils.Print("CLIENT", "WATCH-FIRED")
             watchchan <- err
         }
