@@ -160,6 +160,10 @@ func (r *ring) lookup(h string) []*Node {
     // Search in our sorted array.
     nodes := make([]*Node, 0)
     start := sort.SearchStrings(r.sorted, h)
+    if start >= len(r.sorted) {
+        // Wrap around the ring.
+        start = 0
+    }
     perdomain := make(map[string]uint)
     pernode := make(map[string]bool)
     current := start
