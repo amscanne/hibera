@@ -147,8 +147,8 @@ func cli_run(c *client.HiberaAPI, key string, name string, limit uint, timeout u
             if newindex >= 0 && dodata {
                 // Opportunistic.
                 value, _, err = c.Get(fmt.Sprintf("%s.%d", key, newindex))
-                if err != nil {
-                    value = nil
+                if err != nil || value == nil {
+                    value = make([]byte, 0, 0)
                 }
             } else {
                 // No input.
@@ -199,7 +199,13 @@ func cli_run(c *client.HiberaAPI, key string, name string, limit uint, timeout u
                     proc.SysProcAttr = &syscall.SysProcAttr{
                         Chroot: "",
                         Pdeathsig: syscall.SIGTERM}
-                    proc.Stdin = bytes.NewBuffer(value)
+                    if value != nil {
+                        utils.Print("CLIENT", "PROC-DATA")
+                        proc.Stdin = bytes.NewBuffer(value)
+                    } else {
+                        utils.Print("CLIENT", "PROC-STDIN")
+                        proc.Stdin = os.Stdin
+                    }
                     proc.Stdout = os.Stdout
                     proc.Stderr = os.Stderr
                     proc.Start()
