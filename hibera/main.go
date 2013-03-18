@@ -123,8 +123,10 @@ func cli_run(c *client.HiberaAPI, key string, name string, limit uint, timeout u
     var proc *exec.Cmd
     procchan := make(chan error)
     watchchan := make(chan error)
+
     oldindex := -1
     oldrev := uint64(0)
+    olddatarev := uint64(0)
 
     defer c.Leave(key, name)
 
@@ -143,13 +145,27 @@ func cli_run(c *client.HiberaAPI, key string, name string, limit uint, timeout u
         utils.Print("CLIENT", "INDEX=%d REV=%d", newindex, newrev)
 
         if newindex != oldindex || newrev != oldrev {
+
+            datachanged := false
+
             // Update the mapped data.
             if newindex >= 0 && dodata {
-                // Opportunistic.
-                value, _, err = c.Get(fmt.Sprintf("%s.%d", key, newindex))
-                if err != nil || value == nil {
+
+                // Opportunistic read of the data.
+                // If there's nothing, we provide an empty set.
+                var datarev uint64
+                value, datarev, err = c.Get(fmt.Sprintf("%s.%d", key, newindex))
+                if err != nil {
+                    datarev = uint64(0)
+                }
+                if value == nil {
                     value = make([]byte, 0, 0)
                 }
+
+                // Save whether changed.
+                datachanged = (newindex != oldindex || olddatarev != datarev)
+                olddatarev = datarev
+
             } else {
                 // No input.
                 value = nil
@@ -161,7 +177,7 @@ func cli_run(c *client.HiberaAPI, key string, name string, limit uint, timeout u
             }
 
             // If something has changed, stop the running process.
-            if newindex < 0 || (newindex != oldindex && dodata) {
+            if newindex < 0 || datachanged {
                 if proc != nil {
                     utils.Print("CLIENT", "PROC-STOP")
                     // Kill this process on stop.
@@ -191,7 +207,7 @@ func cli_run(c *client.HiberaAPI, key string, name string, limit uint, timeout u
                     do_exec(start, value)
                 }
             }
-            if newindex >= 0 || (newindex != oldindex && dodata) {
+            if newindex >= 0 {
                 if proc == nil && cmd != "" {
                     // Ensure our process is running.
                     utils.Print("CLIENT", "PROC-START")
