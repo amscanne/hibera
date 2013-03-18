@@ -26,14 +26,6 @@ func (c *Cluster) Version() Revision {
     return c.rev
 }
 
-func (c *Cluster) ListDead() []*Node {
-    return c.Nodes.Dead()
-}
-
-func (c *Cluster) ListHeartbeat() []*Node {
-    return c.Nodes.Others()
-}
-
 func (c *Cluster) DataList(conn *Connection) ([]Key, error) {
     utils.Print("CLUSTER", "DATA-LIST")
     if c.Nodes.Heartbeat(conn.Name("")) {

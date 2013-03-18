@@ -51,7 +51,7 @@ func (s *GossipServer) send(addr *net.UDPAddr, m *Message) error {
 
 func (s *GossipServer) sendPingPong(addr *net.UDPAddr, pong bool) {
     // Construct our list of dead nodes.
-    dead := s.Cluster.ListDead()
+    dead := s.Cluster.Dead()
     perm := rand.Perm(len(dead))
     if len(dead) > DeadServers {
         dead = dead[0:DeadServers]
@@ -79,8 +79,11 @@ func (s *GossipServer) heartbeat() {
     var addr *net.UDPAddr
 
     // Pick a random node and send a ping.
-    nodes := s.Cluster.ListHeartbeat()
-    if len(nodes) > 0 {
+    nodes := s.Cluster.Suspicious()
+    if nodes == nil || len(nodes) == 0 {
+        nodes = s.Cluster.Others()
+    }
+    if nodes != nil && len(nodes) > 0 {
         node := nodes[rand.Int()%len(nodes)]
         addr, _ = utils.GenerateUDPAddr(node.Addr, "", client.DefaultPort)
         if addr != nil {

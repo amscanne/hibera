@@ -144,46 +144,42 @@ func (nodes *Nodes) Fail(id string, rev Revision) bool {
     return false
 }
 
-func (nodes *Nodes) Active() []*Node {
+func (nodes *Nodes) filter(fn func(node *Node) bool) []*Node {
     nodes.Mutex.Lock()
     defer nodes.Mutex.Unlock()
 
-    active := make([]*Node, 0, len(nodes.all))
+    filtered := make([]*Node, 0, 0)
     for _, node := range nodes.all {
-        if node.Active {
-            active = append(active, node)
+        if fn(node) {
+            filtered = append(filtered, node)
         }
     }
 
-    return active
+    return filtered
+}
+
+func (nodes *Nodes) Active() []*Node {
+    return nodes.filter(func(node *Node) bool {
+        return node.Active
+    })
 }
 
 func (nodes *Nodes) Dead() []*Node {
-    nodes.Mutex.Lock()
-    defer nodes.Mutex.Unlock()
-
-    dead := make([]*Node, 0)
-    for _, node := range nodes.all {
-        if node.Active && node != nodes.self && !node.Alive() {
-            dead = append(dead, node)
-        }
-    }
-
-    return dead
+    return nodes.filter(func(node *Node) bool {
+        return node.Active && node != nodes.self && !node.Alive()
+    })
 }
 
 func (nodes *Nodes) Others() []*Node {
-    nodes.Mutex.Lock()
-    defer nodes.Mutex.Unlock()
+    return nodes.filter(func(node *Node) bool {
+        return node.Active && node != nodes.self
+    })
+}
 
-    others := make([]*Node, 0, len(nodes.all))
-    for _, node := range nodes.all {
-        if node.Active && node != nodes.self {
-            others = append(others, node)
-        }
-    }
-
-    return others
+func (nodes *Nodes) Suspicious() []*Node {
+    return nodes.filter(func(node *Node) bool {
+        return node.Active && node.Dropped > 0
+    })
 }
 
 func (nodes *Nodes) Self() *Node {
