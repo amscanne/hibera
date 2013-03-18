@@ -19,7 +19,7 @@ import (
 var UnhandledRequest = errors.New("Unhandled request")
 
 type Listener struct {
-    *core.Hub
+    *core.Cluster
     net.Listener
 }
 
@@ -33,7 +33,6 @@ type Addr struct {
 }
 
 type HTTPServer struct {
-    *core.Hub
     *core.Cluster
     *Listener
     *http.Server
@@ -50,7 +49,7 @@ type syncInfo struct {
 func (l Listener) Accept() (net.Conn, error) {
     c, err := l.Listener.Accept()
     if err == nil {
-        c = Connection{l.Hub.NewConnection(c.RemoteAddr().String()), c}
+        c = Connection{l.Cluster.NewConnection(c.RemoteAddr().String()), c}
     }
     return c, err
 }
@@ -119,12 +118,12 @@ func (s *HTTPServer) getConnection(r *http.Request) *core.Connection {
 
     if len(r.Header["X-Client-Id"]) > 0 {
         // Return a connection with the asssociate conn.
-        return s.Hub.FindConnection(core.ConnectionId(id),
+        return s.Cluster.FindConnection(core.ConnectionId(id),
             core.UserId(r.Header["X-Client-Id"][0]))
     }
 
     // Return a connection with no associated conn.
-    return s.Hub.FindConnection(core.ConnectionId(id), "")
+    return s.Cluster.FindConnection(core.ConnectionId(id), "")
 }
 
 func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
@@ -288,7 +287,7 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
     }
 }
 
-func NewHTTPServer(hub *core.Hub, cluster *core.Cluster, addr string, port uint) *HTTPServer {
+func NewHTTPServer(cluster *core.Cluster, addr string, port uint) *HTTPServer {
     // Create our object.
     server := new(HTTPServer)
 
@@ -304,8 +303,7 @@ func NewHTTPServer(hub *core.Hub, cluster *core.Cluster, addr string, port uint)
         log.Print("Unable to bind HTTP server: ", err)
         return nil
     }
-    server.Listener = &Listener{hub, ln}
-    server.Hub = hub
+    server.Listener = &Listener{cluster, ln}
     server.Cluster = cluster
 
     // Create our http server, and provide connections

@@ -207,12 +207,6 @@ func (l *data) SyncJoin(id EphemId, key Key, name string, limit uint, timeout ui
     end := start.Add(time.Duration(timeout) * time.Millisecond)
     var revmap *EphemeralSet
     for {
-        now := time.Now()
-        if timeout > 0 && now.After(end) {
-            index, _ := l.computeIndex(revmap, name, limit)
-            return index, l.revs[key], nil
-        }
-
         // Lookup the key.
         revmap = l.keys[key]
         if revmap == nil {
@@ -239,12 +233,16 @@ func (l *data) SyncJoin(id EphemId, key Key, name string, limit uint, timeout ui
             members += uint(len(names))
         }
         if limit == 0 || members < limit {
-            // We will be the Nth member.
             index = int(members)
             break
         }
 
         // Wait for a change.
+        now := time.Now()
+        if timeout > 0 && now.After(end) {
+            index, _ := l.computeIndex(revmap, name, limit)
+            return index, l.revs[key], nil
+        }
         lock.wait(key, timeout > 0, end.Sub(now))
     }
 
@@ -330,17 +328,16 @@ func (l *data) EventWait(id EphemId, key Key, rev Revision, timeout uint) (Revis
     end := start.Add(time.Duration(timeout) * time.Millisecond)
 
     for {
-        now := time.Now()
-        if timeout > 0 && now.After(end) {
-            return l.revs[key], nil
-        }
-
         // Wait until we are no longer on the given rev.
         if l.revs[key] != rev {
             break
         }
 
         // Wait for a change.
+        now := time.Now()
+        if timeout > 0 && now.After(end) {
+            return l.revs[key], nil
+        }
         lock.wait(key, timeout > 0, end.Sub(now))
     }
 

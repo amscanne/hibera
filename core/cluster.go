@@ -19,6 +19,9 @@ var DefaultKeys = uint(128)
 var HiberaKey = Key("hibera")
 
 type Cluster struct {
+    // Our connection hub.
+    *Hub
+
     // The cluster revision.
     // When the cluster has not yet been activated (i.e.
     // we've just started and not yet seen any active nodes
@@ -317,6 +320,7 @@ func NewCluster(backend *storage.Backend, domain string, ids []string) *Cluster 
     c.Nodes = NewNodes(ids, domains(domain))
     c.data = NewData(backend)
     c.ring = NewRing(c.Nodes)
+    c.Hub = NewHub(c)
 
     activated := false
     data, rev, err := c.data.DataGet(HiberaKey)
@@ -343,8 +347,8 @@ func NewCluster(backend *storage.Backend, domain string, ids []string) *Cluster 
             sig := <-sigchan
             if sig == syscall.SIGUSR1 {
                 c.dumpCluster()
-            } else if sig == syscall.SIGUSR2 {
                 c.data.dumpData()
+                c.Hub.dumpHub()
             }
         }
     }

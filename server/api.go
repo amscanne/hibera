@@ -11,8 +11,8 @@ type Server struct {
     *GossipServer
 }
 
-func NewServer(hub *core.Hub, cluster *core.Cluster, addr string, port uint, seeds []string) *Server {
-    http := NewHTTPServer(hub, cluster, addr, port)
+func NewServer(cluster *core.Cluster, addr string, port uint, seeds []string) *Server {
+    http := NewHTTPServer(cluster, addr, port)
     if http == nil {
         return nil
     }

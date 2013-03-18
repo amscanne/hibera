@@ -1,7 +1,9 @@
 package core
 
 import (
+    "sync"
     "sync/atomic"
+    "hibera/utils"
 )
 
 type ConnectionId uint64
@@ -22,6 +24,10 @@ type Connection struct {
     // This will be looked up on the first if
     // the user provided a generated ConnectionId.
     client *Client
+
+    // Whether this connection has been initialized
+    // with a client (above). Client may stil be nil.
+    inited bool
 }
 
 type EphemId uint64
@@ -49,6 +55,9 @@ type Hub struct {
     connections map[ConnectionId]*Connection
     clients     map[UserId]*Client
     nextid      uint64
+
+    // Synchronization.
+    sync.Mutex
 
     // The underlying cluster.
     // We maintain a reference to this so that
@@ -83,16 +92,28 @@ func (c *Hub) NewConnection(addr string) *Connection {
     // a straight-forward id. The user can
     // associate some conn-id with their
     // active connection during lookup.
-    conn := &Connection{c, ConnectionId(c.genid()), addr, nil}
+    conn := &Connection{c, ConnectionId(c.genid()), addr, nil, false}
+
+    c.Mutex.Lock()
+    defer c.Mutex.Unlock()
+
     c.connections[conn.ConnectionId] = conn
+
     return conn
 }
 
 func (c *Hub) FindConnection(id ConnectionId, userid UserId) *Connection {
+    c.Mutex.Lock()
+    defer c.Mutex.Unlock()
+
     conn := c.connections[id]
     if conn == nil {
         return nil
     }
+    if conn.inited {
+        return conn
+    }
+    conn.inited = true
 
     // Create the user if it doesnt exist.
     // NOTE: There are some race conditions here between the
@@ -111,23 +132,25 @@ func (c *Hub) FindConnection(id ConnectionId, userid UserId) *Connection {
             c.clients[userid] = conn.client
         } else {
             // Bump up the reference.
-            atomic.AddInt32(&conn.client.refs, 1)
+            conn.client.refs += 1
         }
     }
 
-    return c.connections[id]
+    return conn
 }
 
-func (c *Hub) DropConnection(id ConnectionId) {
-    // Lookup this conn.
-    conn := c.connections[id]
-    if conn == nil {
-        return
-    }
+func (c *Hub) DropConnection(conn *Connection) {
+    c.Mutex.Lock()
+    defer c.Mutex.Unlock()
+
+    // Delete this connection.
+    delete(c.connections, conn.ConnectionId)
+    c.Cluster.Purge(EphemId(conn.ConnectionId))
 
     // Shuffle userid mappings.
     if conn.client != nil {
-        if atomic.AddInt32(&conn.client.refs, -1) == 0 {
+        conn.client.refs -= 1
+        if conn.client.refs == 0 {
             // Remove the user from the map and
             // purge all related keys from the
             // underlying storage system.
@@ -136,14 +159,29 @@ func (c *Hub) DropConnection(id ConnectionId) {
             conn.client = nil
         }
     }
-
-    // Purge the connection.
-    delete(c.connections, id)
-    c.Cluster.Purge(EphemId(id))
 }
 
 func (c *Connection) Drop() {
-    c.Hub.DropConnection(c.ConnectionId)
+    c.Hub.DropConnection(c)
+}
+
+func (c *Hub) dumpHub() {
+    utils.Print("HUB", "HUB connections=%d clients=%d",
+                len(c.connections), len(c.clients))
+    for _, conn := range c.connections {
+        var clid uint64
+        if conn.client != nil {
+            clid = uint64(conn.client.ClientId)
+        } else {
+            clid = uint64(0)
+        }
+        utils.Print("HUB", "CONNECTION id=%d addr=%s client=%d",
+                    uint64(conn.ConnectionId), conn.addr, clid)
+    }
+    for _, client := range c.clients {
+        utils.Print("HUB", "CLIENT id=%d userid=%s refs=%d",
+                    uint64(client.ClientId), client.UserId, client.refs)
+    }
 }
 
 func NewHub(cluster *Cluster) *Hub {

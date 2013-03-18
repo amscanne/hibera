@@ -45,14 +45,8 @@ func main() {
         return
     }
 
-    // Initialize our hub.
-    hub := core.NewHub(cluster)
-    if hub == nil {
-        return
-    }
-
     // Startup our server.
-    s := server.NewServer(hub, cluster, *bind, *port, strings.Split(*seeds, ","))
+    s := server.NewServer(cluster, *bind, *port, strings.Split(*seeds, ","))
     if s == nil {
         return
     }
