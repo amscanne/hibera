@@ -75,10 +75,10 @@ func (c *Cluster) Activate(rev Revision) {
     c.changeRevision(rev, true)
 }
 
-func (c *Cluster) doSync(id string, addr *net.UDPAddr) {
+func (c *Cluster) doSync(id string, addr *net.UDPAddr, from Revision) {
     // Pull the remote info from the node.
     cl := client.NewHiberaAPI(utils.AsURLs(addr), c.Id(), 0)
-    data, rev, err := cl.Info(uint64(c.rev))
+    data, rev, err := cl.Info(uint64(from))
     if err != nil {
         utils.Print("CLUSTER", "SYNC-CLIENT-ERROR id=%s %s",
             id, err.Error())
@@ -105,18 +105,22 @@ func (c *Cluster) Heartbeat(id string, addr *net.UDPAddr, rev Revision, nodes ui
     c.Mutex.Lock()
     defer c.Mutex.Unlock()
 
+    // Mark dead nodes as dead.
+    for _, id := range dead {
+        c.Nodes.NoHeartbeat(id)
+    }
+
     // Update our nodes.
     if !c.Nodes.Heartbeat(id) ||
         (rev > c.rev || (rev == c.rev && nodes > uint64(c.Count()))) {
         // We don't know about this node.
         // Refresh addr will go get info
         // from this node by address.
-        go c.doSync(id, addr)
-    }
-
-    // Mark dead nodes as dead.
-    for _, id := range dead {
-        c.Nodes.NoHeartbeat(id)
+        if rev > c.rev {
+            go c.doSync(id, addr, c.rev)
+        } else {
+            go c.doSync(id, addr, 0)
+        }
     }
 }
 
