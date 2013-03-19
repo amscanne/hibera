@@ -78,13 +78,23 @@ func (s *GossipServer) sendPingPong(addr *net.UDPAddr, pong bool) {
 func (s *GossipServer) heartbeat() {
     var addr *net.UDPAddr
 
-    // Pick a random node and send a ping.
+    // We mix a list of active nodes (favoring suspicious if
+    // there are currently some) and seeds. The reason to mix
+    // the seeds is to ensure that at cluster creation time, we
+    // don't end up with two split clusters.
     nodes := s.Cluster.Suspicious()
     if nodes == nil || len(nodes) == 0 {
         nodes = s.Cluster.Others()
     }
-    if nodes != nil && len(nodes) > 0 {
-        node := nodes[rand.Int()%len(nodes)]
+    if nodes == nil {
+        nodes = make([]*core.Node, 0, 0)
+    }
+    if len(nodes) + len(s.seeds) == 0 {
+        return
+    }
+    index := rand.Int() % (len(nodes) + len(s.seeds))
+    if index < len(nodes) {
+        node := nodes[index]
         addr, _ = utils.GenerateUDPAddr(node.Addr, "", client.DefaultPort)
         if addr != nil {
             // We're going to send, so assume the packet has dropped
@@ -93,10 +103,8 @@ func (s *GossipServer) heartbeat() {
         }
     } else {
         // Pick a seed and send a ping.
-        if len(s.seeds) > 0 {
-            seed := s.seeds[rand.Int()%len(s.seeds)]
-            addr, _ = utils.GenerateUDPAddr(seed, "", client.DefaultPort)
-        }
+        seed := s.seeds[index-len(nodes)]
+        addr, _ = utils.GenerateUDPAddr(seed, "", client.DefaultPort)
     }
 
     // Send a packet if we've got an address.
@@ -136,14 +144,6 @@ func (s *GossipServer) process(addr *net.UDPAddr, m *Message) {
     s.Mutex.Lock()
     defer s.Mutex.Unlock()
 
-    // Check if it's a broadcast return.
-    localaddr := s.conn.LocalAddr()
-    udpaddr := localaddr.(*net.UDPAddr)
-    localport := (*udpaddr).Port
-    if addr.Port == localport && addr.IP.IsGlobalUnicast() {
-        return
-    }
-
     gossip := m.GetGossip()
     if gossip != nil {
         utils.Print("GOSSIP", "RECV %s (addr=%s,version=%d,id=%s)",
@@ -155,14 +155,12 @@ func (s *GossipServer) process(addr *net.UDPAddr, m *Message) {
 
     switch m.GetType() {
     case uint32(TYPE_PING):
-        s.Cluster.Heartbeat(*gossip.Id, addr,
-            core.Revision(m.GetVersion()), m.GetNodes(), gossip.Dead)
-
         // Respond to the ping.
         go s.sendPingPong(addr, true)
         break
 
     case uint32(TYPE_PONG):
+        // Heartbeat (we have two-way communication).
         s.Cluster.Heartbeat(*gossip.Id, addr,
             core.Revision(m.GetVersion()), m.GetNodes(), gossip.Dead)
         break
