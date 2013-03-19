@@ -200,7 +200,6 @@ func (c *Cluster) changeRevision(rev Revision, force bool) {
 
         old_master := old_ring.IsMaster(key)
         new_master := c.ring.IsMaster(key)
-        old_slave := old_ring.IsSlave(key)
         new_slave := c.ring.IsSlave(key)
 
         // We're the new master for this key.
@@ -209,28 +208,29 @@ func (c *Cluster) changeRevision(rev Revision, force bool) {
                 go c.syncData(c.ring, key, true)
             }
 
-            // Ensure that the master is aware of this key.
-            // This happens if the new master was not in the
-            // ring previously, but is now in the ring.
+        // Ensure that the master is aware of this key.
+        // This happens if the new master was not in the
+        // ring previously, but is now in the ring.
         } else if c.ring.IsFailover(key) &&
             !old_ring.IsNode(key, c.ring.MasterFor(key)) {
             if key != HiberaKey {
                 go c.syncData(c.ring, key, true)
             }
 
-            // We're a slave for this key, make sure we're
-            // synchronized (this may generate some extra
-            // traffic, but whatever).
+        // We're a slave for this key, make sure we're
+        // synchronized (this may generate some extra
+        // traffic, but whatever).
         } else if new_slave {
             go c.syncData(c.ring, key, false)
         }
 
-        if (old_master || old_slave) &&
-            (!new_slave && !new_master) {
+        // We don't have anything to do with this key.
+        if !new_slave && !new_master {
             c.data.DataRemove(key, 0)
         }
 
-        if old_master && !new_master {
+        // We aren't the master for this key.
+        if !new_master {
             c.data.EventFire(key, 0)
         }
     }

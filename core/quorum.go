@@ -87,7 +87,7 @@ func (c *Cluster) quorum(ring *ring, key Key, fn func(*Node, chan<- *QuorumResul
             if qrs.err != nil {
                 errstr = fmt.Sprintf("true (%s)", qrs.err.Error())
             }
-            utils.Print("QUORUM", "  node=%s rev=%d err=%s",
+            utils.Print("QUORUM", "  NODE id=%s rev=%d err=%s",
                 qrs.node.Id(), uint(qrs.rev), errstr)
         }
     }
@@ -123,22 +123,36 @@ func (c *Cluster) quorum(ring *ring, key Key, fn func(*Node, chan<- *QuorumResul
 
     // Find a quorum.
     var self_qr *QuorumResult
+    do_self := func() {
+        if self != nil && self_qr == nil {
+            go fn(self, res)
+            self_qr = <-res
+            dumpResult(self_qr)
+        }
+    }
+
     for rev, count := range revcounts {
 
         // If the remote nodes cover quorum.
         if count > (len(nodes) / 2) {
+
+            // Ensure that if we were supposed to aggregate
+            // ourself, then it is included in the result.
+            do_self()
+
             utils.Print("QUORUM", "SUCCESS rev=%d", uint(rev))
             return revrefs[rev], nil
 
-            // If the local node is one of the quorum.
+        // If the local node is one of the quorum.
+        // This is a complex structure to support the writing
+        // of the local node only after the remote nodes have
+        // successfully written. Note that above and below we
+        // may have to do the local function regardless.
+
         } else if self != nil && (count+1) > (len(nodes)/2) {
 
             // Try the local node.
-            if self_qr == nil {
-                go fn(self, res)
-                self_qr = <-res
-                dumpResult(self_qr)
-            }
+            do_self()
 
             // If it matches, we have quorum.
             if self_qr != nil && self_qr.err == nil && self_qr.rev == rev {
@@ -149,11 +163,19 @@ func (c *Cluster) quorum(ring *ring, key Key, fn func(*Node, chan<- *QuorumResul
                 utils.Print("QUORUM", "LOCAL-FAILURE %s", self_qr.err.Error())
                 err = self_qr.err
             }
+
+            // The local node did not match...
+            // We stop at this point and remember the maxrev.
             if self_qr != nil && self_qr.rev > maxrev {
                 maxrev = self_qr.rev
             }
         }
     }
+
+    // If we haven't yet committed ourself.
+    do_self()
+
+    // Aggregrate our self result.
     if self_qr != nil {
         revcounts[self_qr.rev] += 1
         revrefs[self_qr.rev] = self_qr
@@ -189,6 +211,7 @@ func (c *Cluster) quorum(ring *ring, key Key, fn func(*Node, chan<- *QuorumResul
 
 func (c *Cluster) quorumGet(ring *ring, key Key) ([]byte, Revision, error) {
     fn := func(node *Node, res chan<- *QuorumResult) {
+        utils.Print("QUORUM", "  GET key=%s", string(key))
         value, rev, err := c.doGet(node, key)
         res <- &QuorumResult{node, rev, value, err}
     }
@@ -204,6 +227,8 @@ func (c *Cluster) quorumGet(ring *ring, key Key) ([]byte, Revision, error) {
 
 func (c *Cluster) quorumSet(ring *ring, key Key, rev Revision, value []byte) (Revision, error) {
     fn := func(node *Node, res chan<- *QuorumResult) {
+        utils.Print("QUORUM", "  SET key=%s rev=%d len=%d",
+                    string(key), uint64(rev), len(value))
         rev, err := c.doSet(node, key, rev, value)
         res <- &QuorumResult{node, rev, value, err}
     }
@@ -216,6 +241,8 @@ func (c *Cluster) quorumSet(ring *ring, key Key, rev Revision, value []byte) (Re
 
 func (c *Cluster) quorumRemove(ring *ring, key Key, rev Revision) (Revision, error) {
     fn := func(node *Node, res chan<- *QuorumResult) {
+        utils.Print("QUORUM", "  REMOVE key=%s rev=%d",
+                    string(key), uint64(rev))
         rev, err := c.doRemove(node, key, rev)
         res <- &QuorumResult{node, rev, nil, err}
     }

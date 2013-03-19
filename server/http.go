@@ -279,9 +279,10 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
         // We fully specify the Content-Length that was written
         // and always return a revision (although often it will
         // be 0 because the call didn't have a revision).
+        revstr := strconv.FormatUint(uint64(rev), 10)
+        w.Header().Set("X-Revision", revstr)
         w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
-        w.Header().Set("X-Revision", strconv.FormatUint(uint64(rev), 10))
-        utils.Print("HTTP", "200")
+        utils.Print("HTTP", "200 X-Revision %s", revstr)
         io.Copy(w, buf)
         break
 
