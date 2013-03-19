@@ -81,6 +81,8 @@ func NewHiberaClient(addrs string, delay uint) *HiberaAPI {
         // environment variable is not set, we
         // use the default host and port.
         addrs = os.Getenv("HIBERA_API")
+    } else {
+        os.Setenv("HIBERA_API", addrs)
     }
     urls := utils.GenerateURLs(addrs, DefaultHost, DefaultPort)
     clientid := generateClientId()
