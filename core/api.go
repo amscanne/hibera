@@ -8,7 +8,7 @@ type Redirect struct {
     URL string
 }
 
-func (r Redirect) Error() string {
+func (r *Redirect) Error() string {
     return r.URL
 }
 
@@ -46,7 +46,7 @@ func (c *Cluster) doRedirect(conn *Connection, key Key) (bool, error) {
         return false, nil
     }
 
-    return false, Redirect{master.Addr}
+    return false, &Redirect{master.Addr}
 }
 
 func (c *Cluster) DataGet(conn *Connection, key Key) ([]byte, Revision, error) {

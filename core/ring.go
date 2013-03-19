@@ -97,8 +97,6 @@ func (r *ring) Recompute() {
 
     // Clear the cache.
     r.cache = make(map[string][]*Node)
-
-    utils.Print("CLUSTER", "RING=%d", len(r.sorted))
 }
 
 func (r *ring) IsMaster(key Key) bool {
@@ -218,4 +216,19 @@ func (r *ring) NodesFor(key Key) []*Node {
     }
 
     return cached
+}
+
+func (r *ring) dumpRing(items []Key) {
+    utils.Print("RING", "size=%d items=%d", len(r.sorted), len(items))
+
+    for _, item := range items {
+        var masterstr string
+        master := r.MasterFor(item)
+        if master != nil {
+            masterstr = master.Id()
+        } else {
+            masterstr = "nil"
+        }
+        utils.Print("RING", "  MAP key=%s master=%s", string(item), masterstr)
+    }
 }

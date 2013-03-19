@@ -281,10 +281,11 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
         // be 0 because the call didn't have a revision).
         w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
         w.Header().Set("X-Revision", strconv.FormatUint(uint64(rev), 10))
+        utils.Print("HTTP", "200")
         io.Copy(w, buf)
         break
 
-    case core.Redirect:
+    case *core.Redirect:
         // If we've gotten back a redirect error, then
         // we send the client to where it belongs.
         // NOTE: We actually use a permentant redirect
@@ -292,6 +293,7 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
         // smart clients might even try the newly given
         // location first.
         url := utils.MakeURL(err.Error(), r.URL.Path+"?"+r.URL.RawQuery, nil)
+        utils.Print("HTTP", "301 %s", url)
         http.Redirect(w, r, url, 301)
 
     default:
@@ -300,6 +302,7 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
         // so this is important information and can't just
         // be ignored by the client.
         w.Header().Set("X-Revision", strconv.FormatUint(uint64(rev), 10))
+        utils.Print("HTTP", "501")
         http.Error(w, err.Error(), 501)
         break
     }

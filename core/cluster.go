@@ -353,11 +353,14 @@ func NewCluster(backend *storage.Backend, domain string, ids []string) *Cluster 
                 c.dumpCluster()
                 c.data.dumpData()
                 c.Hub.dumpHub()
+                items, err := c.data.DataList()
+                if err == nil {
+                    c.ring.dumpRing(items)
+                }
             }
         }
     }
     signal.Notify(sigchan, syscall.SIGUSR1)
-    signal.Notify(sigchan, syscall.SIGUSR2)
     go handler()
 
     return c
