@@ -3,9 +3,11 @@ package utils
 import (
     "os"
     "log"
+    "strconv"
 )
 
 var cache = make(map[string]bool)
+var pid = strconv.FormatInt(int64(os.Getpid()), 10)
 
 func isLogging(module string) bool {
     val, present := cache[module]
@@ -21,6 +23,6 @@ func isLogging(module string) bool {
 
 func Print(module string, fmt string, v ...interface{}) {
     if isLogging(module) {
-        log.Printf(module + " " + fmt, v...)
+        log.Printf(pid + " " + module + " " + fmt, v...)
     }
 }
