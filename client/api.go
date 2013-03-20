@@ -201,8 +201,9 @@ func (h *HiberaAPI) doRequest(method string, args HttpArgs) (*http.Response, err
         }
 
         // Print a message to the console and retry.
-        utils.Print("CLIENT", "ERROR %s (delaying %d milliseconds)", err, h.delay)
-        time.Sleep(time.Duration(h.delay) * time.Millisecond)
+        random_delay := (rand.Int() % int(h.delay * 2)) + 1
+        utils.Print("CLIENT", "ERROR %s (delaying %d milliseconds)", err, random_delay)
+        time.Sleep(time.Duration(random_delay) * time.Millisecond)
     }
     return nil, nil
 }
