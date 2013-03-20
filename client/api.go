@@ -44,7 +44,14 @@ func generateClientId() string {
         // HiberaAPI class.
         os.Setenv("HIBERA_CLIENT_ID", clientid)
     }
+    utils.Print("CLIENT", "ID %s", clientid)
     return clientid
+}
+
+// Reference below to simply get control over redirects.
+var skipRedirect = errors.New("")
+func noRedirect(req *http.Request, via []*http.Request) error {
+    return skipRedirect
 }
 
 func NewHiberaAPI(urls []string, clientid string, delay uint) *HiberaAPI {
@@ -69,7 +76,7 @@ func NewHiberaAPI(urls []string, clientid string, delay uint) *HiberaAPI {
     tr := &http.Transport{
         TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
     }
-    api.Client = &http.Client{Transport: tr}
+    api.Client = &http.Client{Transport: tr, CheckRedirect: noRedirect}
 
     return api
 }
@@ -161,14 +168,17 @@ func (h *HiberaAPI) doRequest(method string, args HttpArgs) (*http.Response, err
             utils.Print("CLIENT", "%s %s", method, req.URL.String())
             resp, err = h.Client.Do(req)
             if err != nil {
-                break
+                urlerr, ok := err.(*url.Error)
+                if !ok || urlerr.Err != skipRedirect {
+                    break
+                }
             }
             utils.Print("CLIENT", "%s", resp.Status)
 
             if resp.StatusCode == http.StatusMovedPermanently ||
-                resp.StatusCode == http.StatusFound ||
-                resp.StatusCode == http.StatusSeeOther ||
-                resp.StatusCode == http.StatusTemporaryRedirect {
+               resp.StatusCode == http.StatusFound ||
+               resp.StatusCode == http.StatusSeeOther ||
+               resp.StatusCode == http.StatusTemporaryRedirect {
                 // Read the next location.
                 location := resp.Header.Get("Location")
                 utils.Print("CLIENT", "Redirecting to %s...", location)
