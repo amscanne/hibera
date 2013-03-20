@@ -77,6 +77,10 @@ synchronization commands:
          [-limit <limit>]            fetch the associated data. If
                                      not in the set, exit with in error.
 
+    out <key>                    --- If this process is part of
+         [-name <name>]              the synchronization group named,
+         [-limit <limit>]            set the associated data.
+
 data commands:
 
     get <key>                    --- Get the contents of the key.
@@ -297,6 +301,27 @@ func cli_in(c *client.HiberaAPI, key string, name string, limit uint) (bool, err
     return false, nil
 }
 
+func cli_out(c *client.HiberaAPI, key string, value *string, name string, limit uint) (bool, error) {
+    index, _, _, err := c.Members(key, name, limit)
+    if err != nil {
+        return false, err
+    }
+    if index >= 0 {
+        var err error
+        if value == nil {
+            // Fully read input.
+            buf := new(bytes.Buffer)
+            io.Copy(buf, os.Stdin)
+            _, err = c.Set(fmt.Sprintf("%s.%d", key, index), 0, buf.Bytes())
+        } else {
+            // Use the given string.
+            _, err = c.Set(fmt.Sprintf("%s.%d", key, index), 0, []byte(*value))
+        }
+        return true, err
+    }
+    return false, err
+}
+
 func cli_get(c *client.HiberaAPI, key string) error {
     value, _, err := c.Get(key)
     if err != nil {
@@ -308,10 +333,10 @@ func cli_get(c *client.HiberaAPI, key string) error {
 }
 
 func cli_set(c *client.HiberaAPI, key string, value *string) error {
-    buf := new(bytes.Buffer)
     var err error
     if value == nil {
         // Fully read input.
+        buf := new(bytes.Buffer)
         io.Copy(buf, os.Stdin)
         _, err = c.Set(key, 0, buf.Bytes())
     } else {
@@ -443,6 +468,18 @@ func main() {
     case "in":
         var in bool
         in, err = cli_in(c, key, *name, *limit)
+        if err == nil && !in {
+            os.Exit(1)
+        }
+        break
+    case "out":
+        var in bool
+        if flag.NArg() > 0 {
+            value := strings.Join(flag.Args(), " ")
+            in, err = cli_out(c, key, &value, *name, *limit)
+        } else {
+            in, err = cli_out(c, key, nil, *name, *limit)
+        }
         if err == nil && !in {
             os.Exit(1)
         }
