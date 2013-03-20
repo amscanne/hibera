@@ -18,15 +18,18 @@ import (
 )
 
 var UnhandledRequest = errors.New("Unhandled request")
+var DefaultActive = uint(256)
 
 type Listener struct {
-    *core.Cluster
     net.Listener
+    avail chan bool
+    *core.Cluster
 }
 
 type Connection struct {
-    *core.Connection
     net.Conn
+    *Listener
+    *core.Connection
 }
 
 type Addr struct {
@@ -48,8 +51,12 @@ type syncInfo struct {
 }
 
 func (l Listener) Accept() (net.Conn, error) {
+    // Wait for a slot to be available.
+    <-l.avail
+
     c, err := l.Listener.Accept()
     if err != nil {
+        l.avail<- true
         return c, err
     }
 
@@ -69,7 +76,7 @@ func (l Listener) Accept() (net.Conn, error) {
         }
         return true
     }
-    return Connection{l.Cluster.NewConnection(c.RemoteAddr().String(), alive), c}, nil
+    return Connection{c, &l, l.Cluster.NewConnection(c.RemoteAddr().String(), alive)}, nil
 }
 
 func (c Connection) RemoteAddr() net.Addr {
@@ -79,7 +86,12 @@ func (c Connection) RemoteAddr() net.Addr {
 func (c Connection) Close() error {
     // Inform the core about this dropped conn.
     c.Connection.Drop()
-    return c.Conn.Close()
+    err := c.Conn.Close()
+
+    // Let the Accept() know that a connection is available.
+    c.Listener.avail<- true
+
+    return err
 }
 
 func (a Addr) Network() string {
@@ -309,7 +321,7 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
     }
 }
 
-func NewHTTPServer(cluster *core.Cluster, addr string, port uint) *HTTPServer {
+func NewHTTPServer(cluster *core.Cluster, addr string, port uint, active uint) *HTTPServer {
     // Create our object.
     server := new(HTTPServer)
 
@@ -325,8 +337,13 @@ func NewHTTPServer(cluster *core.Cluster, addr string, port uint) *HTTPServer {
         log.Print("Unable to bind HTTP server: ", err)
         return nil
     }
-    server.Listener = &Listener{cluster, ln}
+    server.Listener = &Listener{ln, make(chan bool, active), cluster}
     server.Cluster = cluster
+
+    // Fill the available channel slots.
+    for i := uint(0); i < active; i += 1 {
+        server.Listener.avail <- true
+    }
 
     // Create our http server, and provide connections
     // using our hook listener to track active clients.

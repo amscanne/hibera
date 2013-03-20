@@ -18,6 +18,7 @@ var path = flag.String("path", storage.DefaultPath, "Backing storage path.")
 var domain = flag.String("domain", core.DefaultDomain, "Failure domain for this server.")
 var keys = flag.Uint("keys", core.DefaultKeys, "The number of keys for this node (weight).")
 var seeds = flag.String("seeds", server.DefaultSeeds, "Seeds for joining the cluster.")
+var active = flag.Uint("active", server.DefaultActive, "Maximum active simutaneous clients.")
 
 func main() {
     // NOTE: We need the random number generator,
@@ -46,7 +47,7 @@ func main() {
     }
 
     // Startup our server.
-    s := server.NewServer(cluster, *bind, *port, strings.Split(*seeds, ","))
+    s := server.NewServer(cluster, *bind, *port, strings.Split(*seeds, ","), *active)
     if s == nil {
         return
     }
