@@ -104,6 +104,15 @@ event commands:
          [-timeout <timeout>]
 
     fire <key>                   --- Notify all waiters on the key.
+
+upstart commands:
+
+    generate <config>            --- Generate an upstart configuration
+             <output>                for the given config file.
+
+    update <config> [files...]   --- Update the given files in relevant
+                                     services. If no files are specified,
+                                     then all service files are updated.
 `
 
 func do_exec(command string, input []byte) error {
@@ -429,8 +438,8 @@ func main() {
 
     key := ""
     if command == "info" ||
-        command == "ls" ||
-        command == "clear" {
+       command == "ls" ||
+       command == "clear" {
     } else {
         if len(os.Args) == 1 {
             usage()
@@ -440,10 +449,9 @@ func main() {
     }
     flag.Parse()
 
-    // Create our client.
-    c := client.NewHiberaClient(*api, *delay)
-    if c == nil {
-        return
+    client := func() *client.HiberaAPI {
+        // Create our client.
+        return client.NewHiberaClient(*api, *delay)
     }
 
     // Do our stuff.
@@ -453,21 +461,21 @@ func main() {
             var rev uint64
             rev, err = strconv.ParseUint(flag.Args()[0], 0, 64)
             if err == nil {
-                err = cli_info(c, rev)
+                err = cli_info(client(), rev)
             }
         } else {
-            err = cli_info(c, 0)
+            err = cli_info(client(), 0)
         }
     case "run":
         script := strings.Join(flag.Args(), " ")
-        err = cli_run(c, key, *name, *limit, *timeout, *start, *stop, script, *data)
+        err = cli_run(client(), key, *name, *limit, *timeout, *start, *stop, script, *data)
         break
     case "members":
-        err = cli_members(c, key, *name, *limit)
+        err = cli_members(client(), key, *name, *limit)
         break
     case "in":
         var in bool
-        in, err = cli_in(c, key, *name, *limit)
+        in, err = cli_in(client(), key, *name, *limit)
         if err == nil && !in {
             os.Exit(1)
         }
@@ -476,43 +484,53 @@ func main() {
         var in bool
         if flag.NArg() > 0 {
             value := strings.Join(flag.Args(), " ")
-            in, err = cli_out(c, key, &value, *name, *limit)
+            in, err = cli_out(client(), key, &value, *name, *limit)
         } else {
-            in, err = cli_out(c, key, nil, *name, *limit)
+            in, err = cli_out(client(), key, nil, *name, *limit)
         }
         if err == nil && !in {
             os.Exit(1)
         }
         break
     case "get":
-        err = cli_get(c, key)
+        err = cli_get(client(), key)
         break
     case "set":
         if flag.NArg() > 0 {
             value := strings.Join(flag.Args(), " ")
-            err = cli_set(c, key, &value)
+            err = cli_set(client(), key, &value)
         } else {
-            err = cli_set(c, key, nil)
+            err = cli_set(client(), key, nil)
         }
         break
     case "rm":
-        err = cli_rm(c, key)
+        err = cli_rm(client(), key)
         break
     case "ls":
-        err = cli_ls(c)
+        err = cli_ls(client())
         break
     case "clear":
-        err = cli_clear(c)
+        err = cli_clear(client())
         break
     case "sync":
         script := strings.Join(flag.Args(), " ")
-        err = cli_sync(c, key, *output, script, *timeout)
+        err = cli_sync(client(), key, *output, script, *timeout)
         break
     case "watch":
-        err = cli_watch(c, key, *timeout)
+        err = cli_watch(client(), key, *timeout)
         break
     case "fire":
-        err = cli_fire(c, key)
+        err = cli_fire(client(), key)
+        break
+    case "generate":
+        if flag.NArg() == 1 {
+            err = cli_generate(key, flag.Args()[0], *api)
+        } else {
+            usage()
+        }
+        break
+    case "update":
+        err = cli_update(client(), key, flag.Args()...)
         break
     default:
         usage()
