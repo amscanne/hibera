@@ -15,6 +15,8 @@ import (
 type Service struct {
     Start string
     Stop string
+    Pre []string
+    Post []string
     Limit uint
     Timeout uint
     Files []string
@@ -37,12 +39,12 @@ func make_upstart(output string, name string, config Service, api string) error 
     if n != len(header) || err != nil {
         return err
     }
-    pre_start := fmt.Sprintf("pre-start script\n    %s\nend script\n", config.Stop)
+    pre_start := fmt.Sprintf("pre-start script\n    %s\nend script\n", strings.Join(config.Pre, "\n    "))
     n, err = fo.WriteString(pre_start)
     if n != len(pre_start) || err != nil {
         return err
     }
-    post_stop := fmt.Sprintf("post-stop script\n    %s\nend script\n", config.Stop)
+    post_stop := fmt.Sprintf("post-stop script\n    %s\nend script\n", strings.Join(config.Post, "\n    "))
     n, err = fo.WriteString(post_stop)
     if n != len(post_stop) || err != nil {
         return err

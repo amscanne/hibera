@@ -105,10 +105,10 @@ event commands:
 
     fire <key>                   --- Notify all waiters on the key.
 
-upstart commands:
+helper commands:
 
-    generate <config>            --- Generate an upstart configuration
-             <output>                for the given config file.
+    generate <config> <out-dir>  --- Generate an upstart configuration
+                                     for the given config file.
 
     update <config> [files...]   --- Update the given files in relevant
                                      services. If no files are specified,
