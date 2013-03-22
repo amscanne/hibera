@@ -23,7 +23,7 @@ type Service struct {
     Sync string
 }
 
-func make_upstart(output string, name string, config Service, api string) error {
+func make_upstart(output string, name string, config *Service, api string) error {
     // Open the file.
     fullpath := filepath.Join(output, fmt.Sprintf("%s.conf", name))
     log.Printf("Generating %s...\n", fullpath)
@@ -61,7 +61,7 @@ func make_upstart(output string, name string, config Service, api string) error 
     return nil
 }
 
-func read_spec(input string) (map[string]Service, error) {
+func read_spec(input string) (map[string]*Service, error) {
     // Read the input file.
     data, err := ioutil.ReadFile(input)
     if err != nil {
@@ -69,7 +69,7 @@ func read_spec(input string) (map[string]Service, error) {
     }
 
     // Decode our JSON specification.
-    spec := make(map[string]Service)
+    spec := make(map[string]*Service)
     buf := bytes.NewBuffer(data)
     dec := json.NewDecoder(buf)
     err = dec.Decode(&spec)
@@ -82,10 +82,18 @@ func read_spec(input string) (map[string]Service, error) {
         new_files := make([]string, 0, 0)
         for _, file := range config.Files {
             found, err := filepath.Glob(file)
-            if err != nil {
+            if err == nil {
+                log.Printf("Expanding %s...\n", file)
                 new_files = append(new_files, found...)
+                for _, new_file := range new_files {
+                    log.Printf(" -> %s\n", new_file)
+                }
+            } else {
+                log.Printf("Error matching %s: %s.\n", file, err.Error())
             }
         }
+
+        // Update the spec.
         config.Files = new_files
     }
 
