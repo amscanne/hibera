@@ -42,7 +42,7 @@ func make_upstart(output string, name string, config Service, api string) error 
     if n != len(pre_start) || err != nil {
         return err
     }
-    syncstr := fmt.Sprintf("for file in $(hibera get %s); do hibera get %s/$file > $file; done; %s",
+    syncstr := fmt.Sprintf("for file in $(hibera get %s); do hibera get %s:$file > $file; done; %s",
                             name, name, config.Sync)
     execstr := fmt.Sprintf("exec hibera run %s -api '%s' -limit %d -timeout %d -start '%s' -stop '%s' hibera sync %s '%s'\n",
                             name, api, config.Limit, config.Timeout, config.Start, config.Stop, name, syncstr)
