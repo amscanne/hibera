@@ -224,22 +224,6 @@ func (h *HiberaAPI) Info(rev uint64) ([]byte, uint64, error) {
     return content, rev, err
 }
 
-func (h *HiberaAPI) Wait(key string, rev uint64, timeout uint) (uint64, error) {
-    args := h.makeArgs(fmt.Sprintf("/event/%s", key))
-    args.params["rev"] = strconv.FormatUint(rev, 10)
-    args.params["timeout"] = strconv.FormatUint(uint64(timeout), 10)
-    resp, err := h.doRequest("GET", args)
-    if err != nil {
-        return 0, err
-    }
-    if resp.StatusCode != 200 {
-        rev, _ = h.getRev(resp)
-        return rev, errors.New(resp.Status)
-    }
-    rev, err = h.getRev(resp)
-    return rev, err
-}
-
 func (h *HiberaAPI) Join(key string, name string, limit uint, timeout uint) (int, uint64, error) {
     args := h.makeArgs(fmt.Sprintf("/sync/%s", key))
     args.params["name"] = name
@@ -310,8 +294,41 @@ func (h *HiberaAPI) Members(key string, name string, limit uint) (int, []string,
     return info.Index, info.Members, rev, err
 }
 
-func (h *HiberaAPI) Get(key string) ([]byte, uint64, error) {
+func (h *HiberaAPI) Fire(key string, rev uint64) (uint64, error) {
+    args := h.makeArgs(fmt.Sprintf("/event/%s", key))
+    args.params["rev"] = strconv.FormatUint(rev, 10)
+    resp, err := h.doRequest("POST", args)
+    if err != nil {
+        return 0, err
+    }
+    if resp.StatusCode != 200 {
+        rev, _ = h.getRev(resp)
+        return rev, errors.New(resp.Status)
+    }
+    rev, err = h.getRev(resp)
+    return rev, err
+}
+
+func (h *HiberaAPI) Wait(key string, rev uint64, timeout uint) (uint64, error) {
+    args := h.makeArgs(fmt.Sprintf("/event/%s", key))
+    args.params["rev"] = strconv.FormatUint(rev, 10)
+    args.params["timeout"] = strconv.FormatUint(uint64(timeout), 10)
+    resp, err := h.doRequest("GET", args)
+    if err != nil {
+        return 0, err
+    }
+    if resp.StatusCode != 200 {
+        rev, _ = h.getRev(resp)
+        return rev, errors.New(resp.Status)
+    }
+    rev, err = h.getRev(resp)
+    return rev, err
+}
+
+func (h *HiberaAPI) Get(key string, rev uint64, timeout uint) ([]byte, uint64, error) {
     args := h.makeArgs(fmt.Sprintf("/data/%s", key))
+    args.params["rev"] = strconv.FormatUint(rev, 10)
+    args.params["timeout"] = strconv.FormatUint(uint64(timeout), 10)
     resp, err := h.doRequest("GET", args)
     if err != nil {
         return nil, 0, err
@@ -324,7 +341,7 @@ func (h *HiberaAPI) Get(key string) ([]byte, uint64, error) {
     if err != nil {
         return nil, 0, err
     }
-    rev, err := h.getRev(resp)
+    rev, err = h.getRev(resp)
     return content, rev, err
 }
 
@@ -390,19 +407,4 @@ func (h *HiberaAPI) Clear() error {
         return errors.New(resp.Status)
     }
     return nil
-}
-
-func (h *HiberaAPI) Fire(key string, rev uint64) (uint64, error) {
-    args := h.makeArgs(fmt.Sprintf("/event/%s", key))
-    args.params["rev"] = strconv.FormatUint(rev, 10)
-    resp, err := h.doRequest("POST", args)
-    if err != nil {
-        return 0, err
-    }
-    if resp.StatusCode != 200 {
-        rev, _ = h.getRev(resp)
-        return rev, errors.New(resp.Status)
-    }
-    rev, err = h.getRev(resp)
-    return rev, err
 }

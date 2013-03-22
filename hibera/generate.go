@@ -21,7 +21,7 @@ type Service struct {
     Sync string
 }
 
-func make_upstart(output string, name string, config Service) error {
+func make_upstart(output string, name string, config Service, api string) error {
     // Open the file.
     fullpath := filepath.Join(output, fmt.Sprintf("%s.conf", name))
     log.Printf("Generating %s...\n", fullpath)
@@ -44,8 +44,8 @@ func make_upstart(output string, name string, config Service) error {
     }
     syncstr := fmt.Sprintf("for file in $(hibera get %s); do hibera get %s/$file > $file; done; %s",
                             name, name, config.Sync)
-    execstr := fmt.Sprintf("exec hibera run %s -limit %d -timeout %d -start '%s' -stop '%s' hibera sync %s '%s'\n",
-                            name, config.Limit, config.Timeout, config.Start, config.Stop, name, syncstr)
+    execstr := fmt.Sprintf("exec hibera run %s -api '%s' -limit %d -timeout %d -start '%s' -stop '%s' hibera sync %s '%s'\n",
+                            name, api, config.Limit, config.Timeout, config.Start, config.Stop, name, syncstr)
     n, err = fo.WriteString(execstr)
     if n != len(execstr) || err != nil {
         return err
@@ -94,7 +94,7 @@ func cli_generate(input string, output string, api string) error {
     // Generate upstart files.
     log.Printf("Found %d services.\n", len(spec))
     for service, config := range spec {
-        err = make_upstart(output, service, config)
+        err = make_upstart(output, service, config, api)
         if err != nil {
             return err
         }
@@ -126,7 +126,7 @@ func cli_update(client *client.HiberaAPI, input string, files ...string) error {
                         log.Printf("Error reading %s: %s.", localfile, err.Error())
                         continue
                     }
-                    _, err = client.Set(fmt.Sprintf("%s/%s", service, file), 0, data)
+                    _, err = client.Set(fmt.Sprintf("%s:%s", service, file), 0, data)
                     if err != nil {
                         log.Printf("Error setting %s: %s.", localfile, err.Error())
                         continue
@@ -137,7 +137,7 @@ func cli_update(client *client.HiberaAPI, input string, files ...string) error {
         }
         if changed {
             // Reset the base key.
-            _, err = client.Set(service, 0, []byte(strings.Join(config.Files, "\n")))
+            _, err = client.Set(service, 0, []byte(strings.Join(config.Files, "\n") + "\n"))
             if err != nil {
                 log.Printf("Error setting %s: %s.", service, err.Error())
                 continue

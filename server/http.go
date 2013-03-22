@@ -208,13 +208,13 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
             switch r.Method {
             case "GET":
                 var items []core.Key
-                items, err = s.Cluster.DataList(conn)
+                items, err = s.Cluster.List(conn)
                 if err == nil {
                     err = enc.Encode(items)
                 }
                 break
             case "DELETE":
-                err = s.Cluster.DataClear(conn)
+                err = s.Cluster.Clear(conn)
                 break
             }
             break
@@ -229,7 +229,7 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
                 name := conn.Name(s.strParam(r, "name"))
                 limit := uint(s.intParam(r, "limit"))
                 info := syncInfo{}
-                info.Index, info.Members, rev, err = s.Cluster.SyncMembers(conn, core.Key(parts[1]), name, limit)
+                info.Index, info.Members, rev, err = s.Cluster.Members(conn, core.Key(parts[1]), name, limit)
                 if err == nil {
                     err = enc.Encode(info)
                 }
@@ -239,14 +239,14 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
                 limit := uint(s.intParam(r, "limit"))
                 timeout := uint(s.intParam(r, "timeout"))
                 var index int
-                index, rev, err = s.Cluster.SyncJoin(conn, core.Key(parts[1]), name, limit, timeout)
+                index, rev, err = s.Cluster.Join(conn, core.Key(parts[1]), name, limit, timeout)
                 if err == nil {
                     err = enc.Encode(index)
                 }
                 break
             case "DELETE":
                 name := conn.Name(s.strParam(r, "name"))
-                rev, err = s.Cluster.SyncLeave(conn, core.Key(parts[1]), name)
+                rev, err = s.Cluster.Leave(conn, core.Key(parts[1]), name)
                 break
             }
             break
@@ -254,18 +254,20 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
             switch r.Method {
             case "GET":
                 var value []byte
-                value, rev, err = s.Cluster.DataGet(conn, core.Key(parts[1]))
+                rev = core.Revision(s.intParam(r, "rev"))
+                timeout := uint(s.intParam(r, "timeout"))
+                value, rev, err = s.Cluster.Get(conn, core.Key(parts[1]), rev, timeout)
                 if err == nil {
                     _, err = buf.Write(value)
                 }
                 break
             case "POST":
                 rev = core.Revision(s.intParam(r, "rev"))
-                rev, err = s.Cluster.DataSet(conn, core.Key(parts[1]), rev, content)
+                rev, err = s.Cluster.Set(conn, core.Key(parts[1]), rev, content)
                 break
             case "DELETE":
                 rev = core.Revision(s.intParam(r, "rev"))
-                rev, err = s.Cluster.DataRemove(conn, core.Key(parts[1]), rev)
+                rev, err = s.Cluster.Remove(conn, core.Key(parts[1]), rev)
                 break
             }
             break
@@ -274,11 +276,11 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
             case "GET":
                 rev = core.Revision(s.intParam(r, "rev"))
                 timeout := uint(s.intParam(r, "timeout"))
-                rev, err = s.Cluster.EventWait(conn, core.Key(parts[1]), rev, timeout)
+                rev, err = s.Cluster.Wait(conn, core.Key(parts[1]), rev, timeout)
                 break
             case "POST":
                 rev = core.Revision(s.intParam(r, "rev"))
-                rev, err = s.Cluster.EventFire(conn, core.Key(parts[1]), rev)
+                rev, err = s.Cluster.Fire(conn, core.Key(parts[1]), rev)
                 break
             }
             break

@@ -20,18 +20,19 @@ type EphemeralSet map[EphemId]NameMap
 var NotFound = errors.New("Key not found or inconsistent")
 
 type Lock struct {
-    *sync.Cond
+    sem chan bool
+    waiters []chan bool
 }
 
 func (l *Lock) lock(key Key) {
-    utils.Print("DATA", "ACQUIRE key=%s", string(key))
-    l.Cond.L.Lock()
-    utils.Print("DATA", "ACQUIRED key=%s", string(key))
+    utils.Print("DATA", "key=%s acquiring", string(key))
+    <- l.sem
+    utils.Print("DATA", "key=%s acquired", string(key))
 }
 
 func (l *Lock) unlock(key Key) {
-    utils.Print("DATA", "RELEASE key=%s", string(key))
-    l.Cond.L.Unlock()
+    utils.Print("DATA", "key=%s released", string(key))
+    l.sem <- true
 }
 
 func (l *Lock) wait(key Key, timeout bool, duration time.Duration, alive func() bool) bool {
@@ -40,9 +41,10 @@ func (l *Lock) wait(key Key, timeout bool, duration time.Duration, alive func() 
     // is someone on the other end of the connection.
     // NOTE: When this function returns, we do *not*
     // want to call alive() anymore.
-    timeoutchan := make(chan bool)
-    deadconnchan := make(chan bool)
-    wakeupchan := make(chan bool)
+    timeoutchan := make(chan bool, 1)
+    deadconnchan := make(chan bool, 1)
+    wakeupchan := make(chan bool, 1)
+
     go func() {
         if timeout {
             time.Sleep(duration)
@@ -58,51 +60,55 @@ func (l *Lock) wait(key Key, timeout bool, duration time.Duration, alive func() 
             }
         }
     }()
-    go func() {
-        l.Cond.Wait()
-        wakeupchan <- true
-    }()
 
-    utils.Print("DATA", "WAIT key=%s", string(key))
+    // We release this lock at this point.
+    // NOTE that we've added our unique channel
+    // to the list of waiters, so when a notification
+    // happens we are guaranteed that we will get
+    // a notification.
+    utils.Print("DATA", "key=%s waiting", string(key))
+    l.waiters = append(l.waiters, wakeupchan)
+    l.sem <- true
 
     rval := true
+
     select {
+        case <- wakeupchan:
         case <- timeoutchan:
-            utils.Print("DATA", "WAIT TIMEOUT key=%s", string(key))
             // Ensure the connection channel is drained.
             alive = func() bool { return false }
             <- deadconnchan
-            // Ensure that wakeup chan is done.
-            l.Cond.Broadcast()
-            <- wakeupchan
             rval = true
             break
+
         case <- deadconnchan:
-            // Ensure the wakeup chan is done.
-            l.Cond.Broadcast()
-            <- wakeupchan
-            utils.Print("DATA", "WAIT DEAD key=%s", string(key))
             rval = false
             break
-        case <- wakeupchan:
-            // Ensure the connection chan is drained.
-            alive = func() bool { return false }
-            <- deadconnchan
-            utils.Print("DATA", "WAIT WAKE key=%s", string(key))
-            rval = true
-            break
     }
+
+    // Reaquire the lock before returning.
+    <- l.sem
+
     return rval
 }
 
 func (l *Lock) notify(key Key) {
-    utils.Print("DATA", "NOTIFY key=%s", string(key))
-    l.Cond.Broadcast()
+    utils.Print("DATA", "key=%s notifying", string(key))
+
+    // Send all application notifications.
+    for _, wakechan := range l.waiters {
+        wakechan <- true
+    }
+
+    // Reset our waiter list.
+    l.waiters = make([]chan bool, 0)
 }
 
 func NewLock() *Lock {
     lock := new(Lock)
-    lock.Cond = sync.NewCond(new(sync.Mutex))
+    lock.sem = make(chan bool, 1)
+    lock.waiters = make([]chan bool, 0)
+    lock.sem <- true
     return lock
 }
 
@@ -163,9 +169,11 @@ func (l *data) DataClear() error {
         return err
     }
 
-    // Fire watches.
-    for _, path := range items {
-        l.EventFire(Key(path), 0)
+    // Fire data watches.
+    for _, key := range items {
+        lock := l.lock(Key(key))
+        lock.notify(Key(key))
+        lock.unlock(Key(key))
     }
 
     return nil
@@ -327,17 +335,36 @@ func (l *data) SyncLeave(id EphemId, key Key, name string) (Revision, error) {
 }
 
 func (l *data) DataGet(key Key) ([]byte, Revision, error) {
-    lock := l.lock(key)
-    defer lock.unlock(key)
-
-    // Return the local value.
+    // Read the local value available.
     value, rev, err := l.store.Read(string(key))
     return value, Revision(rev), err
 }
 
-func (l *data) DataModify(key Key, rev Revision, mod func(Revision) error) (Revision, error) {
+func (l *data) DataWatch(id EphemId, key Key, rev Revision, timeout uint, alive func() bool) ([]byte, Revision, error) {
     lock := l.lock(key)
     defer lock.unlock(key)
+
+    if id > 0 {
+        getrev := func() (Revision, error) {
+            _, lrev, err := l.store.Read(string(key))
+            return Revision(lrev), err
+        }
+        rev, err := l.doWait(id, key, lock, rev, timeout, getrev, alive)
+        if err != nil {
+            return nil, rev, err
+        }
+    }
+
+    // Read the local store.
+    return l.DataGet(key)
+}
+
+func (l *data) DataModify(key Key, rev Revision, mod func(Revision) error) (Revision, error) {
+    lock := l.lock(key)
+    defer func() {
+        lock.notify(key)
+        lock.unlock(key)
+    }()
 
     // Read the existing data.
     _, orev, err := l.store.Read(string(key))
@@ -350,9 +377,6 @@ func (l *data) DataModify(key Key, rev Revision, mod func(Revision) error) (Revi
     if rev != 0 && rev <= Revision(orev) {
         return Revision(orev), err
     }
-
-    // Fire an event on the sync channel.
-    _, err = l.doFire(key, 0, lock)
 
     // Do the operation.
     return rev, mod(rev)
@@ -374,30 +398,19 @@ func (l *data) DataRemove(key Key, rev Revision) (Revision, error) {
     })
 }
 
-func (l *data) EventWait(id EphemId, key Key, rev Revision, timeout uint, alive func() bool) (Revision, error) {
-    lock := l.lock(key)
-    defer lock.unlock(key)
-
-    getrev := func() Revision {
-        _, lrev, err := l.store.Read(string(key))
-        if err == nil && lrev > 0 {
-            return Revision(lrev)
-        }
-        return l.revs[key]
-    }
-
-    // If the rev is 0, then we start waiting on the current rev.
-    if rev == 0 {
-        rev = getrev()
-    }
-
+func (l *data) doWait(id EphemId, key Key, lock *Lock, rev Revision, timeout uint, getrev func() (Revision, error), alive func() bool) (Revision, error) {
     start := time.Now()
     end := start.Add(time.Duration(timeout) * time.Millisecond)
 
     var currev Revision
+    var err error
+
     for {
         // Get the current revision.
-        currev = getrev()
+        currev, err = getrev()
+        if err != nil {
+            return currev, err
+        }
 
         // Wait until we are no longer on the given rev.
         if currev != rev {
@@ -416,6 +429,20 @@ func (l *data) EventWait(id EphemId, key Key, rev Revision, timeout uint, alive 
 
     // Return the new rev.
     return currev, nil
+}
+
+func (l *data) EventWait(id EphemId, key Key, rev Revision, timeout uint, alive func() bool) (Revision, error) {
+    lock := l.lock(key)
+    defer lock.unlock(key)
+
+    getrev := func() (Revision, error) {
+        return l.revs[key], nil
+    }
+    // If the rev is 0, then we start waiting on the current rev.
+    if rev == 0 {
+        rev, _ = getrev()
+    }
+    return l.doWait(id, key, lock, rev, timeout, getrev, alive)
 }
 
 func (l *data) doFire(key Key, rev Revision, lock *Lock) (Revision, error) {
@@ -439,15 +466,6 @@ func (l *data) doFire(key Key, rev Revision, lock *Lock) (Revision, error) {
 func (l *data) EventFire(key Key, rev Revision) (Revision, error) {
     lock := l.lock(key)
     defer lock.unlock(key)
-
-    // Check if we're talking about a local data item.
-    // We don't allow arbitrary event firing on a set 
-    // data item, this actually requires a full set (with
-    // quorum, etc.) in order to fire an event.
-    _, lrev, err := l.store.Read(string(key))
-    if err == nil && lrev > 0 {
-        return Revision(lrev), NotFound
-    }
 
     // Fire on a synchronization item.
     return l.doFire(key, rev, lock)
@@ -473,65 +491,6 @@ func (l *data) Purge(id EphemId) {
     }
 }
 
-type UpdateFn func(key Key) bool
-
-func (l *data) Update(fn UpdateFn) error {
-    l.Cond.L.Lock()
-    defer l.Cond.L.Unlock()
-
-    // Schedule an update for every key.
-    items, err := l.store.List()
-    if err != nil {
-        return err
-    }
-    for _, item := range items {
-        // Grab every lock.
-        key := Key(item)
-        lock := l.sync[key]
-        if lock == nil {
-            lock = NewLock()
-            l.sync[key] = lock
-        }
-        lock.lock(key)
-
-        // Construct our bottom halves.
-        doupdate := func() {
-            if !fn(key) {
-                delete(l.sync, key)
-                delete(l.keys, key)
-                delete(l.revs, key)
-                l.store.Delete(string(key))
-            }
-            lock.notify(key)
-            lock.unlock(key)
-        }
-        go doupdate()
-    }
-
-    return nil
-}
-
-func (l *data) loadRevs() error {
-    l.Cond.L.Lock()
-    defer l.Cond.L.Unlock()
-
-    items, err := l.store.List()
-    if err != nil {
-        return err
-    }
-
-    for _, item := range items {
-        // Save the revision into our map.
-        _, rev, err := l.store.Read(item)
-        if err != nil {
-            return err
-        }
-        l.revs[Key(item)] = Revision(rev)
-    }
-
-    return nil
-}
-
 func (l *data) dumpData() {
     l.Cond.L.Lock()
     defer l.Cond.L.Unlock()
@@ -551,16 +510,8 @@ func NewData(store *storage.Backend) *data {
     d := new(data)
     d.Cond = sync.NewCond(new(sync.Mutex))
     d.store = store
-    err := d.init()
-    if err != nil {
-        return nil
-    }
+    d.sync = make(map[Key]*Lock)
+    d.revs = make(RevisionMap)
+    d.keys = make(map[Key]*EphemeralSet)
     return d
-}
-
-func (l *data) init() error {
-    l.sync = make(map[Key]*Lock)
-    l.revs = make(RevisionMap)
-    l.keys = make(map[Key]*EphemeralSet)
-    return l.loadRevs()
 }

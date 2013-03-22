@@ -169,7 +169,7 @@ func cli_run(c *client.HiberaAPI, key string, name string, limit uint, timeout u
                 // Opportunistic read of the data.
                 // If there's nothing, we provide an empty set.
                 var datarev uint64
-                value, datarev, err = c.Get(fmt.Sprintf("%s.%d", key, newindex))
+                value, datarev, err = c.Get(fmt.Sprintf("%s.%d", key, newindex), 0, 0)
                 if err != nil {
                     datarev = uint64(0)
                 }
@@ -262,8 +262,8 @@ func cli_run(c *client.HiberaAPI, key string, name string, limit uint, timeout u
         // the process exits, then we will leave anyways.
         dowatch := func() {
             utils.Print("CLIENT", "WATCH-START")
-            _, err := c.Wait(key, newrev, timeout)
-            utils.Print("CLIENT", "WATCH-FIRED")
+            rev, err := c.Wait(key, newrev, timeout)
+            utils.Print("CLIENT", "WATCH-FIRED rev=%d", rev)
             watchchan <- err
         }
         go dowatch()
@@ -301,7 +301,7 @@ func cli_in(c *client.HiberaAPI, key string, name string, limit uint) (bool, err
         return false, err
     }
     if index >= 0 {
-        value, _, err := c.Get(fmt.Sprintf("%s.%d", key, index))
+        value, _, err := c.Get(fmt.Sprintf("%s.%d", key, index), 0, 0)
         if err == nil {
             os.Stdout.Write(value)
         }
@@ -332,7 +332,7 @@ func cli_out(c *client.HiberaAPI, key string, value *string, name string, limit 
 }
 
 func cli_get(c *client.HiberaAPI, key string) error {
-    value, _, err := c.Get(key)
+    value, _, err := c.Get(key, 0, 0)
     if err != nil {
         return err
     }
@@ -376,9 +376,16 @@ func cli_clear(c *client.HiberaAPI) error {
 }
 
 func cli_sync(c *client.HiberaAPI, key string, output string, cmd string, timeout uint) error {
+
+    rev := uint64(0)
+    var value []byte
+    var err error
+
     for {
         // Get the current value.
-        value, rev, err := c.Get(key)
+        utils.Print("CLIENT", "GET rev=%d", rev)
+        value, rev, err = c.Get(key, rev, timeout)
+        utils.Print("CLIENT", "GOT rev=%d", rev)
         if err != nil {
             return err
         }
@@ -394,12 +401,6 @@ func cli_sync(c *client.HiberaAPI, key string, output string, cmd string, timeou
         if cmd != "" {
             // Execute with the given output.
             do_exec(cmd, value)
-        }
-
-        // Wait for the next update.
-        rev, err = c.Wait(key, rev, timeout)
-        if err != nil {
-            return err
         }
     }
 

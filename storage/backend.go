@@ -4,7 +4,6 @@ import (
     "os"
     "io"
     "log"
-    "sync"
     "path"
     "bytes"
     "strings"
@@ -31,8 +30,7 @@ type Entry struct {
 
 type Update struct {
     Entry
-    error
-    *sync.Cond
+    result chan error
 }
 
 type Backend struct {
@@ -73,6 +71,7 @@ func NewBackend(p string) *Backend {
     // Create our backend.
     b := new(Backend)
     b.path = p
+    b.cs = make(chan *Update, MaximumLogBatch)
     err = b.init()
     if err != nil {
         return nil
@@ -124,7 +123,6 @@ func (b *Backend) init() error {
     b.data = data
     b.log1 = log1
     b.log2 = log2
-    b.cs = make(chan *Update)
 
     // After our initial load do a pivot.
     b.pivotLogs()
@@ -268,7 +266,7 @@ func (b *Backend) logWriter() {
 
         // Notify waiters.
         for _, update := range finished {
-            update.Cond.Broadcast()
+            update.result <- nil
         }
         finished = finished[0:0]
 
@@ -330,13 +328,9 @@ func (b *Backend) logWriter() {
 func (b *Backend) Write(key string, value []byte, rev uint64) error {
     val := Val{rev, value}
     entry := Entry{key, val}
-    mutex := sync.Mutex{}
-    update := Update{entry, nil, sync.NewCond(&mutex)}
-    mutex.Lock()
-    b.cs <- &update
-    update.Cond.Wait()
-    mutex.Unlock()
-    return update.error
+    update := &Update{entry, make(chan error, 1)}
+    b.cs<- update
+    return <-update.result
 }
 
 func (b *Backend) Read(key string) ([]byte, uint64, error) {

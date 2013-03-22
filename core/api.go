@@ -26,7 +26,7 @@ func (c *Cluster) Version() Revision {
     return c.rev
 }
 
-func (c *Cluster) DataList(conn *Connection) ([]Key, error) {
+func (c *Cluster) List(conn *Connection) ([]Key, error) {
     utils.Print("CLUSTER", "DATA-LIST")
     if c.Nodes.Heartbeat(conn.Name("")) {
         return c.data.DataList()
@@ -49,16 +49,17 @@ func (c *Cluster) doRedirect(conn *Connection, key Key) (bool, error) {
     return false, &Redirect{master.Addr}
 }
 
-func (c *Cluster) DataGet(conn *Connection, key Key) ([]byte, Revision, error) {
+func (c *Cluster) Get(conn *Connection, key Key, rev Revision, timeout uint) ([]byte, Revision, error) {
     utils.Print("CLUSTER", "DATA-GET key=%s", string(key))
     _, err := c.doRedirect(conn, key)
     if err != nil {
         return nil, Revision(0), err
     }
-    return c.data.DataGet(key)
+    alive := func() bool { return conn.alive() && c.ring.IsMaster(key) }
+    return c.data.DataWatch(conn.EphemId(), key, rev, timeout, alive)
 }
 
-func (c *Cluster) DataSet(conn *Connection, key Key, rev Revision, value []byte) (Revision, error) {
+func (c *Cluster) Set(conn *Connection, key Key, rev Revision, value []byte) (Revision, error) {
     utils.Print("CLUSTER", "DATA-SET key=%s len(value)=%d rev=%d", string(key), len(value), uint64(rev))
     server, err := c.doRedirect(conn, key)
     if err != nil {
@@ -70,7 +71,7 @@ func (c *Cluster) DataSet(conn *Connection, key Key, rev Revision, value []byte)
     return c.quorumSet(c.ring, key, rev, value)
 }
 
-func (c *Cluster) DataRemove(conn *Connection, key Key, rev Revision) (Revision, error) {
+func (c *Cluster) Remove(conn *Connection, key Key, rev Revision) (Revision, error) {
     utils.Print("CLUSTER", "DATA-REMOVE key=%s rev=%d", string(key), uint64(rev))
     server, err := c.doRedirect(conn, key)
     if err != nil {
@@ -82,7 +83,7 @@ func (c *Cluster) DataRemove(conn *Connection, key Key, rev Revision) (Revision,
     return c.quorumRemove(c.ring, key, rev)
 }
 
-func (c *Cluster) DataClear(conn *Connection) error {
+func (c *Cluster) Clear(conn *Connection) error {
     utils.Print("CLUSTER", "DATA-CLEAR")
     if c.Nodes.Heartbeat(conn.Name("")) {
         return c.data.DataClear()
@@ -90,7 +91,7 @@ func (c *Cluster) DataClear(conn *Connection) error {
     return c.allClear()
 }
 
-func (c *Cluster) SyncMembers(conn *Connection, key Key, name string, limit uint) (int, []string, Revision, error) {
+func (c *Cluster) Members(conn *Connection, key Key, name string, limit uint) (int, []string, Revision, error) {
     utils.Print("CLUSTER", "SYNC-MEMBERS key=%s name=%s limit=%d", string(key), name, limit)
     server, err := c.doRedirect(conn, key)
     if err != nil || server {
@@ -99,7 +100,7 @@ func (c *Cluster) SyncMembers(conn *Connection, key Key, name string, limit uint
     return c.data.SyncMembers(key, name, limit)
 }
 
-func (c *Cluster) SyncJoin(conn *Connection, key Key, name string, limit uint, timeout uint) (int, Revision, error) {
+func (c *Cluster) Join(conn *Connection, key Key, name string, limit uint, timeout uint) (int, Revision, error) {
     utils.Print("CLUSTER", "SYNC-JOIN key=%s name=%s limit=%d timeout=%d", string(key), name, limit, timeout)
     server, err := c.doRedirect(conn, key)
     if err != nil || server {
@@ -109,7 +110,7 @@ func (c *Cluster) SyncJoin(conn *Connection, key Key, name string, limit uint, t
     return c.data.SyncJoin(conn.EphemId(), key, name, limit, timeout, alive)
 }
 
-func (c *Cluster) SyncLeave(conn *Connection, key Key, name string) (Revision, error) {
+func (c *Cluster) Leave(conn *Connection, key Key, name string) (Revision, error) {
     utils.Print("CLUSTER", "SYNC-LEAVE key=%s name=%s", string(key), name)
     server, err := c.doRedirect(conn, key)
     if err != nil || server {
@@ -118,7 +119,7 @@ func (c *Cluster) SyncLeave(conn *Connection, key Key, name string) (Revision, e
     return c.data.SyncLeave(conn.EphemId(), key, name)
 }
 
-func (c *Cluster) EventWait(conn *Connection, key Key, rev Revision, timeout uint) (Revision, error) {
+func (c *Cluster) Wait(conn *Connection, key Key, rev Revision, timeout uint) (Revision, error) {
     utils.Print("CLUSTER", "EVENT-WAIT key=%s rev=%d timeout=%d", string(key), uint64(rev), timeout)
     server, err := c.doRedirect(conn, key)
     if err != nil || server {
@@ -128,7 +129,7 @@ func (c *Cluster) EventWait(conn *Connection, key Key, rev Revision, timeout uin
     return c.data.EventWait(conn.EphemId(), key, rev, timeout, alive)
 }
 
-func (c *Cluster) EventFire(conn *Connection, key Key, rev Revision) (Revision, error) {
+func (c *Cluster) Fire(conn *Connection, key Key, rev Revision) (Revision, error) {
     utils.Print("CLUSTER", "EVENT-FIRE key=%s rev=%d", string(key), uint64(rev))
     server, err := c.doRedirect(conn, key)
     if err != nil || server {

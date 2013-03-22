@@ -193,5 +193,12 @@ func NewHub(cluster *Cluster) *Hub {
     hub.connections = make(map[ConnectionId]*Connection)
     hub.clients = make(map[UserId]*Client)
     hub.Cluster = cluster
+
+    // NOTE: We start with a nextid that is 1, because
+    // some parts of the code consider nextid == 0 to be
+    // an invalid connection. Sure, it'll only ever bug
+    // out on the first connection *ever* but still.
+    hub.nextid = 1
+
     return hub
 }

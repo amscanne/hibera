@@ -34,7 +34,7 @@ func (c *Cluster) doGet(node *Node, key Key) ([]byte, Revision, error) {
     urls := make([]string, 1, 1)
     urls[0] = utils.MakeURL(node.Addr, "", nil)
     cl := client.NewHiberaAPI(urls, c.Id(), 0)
-    value, rev, err := cl.Get(string(key))
+    value, rev, err := cl.Get(string(key), 0, 0)
     return value, Revision(rev), err
 }
 
@@ -175,29 +175,17 @@ func (c *Cluster) quorum(ring *ring, key Key, fn func(*Node, chan<- *QuorumResul
     // If we haven't yet committed ourself.
     do_self()
 
+    // Check for the case of local authority.
+    if len(nodes) == 1 && nodes[0] == self && self_qr != nil {
+        return self_qr, nil
+    }
+
     // Aggregrate our self result.
     if self_qr != nil {
         revcounts[self_qr.rev] += 1
         revrefs[self_qr.rev] = self_qr
         if self_qr.rev > maxrev {
             maxrev = self_qr.rev
-        }
-    }
-
-    // Check for the case of local authority.
-    if len(nodes) == 1 && nodes[0] == self {
-        go fn(self, res)
-        qr := <-res
-        if qr != nil && qr.err == nil {
-            utils.Print("QUORUM", "LOCAL-SUCCESS rev=%d", uint(qr.rev))
-            return qr, nil
-        } else if qr == nil {
-            utils.Print("QUORUM", "LOCAL-FAILURE no result?")
-            return nil, nil
-        } else {
-            utils.Print("QUORUM", "LOCAL-FAILURE %s", qr.err.Error())
-            qr.rev = maxrev
-            return qr, qr.err
         }
     }
 

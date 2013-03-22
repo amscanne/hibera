@@ -6,7 +6,6 @@ import (
     "net"
     "math/rand"
     "time"
-    "sync"
     "code.google.com/p/goprotobuf/proto"
     "hibera/core"
     "hibera/client"
@@ -17,8 +16,6 @@ type GossipServer struct {
     *core.Cluster
     conn  *net.UDPConn
     seeds []string
-
-    sync.Mutex
 }
 
 // The send addresses when not in a cluster.
@@ -141,9 +138,6 @@ func NewGossipServer(cluster *core.Cluster, addr string, port uint, seeds []stri
 }
 
 func (s *GossipServer) process(addr *net.UDPAddr, m *Message) {
-    s.Mutex.Lock()
-    defer s.Mutex.Unlock()
-
     gossip := m.GetGossip()
     if gossip != nil {
         utils.Print("GOSSIP", "RECV %s (addr=%s,version=%d,id=%s)",
