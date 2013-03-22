@@ -115,8 +115,9 @@ upstart commands:
                                      then all service files are updated.
 `
 
-func do_exec(command string, input []byte) error {
-    cmd := exec.Command("sh", "-c", command)
+func do_exec(command []string, input []byte) error {
+    utils.Print("CLIENT", "Executing '%s'...", strings.Join(command, " "))
+    cmd := exec.Command(command[0], command[1:]...)
     cmd.Stdin = bytes.NewBuffer(input)
     cmd.Stdout = os.Stdout
     cmd.Stderr = os.Stderr
@@ -132,7 +133,7 @@ func cli_info(c *client.HiberaAPI, rev uint64) error {
     return nil
 }
 
-func cli_run(c *client.HiberaAPI, key string, name string, limit uint, timeout uint, start string, stop string, cmd string, dodata bool) error {
+func cli_run(c *client.HiberaAPI, key string, name string, limit uint, timeout uint, start []string, stop []string, cmd []string, dodata bool) error {
 
     var value []byte
     var proc *exec.Cmd
@@ -151,9 +152,8 @@ func cli_run(c *client.HiberaAPI, key string, name string, limit uint, timeout u
         // may have fired due to an underlying node change. This
         // means that the new node may have lost all ephemeral
         // information and membership may be completely new.
-        utils.Print("CLIENT", "JOINING key=%s name=%s limit=%d timeout=%d",
-            string(key), name, limit, timeout)
-        newindex, newrev, err := c.Join(key, name, limit, timeout)
+        utils.Print("CLIENT", "JOINING key=%s name=%s", string(key), name)
+        newindex, newrev, err := c.Join(key, name, limit, 1)
         if err != nil {
             return err
         }
@@ -209,7 +209,7 @@ func cli_run(c *client.HiberaAPI, key string, name string, limit uint, timeout u
                 }
             }
             if newindex < 0 && (oldindex != newindex) {
-                if stop != "" {
+                if stop != nil {
                     utils.Print("CLIENT", "EXEC-STOP")
                     do_exec(stop, value)
                 }
@@ -217,16 +217,16 @@ func cli_run(c *client.HiberaAPI, key string, name string, limit uint, timeout u
 
             // Start or stop appropriately.
             if newindex >= 0 && (newindex != oldindex) {
-                if start != "" {
+                if start != nil {
                     utils.Print("CLIENT", "EXEC-START")
                     do_exec(start, value)
                 }
             }
             if newindex >= 0 {
-                if proc == nil && cmd != "" {
+                if proc == nil && cmd != nil {
                     // Ensure our process is running.
                     utils.Print("CLIENT", "PROC-START")
-                    proc = exec.Command("sh", "-c", cmd)
+                    proc = exec.Command(cmd[0], cmd[1:]...)
                     proc.SysProcAttr = &syscall.SysProcAttr{
                         Chroot: "",
                         Pdeathsig: syscall.SIGTERM}
@@ -375,7 +375,7 @@ func cli_clear(c *client.HiberaAPI) error {
     return c.Clear()
 }
 
-func cli_sync(c *client.HiberaAPI, key string, output string, cmd string, timeout uint) error {
+func cli_sync(c *client.HiberaAPI, key string, output string, cmd []string, timeout uint) error {
 
     rev := uint64(0)
     var value []byte
@@ -398,7 +398,7 @@ func cli_sync(c *client.HiberaAPI, key string, output string, cmd string, timeou
             }
         }
 
-        if cmd != "" {
+        if cmd != nil {
             // Execute with the given output.
             do_exec(cmd, value)
         }
@@ -420,6 +420,30 @@ func cli_fire(c *client.HiberaAPI, key string) error {
 func usage() {
     fmt.Printf("%s\n", usagemsg)
     os.Exit(1)
+}
+
+func make_command(args ...string) []string {
+    // Skip empty commands.
+    if len(args) == 0 || (len(args) == 1 && len(args[0]) == 0) {
+        return nil
+    }
+
+    // Build up the appropriate shell execution.
+    var sh_arg string
+    if len(args) == 1 {
+        sh_arg = args[0]
+    } else {
+        formatted_args := make([]string, len(args), len(args))
+        for i, arg := range args {
+            formatted_args[i] = fmt.Sprintf("'%s'", strings.Replace(arg, "'", "\\'", -1))
+        }
+        sh_arg = strings.Join(formatted_args, " ")
+    }
+    cmd := make([]string, 3, 3)
+    cmd[0] = "sh"
+    cmd[1] = "-c"
+    cmd[2] = sh_arg
+    return cmd
 }
 
 func main() {
@@ -468,8 +492,10 @@ func main() {
             err = cli_info(client(), 0)
         }
     case "run":
-        script := strings.Join(flag.Args(), " ")
-        err = cli_run(client(), key, *name, *limit, *timeout, *start, *stop, script, *data)
+        cmd := make_command(flag.Args()...)
+        start_cmd := make_command(*start)
+        stop_cmd := make_command(*stop)
+        err = cli_run(client(), key, *name, *limit, *timeout, start_cmd, stop_cmd, cmd, *data)
         break
     case "members":
         err = cli_members(client(), key, *name, *limit)
@@ -514,8 +540,8 @@ func main() {
         err = cli_clear(client())
         break
     case "sync":
-        script := strings.Join(flag.Args(), " ")
-        err = cli_sync(client(), key, *output, script, *timeout)
+        cmd := make_command(flag.Args()...)
+        err = cli_sync(client(), key, *output, cmd, *timeout)
         break
     case "watch":
         err = cli_watch(client(), key, *timeout)
