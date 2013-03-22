@@ -353,9 +353,7 @@ func NewHTTPServer(cluster *core.Cluster, addr string, port uint, active uint) *
         server.process(w, r)
     }
     server.Server = &http.Server{
-        Handler:      http.HandlerFunc(handler),
-        ReadTimeout:  0,
-        WriteTimeout: 0,
+        Handler: http.HandlerFunc(handler),
     }
 
     // No error occured.
