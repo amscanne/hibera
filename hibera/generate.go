@@ -61,7 +61,7 @@ func make_upstart(output string, name string, config *Service, api string) error
     return nil
 }
 
-func read_spec(input string) (map[string]*Service, error) {
+func read_spec(input string, expand bool) (map[string]*Service, error) {
     // Read the input file.
     data, err := ioutil.ReadFile(input)
     if err != nil {
@@ -75,6 +75,10 @@ func read_spec(input string) (map[string]*Service, error) {
     err = dec.Decode(&spec)
     if err != nil {
         return nil, err
+    }
+
+    if !expand {
+        return spec, nil
     }
 
     // Expand globs.
@@ -101,7 +105,7 @@ func read_spec(input string) (map[string]*Service, error) {
 }
 
 func cli_generate(input string, output string, api string) error {
-    spec, err := read_spec(input)
+    spec, err := read_spec(input, false)
     if err != nil {
         return err
     }
@@ -120,7 +124,7 @@ func cli_generate(input string, output string, api string) error {
 }
 
 func cli_update(client *client.HiberaAPI, input string, files ...string) error {
-    spec, err := read_spec(input)
+    spec, err := read_spec(input, true)
     if err != nil {
         return err
     }
