@@ -147,17 +147,13 @@ func (s *GossipServer) process(addr *net.UDPAddr, m *Message) {
             TYPE_name[int32(m.GetType())], addr, m.GetVersion())
     }
 
-    switch m.GetType() {
-    case uint32(TYPE_PING):
+    // Heartbeat.
+    s.Cluster.Heartbeat(*gossip.Id, addr,
+        core.Revision(m.GetVersion()), m.GetNodes(), gossip.Dead)
+
+    if m.GetType() == uint32(TYPE_PING) {
         // Respond to the ping.
         go s.sendPingPong(addr, true)
-        break
-
-    case uint32(TYPE_PONG):
-        // Heartbeat (we have two-way communication).
-        s.Cluster.Heartbeat(*gossip.Id, addr,
-            core.Revision(m.GetVersion()), m.GetNodes(), gossip.Dead)
-        break
     }
 }
 
