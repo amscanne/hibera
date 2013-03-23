@@ -19,6 +19,7 @@ import (
 )
 
 var api = flag.String("api", "", "API address.")
+var auth = flag.String("auth", "", "Authorization key.")
 var timeout = flag.Uint("timeout", 0, "Timeout (in ms) for acquiring a lock.")
 var name = flag.String("name", "", "Name to use (other than machine address).")
 var start = flag.String("start", "", "Script to start the given service.")
@@ -34,6 +35,8 @@ options for all commands:
 
     [-api <address:port>         --- The API address.
          [,<address:port>...]]
+
+    [-auth <authorization-key>]  --- The authorization key.
 
     [-delay <delay>]             --- Delay in milliseconds to
                                      reconnect to API servers.
@@ -476,7 +479,7 @@ func main() {
 
     client := func() *client.HiberaAPI {
         // Create our client.
-        return client.NewHiberaClient(*api, *delay)
+        return client.NewHiberaClient(*api, *auth, *delay)
     }
 
     // Do our stuff.

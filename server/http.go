@@ -159,17 +159,24 @@ func (s *HTTPServer) getConnection(r *http.Request) *core.Connection {
 func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
     utils.Print("HTTP", "%s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
 
+    // Check the authorization header.
+    if len(r.Header["X-Authorization"]) == 0 ||
+       !s.Cluster.Authorize(r.Header["X-Authorization"][0]) {
+        http.Error(w, "", http.StatusForbidden)
+        return
+    }
+
     // Pull out a connection.
     conn := s.getConnection(r)
     if conn == nil {
-        http.Error(w, "", 403)
+        http.Error(w, "", http.StatusNotFound)
         return
     }
 
     // Fully read the content.
     content, err := s.getContent(r)
     if err != nil {
-        http.Error(w, "", 500)
+        http.Error(w, "", http.StatusNoContent)
         return
     }
 
@@ -309,7 +316,7 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
         // location first.
         url := utils.MakeURL(err.Error(), r.URL.Path+"?"+r.URL.RawQuery, nil)
         utils.Print("HTTP", "301 %s", url)
-        http.Redirect(w, r, url, 301)
+        http.Redirect(w, r, url, http.StatusMovedPermanently)
 
     default:
         // Even with errors, we set a revision header.
@@ -318,7 +325,7 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
         // be ignored by the client.
         w.Header().Set("X-Revision", strconv.FormatUint(uint64(rev), 10))
         utils.Print("HTTP", "501")
-        http.Error(w, err.Error(), 501)
+        http.Error(w, err.Error(), http.StatusInternalServerError)
         break
     }
 }

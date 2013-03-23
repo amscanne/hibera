@@ -22,6 +22,7 @@ var DefaultHost = "localhost"
 
 type HiberaAPI struct {
     urls     []string
+    auth     string
     clientid string
     delay    uint
     *http.Client
@@ -54,7 +55,7 @@ func noRedirect(req *http.Request, via []*http.Request) error {
     return skipRedirect
 }
 
-func NewHiberaAPI(urls []string, clientid string, delay uint) *HiberaAPI {
+func NewHiberaAPI(urls []string, auth string, clientid string, delay uint) *HiberaAPI {
     // Check the clientId.
     if clientid == "" {
         return nil
@@ -63,6 +64,7 @@ func NewHiberaAPI(urls []string, clientid string, delay uint) *HiberaAPI {
     // Allocate our client.
     api := new(HiberaAPI)
     api.urls = urls
+    api.auth = auth
     api.clientid = clientid
     api.delay = delay
 
@@ -81,7 +83,7 @@ func NewHiberaAPI(urls []string, clientid string, delay uint) *HiberaAPI {
     return api
 }
 
-func NewHiberaClient(addrs string, delay uint) *HiberaAPI {
+func NewHiberaClient(addrs string, auth string, delay uint) *HiberaAPI {
     if addrs == "" {
         // If no addrs are provided, try using
         // the environment variable. If this
@@ -91,9 +93,15 @@ func NewHiberaClient(addrs string, delay uint) *HiberaAPI {
     } else {
         os.Setenv("HIBERA_API", addrs)
     }
+    if auth == "" {
+        // Same for auth.
+        auth = os.Getenv("HIBERA_AUTH")
+    } else {
+        os.Setenv("HIBERA_AUTH", auth)
+    }
     urls := utils.GenerateURLs(addrs, DefaultHost, DefaultPort)
     clientid := generateClientId()
-    return NewHiberaAPI(urls, clientid, delay)
+    return NewHiberaAPI(urls, auth, clientid, delay)
 }
 
 // This object is used to serialize
@@ -150,6 +158,7 @@ func (h *HiberaAPI) makeRequest(method string, args HttpArgs) (*http.Request, er
 
     // Append headers.
     req.Header.Add("X-Client-Id", h.clientid)
+    req.Header.Add("X-Authorization", h.auth)
     for key, value := range args.headers {
         req.Header.Add(key, value)
     }
@@ -175,6 +184,12 @@ func (h *HiberaAPI) doRequest(method string, args HttpArgs) (*http.Response, err
             }
             utils.Print("CLIENT", "%s", resp.Status)
 
+            // Check for a permission problem (don't retry).
+            if resp.StatusCode == http.StatusForbidden {
+                return resp, err
+            }
+
+            // Check for a redirect.
             if resp.StatusCode == http.StatusMovedPermanently ||
                resp.StatusCode == http.StatusFound ||
                resp.StatusCode == http.StatusSeeOther ||

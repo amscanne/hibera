@@ -12,6 +12,10 @@ func (r *Redirect) Error() string {
     return r.URL
 }
 
+func (c *Cluster) Authorize(auth string) bool {
+    return auth == c.auth
+}
+
 func (c *Cluster) Info(revision Revision) ([]byte, Revision, error) {
     utils.Print("CLUSTER", "INFO")
     bytes, err := c.Nodes.Encode(revision, false)

@@ -21,7 +21,7 @@ func (c *Cluster) doSet(node *Node, key Key, rev Revision, value []byte) (Revisi
 
     urls := make([]string, 1, 1)
     urls[0] = utils.MakeURL(node.Addr, "", nil)
-    cl := client.NewHiberaAPI(urls, c.Id(), 0)
+    cl := client.NewHiberaAPI(urls, c.auth, c.Id(), 0)
     rrev, err := cl.Set(string(key), uint64(rev), value)
     return Revision(rrev), err
 }
@@ -33,7 +33,7 @@ func (c *Cluster) doGet(node *Node, key Key) ([]byte, Revision, error) {
 
     urls := make([]string, 1, 1)
     urls[0] = utils.MakeURL(node.Addr, "", nil)
-    cl := client.NewHiberaAPI(urls, c.Id(), 0)
+    cl := client.NewHiberaAPI(urls, c.auth, c.Id(), 0)
     value, rev, err := cl.Get(string(key), 0, 0)
     return value, Revision(rev), err
 }
@@ -45,7 +45,7 @@ func (c *Cluster) doRemove(node *Node, key Key, rev Revision) (Revision, error) 
 
     urls := make([]string, 1, 1)
     urls[0] = utils.MakeURL(node.Addr, "", nil)
-    cl := client.NewHiberaAPI(urls, c.Id(), 0)
+    cl := client.NewHiberaAPI(urls, c.auth, c.Id(), 0)
     rrev, err := cl.Remove(string(key), uint64(rev))
     return Revision(rrev), err
 }
@@ -253,7 +253,7 @@ func (c *Cluster) doList(node *Node) ([]Key, error) {
 
     urls := make([]string, 1, 1)
     urls[0] = utils.MakeURL(node.Addr, "", nil)
-    cl := client.NewHiberaAPI(urls, c.Id(), 0)
+    cl := client.NewHiberaAPI(urls, c.auth, c.Id(), 0)
     items, err := cl.List()
     if items == nil || err != nil {
         return nil, err
@@ -272,7 +272,7 @@ func (c *Cluster) doClear(node *Node) error {
 
     urls := make([]string, 1, 1)
     urls[0] = utils.MakeURL(node.Addr, "", nil)
-    cl := client.NewHiberaAPI(urls, c.Id(), 0)
+    cl := client.NewHiberaAPI(urls, c.auth, c.Id(), 0)
     return cl.Clear()
 }
 

@@ -19,6 +19,9 @@ var DefaultKeys = uint(128)
 var HiberaKey = Key("hibera")
 
 type Cluster struct {
+    // Our authorization key.
+    auth string
+
     // Our connection hub.
     *Hub
 
@@ -77,7 +80,7 @@ func (c *Cluster) Activate(rev Revision) {
 
 func (c *Cluster) doSync(id string, addr *net.UDPAddr, from Revision) {
     // Pull the remote info from the node.
-    cl := client.NewHiberaAPI(utils.AsURLs(addr), c.Id(), 0)
+    cl := client.NewHiberaAPI(utils.AsURLs(addr), c.auth, c.Id(),0)
     data, rev, err := cl.Info(uint64(from))
     if err != nil {
         utils.Print("CLUSTER", "SYNC-CLIENT-ERROR id=%s %s",
@@ -319,8 +322,9 @@ func (c *Cluster) timedHealthcheck() {
     time.AfterFunc(time.Duration(1)*time.Second, f)
 }
 
-func NewCluster(backend *storage.Backend, domain string, ids []string) *Cluster {
+func NewCluster(backend *storage.Backend, auth string, domain string, ids []string) *Cluster {
     c := new(Cluster)
+    c.auth = auth
     c.Nodes = NewNodes(ids, domains(domain))
     c.data = NewData(backend)
     c.ring = NewRing(c.Nodes)

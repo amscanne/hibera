@@ -12,6 +12,7 @@ import (
     "hibera/core"
 )
 
+var auth = flag.String("auth", "", "Authorization key.")
 var bind = flag.String("bind", server.DefaultBind, "Bind address for the server.")
 var port = flag.Uint("port", client.DefaultPort, "Bind port for the server.")
 var path = flag.String("path", storage.DefaultPath, "Backing storage path.")
@@ -41,7 +42,7 @@ func main() {
     if err != nil {
         log.Fatal("Unable to load keys: ", err)
     }
-    cluster := core.NewCluster(backend, *domain, ids)
+    cluster := core.NewCluster(backend, *auth, *domain, ids)
     if cluster == nil {
         return
     }
