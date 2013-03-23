@@ -45,6 +45,8 @@ cluster commands:
 
     info                         --- Show cluster info.
 
+    bump <rev>                   --- Bump the global revision.
+
 synchronization commands:
 
     run <key>                    --- Conditionally run up-to <limit>
@@ -134,6 +136,12 @@ func cli_info(c *client.HiberaAPI, rev uint64) error {
     }
     os.Stdout.Write(value)
     return nil
+}
+
+func cli_bump(c *client.HiberaAPI, rev uint64) error {
+    rev, err := c.Bump(rev)
+    fmt.Printf("%d\n", rev)
+    return err
 }
 
 func cli_run(c *client.HiberaAPI, key string, name string, limit uint, timeout uint, start []string, stop []string, cmd []string, dodata bool) error {
@@ -485,15 +493,15 @@ func main() {
     // Do our stuff.
     switch command {
     case "info":
-        if flag.NArg() > 0 {
-            var rev uint64
-            rev, err = strconv.ParseUint(flag.Args()[0], 0, 64)
-            if err == nil {
-                err = cli_info(client(), rev)
-            }
-        } else {
-            err = cli_info(client(), 0)
+        err = cli_info(client(), 0)
+        break
+    case "bump":
+        var rev uint64
+        rev, err = strconv.ParseUint(key, 0, 64)
+        if err == nil {
+            err = cli_bump(client(), rev)
         }
+        break
     case "run":
         cmd := make_command(flag.Args()...)
         start_cmd := make_command(*start)

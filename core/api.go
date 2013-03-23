@@ -12,14 +12,41 @@ func (r *Redirect) Error() string {
     return r.URL
 }
 
+func (c *Cluster) doRedirect(conn *Connection, key Key) (bool, error) {
+    // Check for other servers.
+    if c.Nodes.Heartbeat(conn.Name("")) {
+        return true, nil
+    }
+
+    // Redirect to the master.
+    master := c.ring.MasterFor(key)
+    if master == nil || master == c.Nodes.Self() {
+        return false, nil
+    }
+
+    return false, &Redirect{master.Addr}
+}
+
 func (c *Cluster) Authorize(auth string) bool {
     return auth == c.auth
 }
 
-func (c *Cluster) Info(revision Revision) ([]byte, Revision, error) {
+func (c *Cluster) Info(conn *Connection, rev Revision) ([]byte, Revision, error) {
     utils.Print("CLUSTER", "INFO")
-    bytes, err := c.Nodes.Encode(revision, false)
+    bytes, err := c.Nodes.Encode(rev, false)
     return bytes, c.rev, err
+}
+
+func (c *Cluster) Bump(conn *Connection, rev Revision) (Revision, error) {
+    _, err := c.doRedirect(conn, HiberaKey)
+    if err != nil {
+        return Revision(0), err
+    }
+
+    c.Mutex.Lock()
+    defer c.Mutex.Unlock()
+    c.changeRevision(rev, false)
+    return c.rev, nil
 }
 
 func (c *Cluster) Id() string {
@@ -36,21 +63,6 @@ func (c *Cluster) List(conn *Connection) ([]Key, error) {
         return c.data.DataList()
     }
     return c.allList()
-}
-
-func (c *Cluster) doRedirect(conn *Connection, key Key) (bool, error) {
-    // Check for other servers.
-    if c.Nodes.Heartbeat(conn.Name("")) {
-        return true, nil
-    }
-
-    // Redirect to the master.
-    master := c.ring.MasterFor(key)
-    if master == nil || master == c.Nodes.Self() {
-        return false, nil
-    }
-
-    return false, &Redirect{master.Addr}
 }
 
 func (c *Cluster) Get(conn *Connection, key Key, rev Revision, timeout uint) ([]byte, Revision, error) {

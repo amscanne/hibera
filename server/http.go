@@ -203,10 +203,14 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
             case "GET":
                 rev = core.Revision(s.intParam(r, "rev"))
                 var data []byte
-                data, rev, err = s.Cluster.Info(rev)
+                data, rev, err = s.Cluster.Info(conn, rev)
                 if err == nil {
                     _, err = buf.Write(data)
                 }
+                break
+            case "POST":
+                rev = core.Revision(s.intParam(r, "rev"))
+                rev, err = s.Cluster.Bump(conn, rev)
                 break
             }
             break
