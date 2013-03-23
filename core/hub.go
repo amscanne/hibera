@@ -1,6 +1,7 @@
 package core
 
 import (
+    "strings"
     "sync"
     "sync/atomic"
     "hibera/utils"
@@ -47,6 +48,10 @@ type Client struct {
     // This will be passed in via a header.
     UserId
 
+    // The name used for members of sets. The UserId
+    // above is not exposed for security reasons.
+    Name string
+
     // The number of active Connection objects
     // refering to this User object. The User
     // objects are reference counted and garbage
@@ -75,7 +80,7 @@ func (c *Connection) Name(name string) string {
         return name
     }
     if c.client != nil {
-        return string(c.client.UserId)
+        return c.client.Name
     }
     return string(c.addr)
 }
@@ -132,6 +137,8 @@ func (c *Hub) FindConnection(id ConnectionId, userid UserId) *Connection {
             conn.client = new(Client)
             conn.client.ClientId = ClientId(c.genid())
             conn.client.UserId = userid
+            noport := strings.Split(string(conn.addr), ":")[0]
+            conn.client.Name = hash(string(userid))[:8] + "@" + noport
             conn.client.refs = 1
             c.clients[userid] = conn.client
         } else {
