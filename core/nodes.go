@@ -120,8 +120,8 @@ func (nodes *Nodes) Activate(id string, rev Revision) bool {
     if !node.Active {
         node.Active = true
         node.Modified = rev
-        node.RstDropped()
     }
+    node.RstDropped()
 
     return true
 }
@@ -340,6 +340,14 @@ func (nodes *Nodes) dumpNodes() {
     for id, node := range nodes.all {
         utils.Print("CLUSTER", "  %s %s active=%t dropped=%d",
             id, node.Addr, node.Active, node.Dropped)
+    }
+}
+
+func (nodes *Nodes) Reset() {
+    for id, node := range nodes.all {
+        if node != nodes.self {
+            delete(nodes.all, id)
+        }
     }
 }
 

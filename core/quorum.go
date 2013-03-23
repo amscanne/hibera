@@ -276,6 +276,22 @@ func (c *Cluster) doClear(node *Node) error {
     return cl.Clear()
 }
 
+func (c *Cluster) doReset(node *Node) error {
+    if node == c.Nodes.Self() {
+        err := c.data.DataClear()
+        if err != nil {
+            return err
+        }
+        c.Activate()
+        return nil
+    }
+
+    urls := make([]string, 1, 1)
+    urls[0] = utils.MakeURL(node.Addr, "", nil)
+    cl := client.NewHiberaAPI(urls, c.auth, c.Id(), 0)
+    return cl.Reset()
+}
+
 func (c *Cluster) allList() ([]Key, error) {
     nodes := c.Nodes.Active()
     items := make(map[Key]bool)
@@ -331,6 +347,33 @@ func (c *Cluster) allClear() error {
     // Setup all the requests.
     fn := func(node *Node, res chan<- error) {
         res <- c.doClear(node)
+    }
+    reschan := make(chan error)
+    for _, node := range nodes {
+        go fn(node, reschan)
+    }
+
+    // Read all results.
+    var err error
+    for i, _ := range nodes {
+        nerr := <-reschan
+        if nerr != nil {
+            utils.Print("QUORUM", "  %d %s", i, err)
+            err = nerr
+        }
+    }
+
+    return err
+}
+
+func (c *Cluster) allReset() error {
+    nodes := c.Nodes.Active()
+
+    utils.Print("QUORUM", "RESET %d", len(nodes))
+
+    // Setup all the requests.
+    fn := func(node *Node, res chan<- error) {
+        res <- c.doReset(node)
     }
     reschan := make(chan error)
     for _, node := range nodes {

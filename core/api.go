@@ -37,16 +37,21 @@ func (c *Cluster) Info(conn *Connection, rev Revision) ([]byte, Revision, error)
     return bytes, c.rev, err
 }
 
-func (c *Cluster) Bump(conn *Connection, rev Revision) (Revision, error) {
-    _, err := c.doRedirect(conn, HiberaKey)
+func (c *Cluster) Reset(conn *Connection) error {
+    server, err := c.doRedirect(conn, HiberaKey)
     if err != nil {
-        return Revision(0), err
+        return err
+    }
+    if server {
+        err := c.data.DataClear()
+        if err != nil {
+            return err
+        }
+        c.Activate()
+        return nil
     }
 
-    c.Mutex.Lock()
-    defer c.Mutex.Unlock()
-    c.changeRevision(rev, false)
-    return c.rev, nil
+    return c.allReset()
 }
 
 func (c *Cluster) Id() string {

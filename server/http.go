@@ -160,8 +160,11 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
     utils.Print("HTTP", "%s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
 
     // Check the authorization header.
-    if len(r.Header["X-Authorization"]) == 0 ||
-       !s.Cluster.Authorize(r.Header["X-Authorization"][0]) {
+    var auth string
+    if len(r.Header["X-Authorization"]) > 0 {
+        auth = r.Header["X-Authorization"][0]
+    }
+    if !s.Cluster.Authorize(auth) {
         http.Error(w, "", http.StatusForbidden)
         return
     }
@@ -208,9 +211,8 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
                     _, err = buf.Write(data)
                 }
                 break
-            case "POST":
-                rev = core.Revision(s.intParam(r, "rev"))
-                rev, err = s.Cluster.Bump(conn, rev)
+            case "DELETE":
+                err = s.Cluster.Reset(conn)
                 break
             }
             break

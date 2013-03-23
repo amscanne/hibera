@@ -54,28 +54,32 @@ type Cluster struct {
     sync.Mutex
 }
 
-func (c *Cluster) Activate(rev Revision) {
+func (c *Cluster) Activate() {
     c.Mutex.Lock()
     defer c.Mutex.Unlock()
 
+    // Reset our revision (hard).
+    c.rev = Revision(0)
+
+    // Reset the nodes state.
+    c.Nodes.Reset()
+
     // Activate our node.
-    if !c.Nodes.Activate(c.Id(), rev) {
-        // No information has been fetched on this node before.
-        // We can't activate until refreshAddr() has completed.
-        utils.Print("CLUSTER", "ACTIVATE-ERROR rev=%d", rev)
+    if !c.Nodes.Activate(c.Id(), c.rev) {
+        utils.Print("CLUSTER", "ACTIVATE-ERROR")
         return
     }
 
     // Write the cluster data.
     bytes, err := c.Nodes.Encode(0, false)
-    rev, err = c.data.DataSet(HiberaKey, rev, bytes)
+    c.rev, err = c.data.DataSet(HiberaKey, c.rev, bytes)
     if err != nil {
         utils.Print("CLUSTER", "WRITE-ERROR %s", err.Error())
         return
     }
 
-    utils.Print("CLUSTER", "ACTIVATE-OKAY rev=%d", rev)
-    c.changeRevision(rev, true)
+    utils.Print("CLUSTER", "ACTIVATE-OKAY rev=%d", c.rev)
+    c.changeRevision(c.rev, true)
 }
 
 func (c *Cluster) doSync(id string, addr *net.UDPAddr, from Revision) {
@@ -342,7 +346,7 @@ func NewCluster(backend *storage.Backend, auth string, domain string, ids []stri
     }
     if !activated {
         // Activate a cluster of one.
-        c.Activate(Revision(0))
+        c.Activate()
     }
 
     // Start running our healthcheck.

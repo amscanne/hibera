@@ -132,7 +132,7 @@ func (h *HiberaAPI) getRev(resp *http.Response) (uint64, error) {
         return 0, NoRevision
     }
     revint, err := strconv.ParseUint(rev[0], 0, 64)
-    if err != nil {
+    if err == nil {
         utils.Print("CLIENT", "REVISION %d", revint)
     }
     return revint, err
@@ -243,14 +243,10 @@ func (h *HiberaAPI) Info(rev uint64) ([]byte, uint64, error) {
     return content, rev, err
 }
 
-func (h *HiberaAPI) Bump(rev uint64) (uint64, error) {
+func (h *HiberaAPI) Reset() error {
     args := h.makeArgs("/")
-    args.params["rev"] = strconv.FormatUint(rev, 10)
-    resp, err := h.doRequest("POST", args)
-    if err != nil {
-        return 0, err
-    }
-    return h.getRev(resp)
+    _, err := h.doRequest("DELETE", args)
+    return err
 }
 
 func (h *HiberaAPI) Join(key string, name string, limit uint, timeout uint) (int, uint64, error) {

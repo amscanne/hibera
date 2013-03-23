@@ -10,7 +10,6 @@ import (
     "os/exec"
     "log"
     "strings"
-    "strconv"
     "syscall"
     "time"
     "math/rand"
@@ -45,7 +44,7 @@ cluster commands:
 
     info                         --- Show cluster info.
 
-    bump <rev>                   --- Bump the global revision.
+    reset                        --- Reset the entire cluster.
 
 synchronization commands:
 
@@ -138,10 +137,8 @@ func cli_info(c *client.HiberaAPI, rev uint64) error {
     return nil
 }
 
-func cli_bump(c *client.HiberaAPI, rev uint64) error {
-    rev, err := c.Bump(rev)
-    fmt.Printf("%d\n", rev)
-    return err
+func cli_reset(c *client.HiberaAPI) error {
+    return c.Reset()
 }
 
 func cli_run(c *client.HiberaAPI, key string, name string, limit uint, timeout uint, start []string, stop []string, cmd []string, dodata bool) error {
@@ -474,6 +471,7 @@ func main() {
 
     key := ""
     if command == "info" ||
+       command == "reset" ||
        command == "ls" ||
        command == "clear" {
     } else {
@@ -495,12 +493,8 @@ func main() {
     case "info":
         err = cli_info(client(), 0)
         break
-    case "bump":
-        var rev uint64
-        rev, err = strconv.ParseUint(key, 0, 64)
-        if err == nil {
-            err = cli_bump(client(), rev)
-        }
+    case "reset":
+        err = cli_reset(client())
         break
     case "run":
         cmd := make_command(flag.Args()...)
