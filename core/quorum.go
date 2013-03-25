@@ -278,12 +278,7 @@ func (c *Cluster) doClear(node *Node) error {
 
 func (c *Cluster) doReset(node *Node) error {
     if node == c.Nodes.Self() {
-        err := c.data.DataClear()
-        if err != nil {
-            return err
-        }
-        c.Activate()
-        return nil
+        return c.Activate()
     }
 
     urls := make([]string, 1, 1)

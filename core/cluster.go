@@ -54,7 +54,7 @@ type Cluster struct {
     sync.Mutex
 }
 
-func (c *Cluster) Activate() {
+func (c *Cluster) Activate() error {
     c.Mutex.Lock()
     defer c.Mutex.Unlock()
 
@@ -67,7 +67,7 @@ func (c *Cluster) Activate() {
     // Activate our node.
     if !c.Nodes.Activate(c.Id(), c.rev) {
         utils.Print("CLUSTER", "ACTIVATE-ERROR")
-        return
+        return nil
     }
 
     // Write the cluster data.
@@ -75,11 +75,12 @@ func (c *Cluster) Activate() {
     c.rev, err = c.data.DataSet(HiberaKey, c.rev, bytes)
     if err != nil {
         utils.Print("CLUSTER", "WRITE-ERROR %s", err.Error())
-        return
+        return err
     }
 
     utils.Print("CLUSTER", "ACTIVATE-OKAY rev=%d", c.rev)
     c.changeRevision(c.rev, true)
+    return nil
 }
 
 func (c *Cluster) doSync(id string, addr *net.UDPAddr, from Revision) {
@@ -346,6 +347,8 @@ func NewCluster(backend *storage.Backend, auth string, domain string, ids []stri
     }
     if !activated {
         // Activate a cluster of one.
+        // NOTE: We ignore errors, as there is
+        // nothing that we can do if this fails.
         c.Activate()
     }
 

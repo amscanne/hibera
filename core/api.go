@@ -43,12 +43,7 @@ func (c *Cluster) Reset(conn *Connection) error {
         return err
     }
     if server {
-        err := c.data.DataClear()
-        if err != nil {
-            return err
-        }
-        c.Activate()
-        return nil
+        return c.Activate()
     }
 
     return c.allReset()
