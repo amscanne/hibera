@@ -135,7 +135,7 @@ func (s *HTTPServer) getContent(r *http.Request) ([]byte, error) {
     return buf, nil
 }
 
-func (s *HTTPServer) getConnection(r *http.Request) *core.Connection {
+func (s *HTTPServer) getConnection(r *http.Request, auth string) *core.Connection {
     // Pull out the relevant conn.
     // NOTE: This is a hack. The underlying connection is our
     // special connection object -- and we return a string which
@@ -149,11 +149,11 @@ func (s *HTTPServer) getConnection(r *http.Request) *core.Connection {
     if len(r.Header["X-Client-Id"]) > 0 {
         // Return a connection with the asssociate conn.
         return s.Cluster.FindConnection(core.ConnectionId(id),
-            core.UserId(r.Header["X-Client-Id"][0]))
+            core.UserId(r.Header["X-Client-Id"][0]), auth)
     }
 
     // Return a connection with no associated conn.
-    return s.Cluster.FindConnection(core.ConnectionId(id), "")
+    return s.Cluster.FindConnection(core.ConnectionId(id), "", auth)
 }
 
 func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
@@ -164,13 +164,9 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
     if len(r.Header["X-Authorization"]) > 0 {
         auth = r.Header["X-Authorization"][0]
     }
-    if !s.Cluster.Authorize(auth) {
-        http.Error(w, "", http.StatusForbidden)
-        return
-    }
 
     // Pull out a connection.
-    conn := s.getConnection(r)
+    conn := s.getConnection(r, auth)
     if conn == nil {
         http.Error(w, "", http.StatusNotFound)
         return
@@ -211,8 +207,11 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
                     _, err = buf.Write(data)
                 }
                 break
+            case "POST":
+                err = s.Cluster.Activate(conn)
+                break
             case "DELETE":
-                err = s.Cluster.Reset(conn)
+                err = s.Cluster.Deactivate(conn)
                 break
             }
             break
@@ -308,6 +307,7 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
         // be 0 because the call didn't have a revision).
         revstr := strconv.FormatUint(uint64(rev), 10)
         w.Header().Set("X-Revision", revstr)
+        w.Header().Set("X-Cluster-Id", s.Cluster.Id())
         w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
         utils.Print("HTTP", "200 X-Revision %s", revstr)
         io.Copy(w, buf)
@@ -323,6 +323,13 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
         url := utils.MakeURL(err.Error(), r.URL.Path+"?"+r.URL.RawQuery, nil)
         utils.Print("HTTP", "301 %s", url)
         http.Redirect(w, r, url, http.StatusMovedPermanently)
+
+    case *core.PermissionError:
+        // The user doesn't have appropriate permissions.
+        url := utils.MakeURL(err.Error(), r.URL.Path+"?"+r.URL.RawQuery, nil)
+        utils.Print("HTTP", "403 %s", url)
+        http.Error(w, err.Error(), http.StatusForbidden)
+        break
 
     default:
         // Even with errors, we set a revision header.

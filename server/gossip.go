@@ -14,7 +14,7 @@ import (
 
 type GossipServer struct {
     *core.Cluster
-    conn  *net.UDPConn
+    conn *net.UDPConn
     seeds []string
 }
 

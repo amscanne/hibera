@@ -278,13 +278,13 @@ func (c *Cluster) doClear(node *Node) error {
 
 func (c *Cluster) doReset(node *Node) error {
     if node == c.Nodes.Self() {
-        return c.Activate()
+        return c.doDeactivate()
     }
 
     urls := make([]string, 1, 1)
     urls[0] = utils.MakeURL(node.Addr, "", nil)
     cl := client.NewHiberaAPI(urls, c.auth, c.Id(), 0)
-    return cl.Reset()
+    return cl.Deactivate()
 }
 
 func (c *Cluster) allList() ([]Key, error) {
@@ -361,7 +361,7 @@ func (c *Cluster) allClear() error {
     return err
 }
 
-func (c *Cluster) allReset() error {
+func (c *Cluster) allDeactivate() error {
     nodes := c.Nodes.Active()
 
     utils.Print("QUORUM", "RESET %d", len(nodes))

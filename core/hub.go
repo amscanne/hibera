@@ -21,6 +21,9 @@ type Connection struct {
     // The address associated with this conn.
     addr string
 
+    // The authenictation information for this conn.
+    auth string
+
     // A closure to check whether or not this
     // connection is currently alive.
     alive func() bool
@@ -85,6 +88,10 @@ func (c *Connection) Name(name string) string {
     return string(c.addr)
 }
 
+func (c *Connection) Auth() string {
+    return c.auth
+}
+
 func (c *Connection) EphemId() EphemId {
     if c.client != nil {
         return EphemId(c.client.ClientId)
@@ -101,7 +108,7 @@ func (c *Hub) NewConnection(addr string, alive func() bool) *Connection {
     // a straight-forward id. The user can
     // associate some conn-id with their
     // active connection during lookup.
-    conn := &Connection{c, ConnectionId(c.genid()), addr, alive, nil, false}
+    conn := &Connection{c, ConnectionId(c.genid()), addr, "", alive, nil, false}
 
     c.Mutex.Lock()
     defer c.Mutex.Unlock()
@@ -111,7 +118,7 @@ func (c *Hub) NewConnection(addr string, alive func() bool) *Connection {
     return conn
 }
 
-func (c *Hub) FindConnection(id ConnectionId, userid UserId) *Connection {
+func (c *Hub) FindConnection(id ConnectionId, userid UserId, auth string) *Connection {
     c.Mutex.Lock()
     defer c.Mutex.Unlock()
 
@@ -119,6 +126,7 @@ func (c *Hub) FindConnection(id ConnectionId, userid UserId) *Connection {
     if conn == nil {
         return nil
     }
+    conn.auth = auth
     if conn.inited {
         return conn
     }

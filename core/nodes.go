@@ -3,10 +3,8 @@ package core
 import (
     "net"
     "sync"
-    "bytes"
     "sort"
     "sync/atomic"
-    "encoding/json"
     "hibera/utils"
 )
 
@@ -17,7 +15,7 @@ type Node struct {
     Addr string
 
     // The node Id (computed and cached).
-    id  string
+    id string
 
     // The node domain.
     Domains []string
@@ -190,12 +188,11 @@ func (nodes *Nodes) Count() int {
     return len(nodes.all)
 }
 
-func (nodes *Nodes) Encode(rev Revision, next bool) ([]byte, error) {
+func (nodes *Nodes) Encode(rev Revision, next bool, na map[string]*Node) error {
     nodes.Mutex.Lock()
     defer nodes.Mutex.Unlock()
 
     // Create a list of nodes modified after rev.
-    na := make(map[string]*Node)
     adddomain := make(map[string]bool)
     removedomain := make(map[string]bool)
 
@@ -249,16 +246,7 @@ func (nodes *Nodes) Encode(rev Revision, next bool) ([]byte, error) {
             }
         }
     }
-    if len(na) == 0 {
-        return nil, nil
-    }
-
-    // Encode that list as JSON.
-    buf := new(bytes.Buffer)
-    enc := json.NewEncoder(buf)
-    err := enc.Encode(&na)
-
-    return buf.Bytes(), err
+    return nil
 }
 
 func bestAddr(addr1 string, addr2 string) string {
@@ -284,21 +272,11 @@ func bestAddr(addr1 string, addr2 string) string {
     return addr1
 }
 
-func (nodes *Nodes) Decode(data []byte) (bool, error) {
-    changed := false
-
+func (nodes *Nodes) Decode(na map[string]*Node) (bool, error) {
     nodes.Mutex.Lock()
     defer nodes.Mutex.Unlock()
 
-    // Decode our list of nodes from JSON.
-    na := make(map[string]*Node)
-    buf := bytes.NewBuffer(data)
-    dec := json.NewDecoder(buf)
-    err := dec.Decode(&na)
-
-    if err != nil {
-        return changed, err
-    }
+    changed := false
 
     // Update all nodes with revs > Modified.
     for id, node := range na {
@@ -319,7 +297,7 @@ func (nodes *Nodes) Decode(data []byte) (bool, error) {
         }
     }
 
-    return changed, err
+    return changed, nil
 }
 
 func (nodes *Nodes) Update(id string, addr *net.UDPAddr) {

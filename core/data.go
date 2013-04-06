@@ -506,6 +506,14 @@ func (l *data) dumpData() {
     }
 }
 
+func (l *data) saveClusterId(id string) error {
+    return l.store.SetCluster(id)
+}
+
+func (l *data) loadClusterId() (string, error) {
+    return l.store.GetCluster()
+}
+
 func NewData(store *storage.Backend) *data {
     d := new(data)
     d.Cond = sync.NewCond(new(sync.Mutex))

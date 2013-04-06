@@ -126,6 +126,14 @@ func (h *HiberaAPI) makeArgs(path string) HttpArgs {
     return HttpArgs{path, headers, params, nil}
 }
 
+func (h *HiberaAPI) getClusterId(resp *http.Response) string {
+    ids := resp.Header["X-Cluster-Id"]
+    if len(ids) == 0 {
+        return ""
+    }
+    return ids[0]
+}
+
 func (h *HiberaAPI) getRev(resp *http.Response) (uint64, error) {
     rev := resp.Header["X-Revision"]
     if len(rev) == 0 {
@@ -227,23 +235,30 @@ func (h *HiberaAPI) doRequest(method string, args HttpArgs) (*http.Response, err
     return nil, nil
 }
 
-func (h *HiberaAPI) Info(rev uint64) ([]byte, uint64, error) {
+func (h *HiberaAPI) Info(rev uint64) (string, []byte, uint64, error) {
     args := h.makeArgs("/")
     args.params["rev"] = strconv.FormatUint(rev, 10)
     resp, err := h.doRequest("GET", args)
     if err != nil {
-        return nil, 0, err
+        return "", nil, 0, err
     }
+    id := h.getClusterId(resp)
     content, err := h.getContent(resp)
     if err != nil {
         rev, _ = h.getRev(resp)
-        return nil, rev, err
+        return id, nil, rev, err
     }
     rev, err = h.getRev(resp)
-    return content, rev, err
+    return id, content, rev, err
 }
 
-func (h *HiberaAPI) Reset() error {
+func (h* HiberaAPI) Activate() error {
+    args := h.makeArgs("/")
+    _, err := h.doRequest("POST", args)
+    return err
+}
+
+func (h *HiberaAPI) Deactivate() error {
     args := h.makeArgs("/")
     _, err := h.doRequest("DELETE", args)
     return err

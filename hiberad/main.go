@@ -44,7 +44,7 @@ func main() {
     }
     cluster := core.NewCluster(backend, *auth, *domain, ids)
     if cluster == nil {
-        return
+        log.Fatal("Unable to create cluster.")
     }
 
     // Startup our server.

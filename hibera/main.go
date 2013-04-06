@@ -13,6 +13,7 @@ import (
     "syscall"
     "time"
     "math/rand"
+    "encoding/json"
     "hibera/client"
     "hibera/utils"
 )
@@ -44,7 +45,9 @@ cluster commands:
 
     info                         --- Show cluster info.
 
-    reset                        --- Reset the entire cluster.
+    activate                     --- Activate the node.
+
+    deactivate                   --- Deactivate the entire cluster.
 
 synchronization commands:
 
@@ -129,16 +132,26 @@ func do_exec(command []string, input []byte) error {
 }
 
 func cli_info(c *client.HiberaAPI, rev uint64) error {
-    value, _, err := c.Info(rev)
+    id, value, rev, err := c.Info(rev)
     if err != nil {
         return err
     }
-    os.Stdout.Write(value)
+    formatted := bytes.NewBuffer(nil)
+    err = json.Indent(formatted, value, "", "  ")
+    if err != nil {
+        return err
+    }
+    fmt.Printf("%s %d", id, rev)
+    os.Stderr.Write(formatted.Bytes())
     return nil
 }
 
-func cli_reset(c *client.HiberaAPI) error {
-    return c.Reset()
+func cli_activate(c *client.HiberaAPI) error {
+    return c.Activate()
+}
+
+func cli_deactivate(c *client.HiberaAPI) error {
+    return c.Deactivate()
 }
 
 func cli_run(c *client.HiberaAPI, key string, name string, limit uint, timeout uint, start []string, stop []string, cmd []string, dodata bool) error {
@@ -471,7 +484,8 @@ func main() {
 
     key := ""
     if command == "info" ||
-       command == "reset" ||
+       command == "activate" ||
+       command == "deactivate" ||
        command == "ls" ||
        command == "clear" {
     } else {
@@ -493,8 +507,11 @@ func main() {
     case "info":
         err = cli_info(client(), 0)
         break
-    case "reset":
-        err = cli_reset(client())
+    case "activate":
+        err = cli_activate(client())
+        break
+    case "deactivate":
+        err = cli_deactivate(client())
         break
     case "run":
         cmd := make_command(flag.Args()...)

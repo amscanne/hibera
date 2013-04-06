@@ -2,6 +2,7 @@ package server
 
 import (
     "hibera/core"
+    "hibera/utils"
 )
 
 var DefaultBind = ""
@@ -27,5 +28,6 @@ func NewServer(cluster *core.Cluster, addr string, port uint, seeds []string, ac
 
 func (s *Server) Run() {
     go s.GossipServer.Run()
+    utils.Print("SERVER", "Starting...")
     s.HTTPServer.Run()
 }
