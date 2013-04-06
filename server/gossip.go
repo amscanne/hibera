@@ -147,11 +147,16 @@ func (s *GossipServer) process(addr *net.UDPAddr, m *Message) {
             TYPE_name[int32(m.GetType())], addr, m.GetVersion())
     }
 
+    // Check for our own id.
+    if gossip != nil && *gossip.Id == s.Cluster.Id() {
+        return
+    }
+
     // Heartbeat.
     s.Cluster.Heartbeat(*gossip.Id, addr,
         core.Revision(m.GetVersion()), m.GetNodes(), gossip.Dead)
 
-    if m.GetType() == uint32(TYPE_PING) {
+    if m.GetType() == uint32(TYPE_PING) && s.Cluster.Version() > 0 {
         // Respond to the ping.
         go s.sendPingPong(addr, true)
     }

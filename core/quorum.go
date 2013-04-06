@@ -16,9 +16,11 @@ type QuorumResult struct {
 
 func (c *Cluster) doSet(node *Node, key Key, rev Revision, value []byte) (Revision, error) {
     if node == c.Nodes.Self() {
+        utils.Print("QUORUM", "    SET-LOCAL key=%s rev=%d", string(key), uint64(rev))
         return c.data.DataSet(key, rev, value)
     }
 
+    utils.Print("QUORUM", "    SET-REMOTE key=%s rev=%d", string(key), uint64(rev))
     urls := make([]string, 1, 1)
     urls[0] = utils.MakeURL(node.Addr, "", nil)
     cl := client.NewHiberaAPI(urls, c.auth, c.Id(), 0)
@@ -28,9 +30,11 @@ func (c *Cluster) doSet(node *Node, key Key, rev Revision, value []byte) (Revisi
 
 func (c *Cluster) doGet(node *Node, key Key) ([]byte, Revision, error) {
     if node == c.Nodes.Self() {
+        utils.Print("QUORUM", "    GET-LOCAL key=%s", string(key))
         return c.data.DataGet(key)
     }
 
+    utils.Print("QUORUM", "    GET-REMOTE key=%s", string(key))
     urls := make([]string, 1, 1)
     urls[0] = utils.MakeURL(node.Addr, "", nil)
     cl := client.NewHiberaAPI(urls, c.auth, c.Id(), 0)
@@ -40,9 +44,11 @@ func (c *Cluster) doGet(node *Node, key Key) ([]byte, Revision, error) {
 
 func (c *Cluster) doRemove(node *Node, key Key, rev Revision) (Revision, error) {
     if node == c.Nodes.Self() {
+        utils.Print("QUORUM", "    REMOVE-LOCAL key=%s rev=%d", string(key), uint64(rev))
         return c.data.DataRemove(key, rev)
     }
 
+    utils.Print("QUORUM", "    REMOVE-REMOTE key=%s rev=%d", string(key), uint64(rev))
     urls := make([]string, 1, 1)
     urls[0] = utils.MakeURL(node.Addr, "", nil)
     cl := client.NewHiberaAPI(urls, c.auth, c.Id(), 0)
@@ -248,9 +254,11 @@ type ListResult struct {
 
 func (c *Cluster) doList(node *Node) ([]Key, error) {
     if node == c.Nodes.Self() {
+        utils.Print("QUORUM", "    LIST-LOCAL")
         return c.data.DataList()
     }
 
+    utils.Print("QUORUM", "    LIST-REMOTE")
     urls := make([]string, 1, 1)
     urls[0] = utils.MakeURL(node.Addr, "", nil)
     cl := client.NewHiberaAPI(urls, c.auth, c.Id(), 0)
@@ -267,9 +275,11 @@ func (c *Cluster) doList(node *Node) ([]Key, error) {
 
 func (c *Cluster) doClear(node *Node) error {
     if node == c.Nodes.Self() {
+        utils.Print("QUORUM", "    CLEAR-LOCAL")
         return c.data.DataClear()
     }
 
+    utils.Print("QUORUM", "    CLEAR-REMOTE")
     urls := make([]string, 1, 1)
     urls[0] = utils.MakeURL(node.Addr, "", nil)
     cl := client.NewHiberaAPI(urls, c.auth, c.Id(), 0)
@@ -278,9 +288,11 @@ func (c *Cluster) doClear(node *Node) error {
 
 func (c *Cluster) doReset(node *Node) error {
     if node == c.Nodes.Self() {
+        utils.Print("QUORUM", "    DEACTIVATE-LOCAL")
         return c.doDeactivate()
     }
 
+    utils.Print("QUORUM", "    DEACTIVATE-REMOTE")
     urls := make([]string, 1, 1)
     urls[0] = utils.MakeURL(node.Addr, "", nil)
     cl := client.NewHiberaAPI(urls, c.auth, c.Id(), 0)
@@ -364,7 +376,7 @@ func (c *Cluster) allClear() error {
 func (c *Cluster) allDeactivate() error {
     nodes := c.Nodes.Active()
 
-    utils.Print("QUORUM", "RESET %d", len(nodes))
+    utils.Print("QUORUM", "DEACTIVATE %d", len(nodes))
 
     // Setup all the requests.
     fn := func(node *Node, res chan<- error) {

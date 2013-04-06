@@ -129,6 +129,7 @@ func (c *Cluster) doActivate() error {
 
     // If we're already activated, ignore.
     if c.id != "" {
+        utils.Print("CLUSTER", "ALREADY-ACTIVATED")
         return nil
     }
 
@@ -141,6 +142,7 @@ func (c *Cluster) doActivate() error {
     // Generate and save the cluster id.
     uuid, err := utils.Uuid()
     if err != nil {
+        utils.Print("CLUSTER", "ID-ERROR")
         return err
     }
     c.id = uuid
@@ -155,7 +157,7 @@ func (c *Cluster) doActivate() error {
     }
 
     utils.Print("CLUSTER", "ACTIVATE-OKAY rev=%d", c.rev)
-    c.changeRevision(c.rev, true)
+    c.changeRevision(Revision(1), true)
     return nil
 }
 
@@ -172,6 +174,9 @@ func (c *Cluster) doDeactivate() error {
 
     // Reset the nodes state.
     c.Nodes.Reset()
+
+    // Reset authentication tokens.
+    c.Tokens = NewTokens(c.auth)
 
     return nil
 }
@@ -192,6 +197,7 @@ func (c *Cluster) doSync(id string, addr *net.UDPAddr, from Revision) {
     // Take on the identity if we have none.
     if c.id == "" {
         c.id = id
+        c.Tokens.Reset()
     }
 
     // Check that the sync is legit.
@@ -449,7 +455,7 @@ func NewCluster(backend *storage.Backend, auth string, domain string, ids []stri
     c := new(Cluster)
     c.auth = auth
     c.Nodes = NewNodes(ids, domains(domain))
-    c.Tokens = NewTokens()
+    c.Tokens = NewTokens(auth)
     c.data = NewData(backend)
     c.ring = NewRing(c.Nodes)
     c.Hub = NewHub(c)

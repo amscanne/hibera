@@ -2,14 +2,12 @@ package core
 
 import (
     "sync"
-    "strings"
     "regexp"
-    "hibera/utils"
 )
 
 type Token struct {
     // The authorization token.
-    Id string
+    id string
 
     // The regular expression.
     Path string
@@ -24,13 +22,13 @@ type Token struct {
     Modified Revision
 }
 
-func NewToken(path string, perms string, rev Revision) *Token {
+func NewToken(path string, read bool, write bool, execute bool, rev Revision) *Token {
     token := new(Token)
-    token.Id, _ = utils.Uuid()
     token.Path = path
-    token.Read = strings.Contains(perms, "r")
-    token.Write = strings.Contains(perms, "w")
-    token.Execute = strings.Contains(perms, "x")
+    token.Read = read
+    token.Write = write
+    token.Execute = execute
+    token.regex, _ = regexp.Compile(token.Path)
     return token
 }
 
@@ -39,19 +37,6 @@ type Tokens struct {
     all map[string]*Token
 
     sync.Mutex
-}
-
-func (tokens *Tokens) Generate(path string, perms string, rev Revision) (string, error) {
-    token := NewToken(path, perms, rev)
-    token.regex, _ = regexp.Compile(token.Path)
-    tokens.Mutex.Lock()
-    defer tokens.Mutex.Unlock()
-    tokens.all[token.Id] = token
-    return token.Id, nil
-}
-
-func (tokens *Tokens) Revoke(id string) {
-    delete(tokens.all, id)
 }
 
 func (tokens *Tokens) Check(id string, path string, read bool, write bool, execute bool) bool {
@@ -86,16 +71,27 @@ func (tokens *Tokens) Decode(na map[string]*Token) error {
     for id, token := range na {
         if tokens.all[id] == nil ||
             tokens.all[id].Modified < token.Modified {
-            token.regex, _ = regexp.Compile(token.Path)
-            tokens.all[id] = token
+            if token.Read || token.Write || token.Execute {
+                token.regex, _ = regexp.Compile(token.Path)
+                tokens.all[id] = token
+            } else {
+                delete(tokens.all, id)
+            }
         }
     }
 
     return nil
 }
 
-func NewTokens() *Tokens {
+func (tokens *Tokens) Reset() {
+    tokens.Mutex.Lock()
+    defer tokens.Mutex.Unlock()
+    tokens.all = make(map[string]*Token)
+}
+
+func NewTokens(auth string) *Tokens {
     tokens := new(Tokens)
     tokens.all = make(map[string]*Token)
+    tokens.all[auth] = NewToken(".*", true, true, true, Revision(0))
     return tokens
 }

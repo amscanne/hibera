@@ -141,7 +141,7 @@ func cli_info(c *client.HiberaAPI, rev uint64) error {
     if err != nil {
         return err
     }
-    fmt.Printf("%s %d\n", id, rev)
+    fmt.Printf("%d %s\n", rev, id)
     os.Stderr.Write(formatted.Bytes())
     return nil
 }

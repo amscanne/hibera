@@ -35,11 +35,6 @@ func (c *Cluster) doRedirect(conn *Connection, key Key) (bool, error) {
 }
 
 func (c *Cluster) Authorize(auth string, key Key, read bool, write bool, execute bool) error {
-    // Check for master authorization.
-    if auth == c.auth {
-        return nil
-    }
-
     // Check for a token.
     if c.Tokens.Check(auth, string(key), read, write, execute) {
         return nil
@@ -49,14 +44,14 @@ func (c *Cluster) Authorize(auth string, key Key, read bool, write bool, execute
     return &PermissionError{}
 }
 
-func (c *Cluster) Info(conn *Connection, rev Revision) ([]byte, Revision, error) {
+func (c *Cluster) Info(conn *Connection, rev Revision) (string, []byte, Revision, error) {
     utils.Print("CLUSTER", "INFO")
     err := c.Authorize(conn.Auth(), HiberaKey, true, false, false)
     if err != nil {
-        return nil, 0, err
+        return "", nil, 0, err
     }
     bytes, err := c.doEncode(rev, false)
-    return bytes, c.rev, err
+    return c.id, bytes, c.rev, err
 }
 
 func (c *Cluster) Activate(conn *Connection) error {
@@ -86,7 +81,7 @@ func (c *Cluster) Deactivate(conn *Connection) error {
 }
 
 func (c *Cluster) Id() string {
-    return c.id
+    return c.Nodes.Self().Id()
 }
 
 func (c *Cluster) Version() Revision {

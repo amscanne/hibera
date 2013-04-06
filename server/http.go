@@ -201,9 +201,11 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
             switch r.Method {
             case "GET":
                 rev = core.Revision(s.intParam(r, "rev"))
+                var id string
                 var data []byte
-                data, rev, err = s.Cluster.Info(conn, rev)
+                id, data, rev, err = s.Cluster.Info(conn, rev)
                 if err == nil {
+                    w.Header().Set("X-Cluster-Id", id)
                     _, err = buf.Write(data)
                 }
                 break
@@ -307,7 +309,6 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
         // be 0 because the call didn't have a revision).
         revstr := strconv.FormatUint(uint64(rev), 10)
         w.Header().Set("X-Revision", revstr)
-        w.Header().Set("X-Cluster-Id", s.Cluster.Id())
         w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
         utils.Print("HTTP", "200 X-Revision %s", revstr)
         io.Copy(w, buf)
