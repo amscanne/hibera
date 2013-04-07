@@ -1,6 +1,8 @@
 package core
 
 import (
+    "bytes"
+    "encoding/json"
     "sync"
     "regexp"
 )
@@ -35,6 +37,10 @@ func NewToken(path string, read bool, write bool, execute bool, rev Revision) *T
 type Access struct {
     // The map of all access.
     all map[string]*Token
+    proposed map[string]*Token
+
+    // The default admin authorization.
+    auth string
 
     sync.Mutex
 }
@@ -50,7 +56,41 @@ func (access *Access) Check(id string, path string, read bool, write bool, execu
     return token.regex.Match([]byte(path))
 }
 
-func (access *Access) Encode(rev Revision, na map[string]*Token) error {
+func (access *Access) List() []string {
+    res := make([]string, len(access.all), len(access.all))
+    i := 0
+    for id, _ := range access.all {
+        res[i] = id
+        i += 1
+    }
+    return res
+}
+
+func (access *Access) Get(id string) ([]byte, error) {
+    token := access.all[id]
+    buf := new(bytes.Buffer)
+    enc := json.NewEncoder(buf)
+    err := enc.Encode(&token)
+    return buf.Bytes(), err
+}
+
+func (access *Access) Set(id string, value []byte) error {
+    var token Token
+    buf := bytes.NewBuffer(value)
+    dec := json.NewDecoder(buf)
+    err := dec.Decode(&token)
+    if err != nil {
+        return err
+    }
+    access.proposed[id] = &token
+    return nil
+}
+
+func (access *Access) Remove(id string, rev Revision) {
+    access.proposed[id] = NewToken("", false, false, false, rev)
+}
+
+func (access *Access) Encode(rev Revision, next bool, na map[string]*Token) error {
     access.Mutex.Lock()
     defer access.Mutex.Unlock()
 
@@ -60,6 +100,10 @@ func (access *Access) Encode(rev Revision, na map[string]*Token) error {
             na[id] = token
         }
     }
+    for id, token := range access.proposed {
+        na[id] = token
+    }
+
     return nil
 }
 
@@ -78,6 +122,9 @@ func (access *Access) Decode(na map[string]*Token) error {
                 delete(access.all, id)
             }
         }
+
+        // Remove any proposals.
+        delete(access.proposed, id)
     }
 
     return nil
@@ -87,11 +134,12 @@ func (access *Access) Reset() {
     access.Mutex.Lock()
     defer access.Mutex.Unlock()
     access.all = make(map[string]*Token)
+    access.all[access.auth] = NewToken(".*", true, true, true, Revision(0))
 }
 
 func NewAccess(auth string) *Access {
     access := new(Access)
-    access.all = make(map[string]*Token)
-    access.all[auth] = NewToken(".*", true, true, true, Revision(0))
+    access.auth = auth
+    access.Reset()
     return access
 }

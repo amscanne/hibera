@@ -185,6 +185,9 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
     // of form parameters from the body.
     r.ParseForm()
     parts := strings.SplitN(r.URL.Path[1:], "/", 2)
+    if len(parts) == 2 && len(parts[1]) == 0 {
+        parts = parts[0:1]
+    }
 
     // Prepare our response.
     // If we don't handle the request in the switch below,
@@ -217,18 +220,31 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
                 break
             }
             break
-
         case "data":
             switch r.Method {
             case "GET":
                 var items []core.Key
-                rev, items, err = s.Cluster.List(conn)
+                items, rev, err = s.Cluster.List(conn)
                 if err == nil {
                     err = enc.Encode(items)
                 }
                 break
             case "DELETE":
                 rev, err = s.Cluster.Clear(conn)
+                break
+            }
+            break
+        case "auth":
+            switch r.Method {
+            case "GET":
+                var items []string
+                items, rev, err = s.Cluster.AuthList(conn)
+                if err == nil {
+                    err = enc.Encode(items)
+                }
+                break
+            case "DELETE":
+                rev, err = s.Cluster.AuthClear(conn)
                 break
             }
             break
@@ -295,6 +311,23 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
             case "POST":
                 rev = core.Revision(s.intParam(r, "rev"))
                 rev, err = s.Cluster.Fire(conn, core.Key(parts[1]), rev)
+                break
+            }
+            break
+        case "auth":
+            switch r.Method {
+            case "GET":
+                var value []byte
+                value, rev, err = s.Cluster.AuthGet(conn, parts[1])
+                if err == nil {
+                    _, err = buf.Write(value)
+                }
+                break
+            case "POST":
+                rev, err = s.Cluster.AuthSet(conn, parts[1], content)
+                break
+            case "DELETE":
+                rev, err = s.Cluster.AuthRemove(conn, parts[1])
                 break
             }
             break

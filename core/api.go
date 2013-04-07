@@ -46,37 +46,46 @@ func (c *Cluster) Authorize(auth string, key Key, read bool, write bool, execute
 
 func (c *Cluster) Info(conn *Connection, rev Revision) (string, []byte, Revision, error) {
     utils.Print("CLUSTER", "INFO")
-    err := c.Authorize(conn.Auth(), HiberaKey, true, false, false)
+    err := c.Authorize(conn.Auth(), RootKey, true, false, false)
     if err != nil {
         return "", nil, 0, err
     }
+    // NOTE: We fetch the cluster info from the current node,
+    // this may not be the *current* cluster info, but since
+    // it may have changed by the time the result gets back to
+    // the client anyways, it makes sense to handle this here.
     bytes, err := c.doEncode(rev, false)
     return c.id, bytes, c.rev, err
 }
 
 func (c *Cluster) Activate(conn *Connection) (Revision, error) {
     utils.Print("CLUSTER", "ACTIVATE")
-    err := c.Authorize(conn.Auth(), HiberaKey, true, true, false)
+    err := c.Authorize(conn.Auth(), RootKey, true, true, false)
     if err != nil {
         return c.rev, err
     }
+    // NOTE: The activate call is sent to a specific node,
+    // we do not redirect to the master node in this case.
     return c.rev, c.doActivate()
 }
 
 func (c *Cluster) Deactivate(conn *Connection) (Revision, error) {
     utils.Print("CLUSTER", "DEACTIVATE")
-    err := c.Authorize(conn.Auth(), HiberaKey, true, true, false)
+    err := c.Authorize(conn.Auth(), RootKey, true, true, false)
     if err != nil {
         return c.rev, err
     }
-    server, err := c.doRedirect(conn, HiberaKey)
+    // NOTE: The deactivate call *does* go back to the master. It
+    // will in fact, deactivate the entire cluster (so as to not 
+    // leave some small subset hanging around, provided everything
+    // is online at the time).
+    server, err := c.doRedirect(conn, RootKey)
     if err != nil {
         return c.rev, err
     }
     if server {
         return c.rev, c.doDeactivate()
     }
-
     return c.rev, c.allDeactivate()
 }
 
@@ -88,18 +97,22 @@ func (c *Cluster) Version() Revision {
     return c.rev
 }
 
-func (c *Cluster) List(conn *Connection) (Revision, []Key, error) {
+func (c *Cluster) List(conn *Connection) ([]Key, Revision, error) {
     utils.Print("CLUSTER", "DATA-LIST")
-    err := c.Authorize(conn.Auth(), Key(""), true, false, false)
+    err := c.Authorize(conn.Auth(), RootKey, true, false, false)
     if err != nil {
-        return c.rev, nil, err
+        return nil, c.rev, err
     }
-    if c.Nodes.Heartbeat(conn.Name("")) {
+    server, err := c.doRedirect(conn, RootKey)
+    if err != nil {
+        return nil, c.rev, err
+    }
+    if server {
         items, err := c.data.DataList()
-        return c.rev, items, err
+        return items, c.rev, err
     }
     items, err := c.allList()
-    return c.rev, items, err
+    return items, c.rev, err
 }
 
 func (c *Cluster) Get(conn *Connection, key Key, rev Revision, timeout uint) ([]byte, Revision, error) {
@@ -129,10 +142,6 @@ func (c *Cluster) Set(conn *Connection, key Key, rev Revision, value []byte) (Re
     if server {
         return c.data.DataSet(key, rev, value)
     }
-    if key == HiberaKey {
-        c.Mutex.Lock()
-        return c.lockedClusterDataSet(rev, value)
-    }
     return c.quorumSet(c.ring, key, rev, value)
 }
 
@@ -154,11 +163,15 @@ func (c *Cluster) Remove(conn *Connection, key Key, rev Revision) (Revision, err
 
 func (c *Cluster) Clear(conn *Connection) (Revision, error) {
     utils.Print("CLUSTER", "DATA-CLEAR")
-    err := c.Authorize(conn.Auth(), Key(""), false, true, false)
+    err := c.Authorize(conn.Auth(), RootKey, false, true, false)
     if err != nil {
         return c.rev, err
     }
-    if c.Nodes.Heartbeat(conn.Name("")) {
+    server, err := c.doRedirect(conn, RootKey)
+    if err != nil {
+        return c.rev, err
+    }
+    if server {
         return c.rev, c.data.DataClear()
     }
     return c.rev, c.allClear()
@@ -229,4 +242,97 @@ func (c *Cluster) Fire(conn *Connection, key Key, rev Revision) (Revision, error
         return Revision(0), err
     }
     return c.data.EventFire(key, rev)
+}
+
+func (c *Cluster) AuthList(conn *Connection) ([]string, Revision, error) {
+    utils.Print("CLUSTER", "AUTH-LIST")
+    err := c.Authorize(conn.Auth(), RootKey, true, false, false)
+    if err != nil {
+        return nil, c.rev, err
+    }
+
+    c.Mutex.Lock()
+    defer c.Mutex.Unlock()
+    server, err := c.doRedirect(conn, RootKey)
+    if err != nil || server {
+        return nil, c.rev, err
+    }
+
+    items := c.Access.List()
+    return items, c.rev, nil
+}
+
+func (c *Cluster) AuthGet(conn *Connection, key string) ([]byte, Revision, error) {
+    utils.Print("CLUSTER", "AUTH-GET key=%s", string(key))
+    err := c.Authorize(conn.Auth(), RootKey, true, false, false)
+    if err != nil {
+        return nil, c.rev, err
+    }
+
+    c.Mutex.Lock()
+    defer c.Mutex.Unlock()
+    server, err := c.doRedirect(conn, RootKey)
+    if err != nil || server {
+        return nil, c.rev, err
+    }
+
+    value, err := c.Access.Get(key)
+    return value, c.rev, err
+}
+
+func (c *Cluster) AuthSet(conn *Connection, key string, value []byte) (Revision, error) {
+    utils.Print("CLUSTER", "AUTH-SET key=%s", string(key))
+    err := c.Authorize(conn.Auth(), RootKey, false, true, false)
+    if err != nil {
+        return c.rev, err
+    }
+
+    c.Mutex.Lock()
+    defer c.Mutex.Unlock()
+    server, err := c.doRedirect(conn, RootKey)
+    if err != nil || server {
+        return c.rev, err
+    }
+
+    err = c.Access.Set(key, value)
+    c.changeRevision(c.rev+1, false)
+    return c.rev, err
+}
+
+func (c *Cluster) AuthRemove(conn *Connection, key string) (Revision, error) {
+    utils.Print("CLUSTER", "AUTH-REMOVE key=%s", string(key))
+    err := c.Authorize(conn.Auth(), RootKey, false, true, false)
+    if err != nil {
+        return c.rev, err
+    }
+
+    c.Mutex.Lock()
+    defer c.Mutex.Unlock()
+    server, err := c.doRedirect(conn, RootKey)
+    if err != nil || server {
+        return c.rev, err
+    }
+
+    c.Access.Remove(key, c.rev+1)
+    c.changeRevision(c.rev+1, false)
+    return c.rev, nil
+}
+
+func (c *Cluster) AuthClear(conn *Connection) (Revision, error) {
+    utils.Print("CLUSTER", "AUTH-CLEAR")
+    err := c.Authorize(conn.Auth(), RootKey, false, true, false)
+    if err != nil {
+        return c.rev, err
+    }
+
+    c.Mutex.Lock()
+    defer c.Mutex.Unlock()
+    server, err := c.doRedirect(conn, RootKey)
+    if err != nil || server {
+        return c.rev, err
+    }
+
+    c.Access.Reset()
+    c.changeRevision(c.rev+1, false)
+    return c.rev, nil
 }

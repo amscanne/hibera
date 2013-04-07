@@ -322,7 +322,11 @@ func (c *Cluster) allList() ([]Key, error) {
         if res.items != nil {
             utils.Print("QUORUM", "  %d %d", i, len(res.items))
             for _, item := range res.items {
-                items[item] = true
+                // Accept only non-zero length items.
+                // (This excludes the special cluster key).
+                if len(item) > 0 {
+                    items[item] = true
+                }
             }
         }
         if res.err != nil {

@@ -49,6 +49,16 @@ cluster commands:
 
     deactivate                   --- Deactivate the entire cluster.
 
+authorization commands:
+
+    auth-list                    --- Show auth keys.
+
+    auth-get <key>               --- Show key details.
+
+    auth-set <key>               --- Set key details.
+
+    auth-clear                   --- Clear all keys.
+
 synchronization commands:
 
     run <key>                    --- Conditionally run up-to <limit>

@@ -18,14 +18,11 @@ type Key string
 type Revision uint64
 
 var DefaultKeys = uint(128)
-var HiberaKey = Key("hibera")
+var RootKey = Key("")
 
 type Cluster struct {
     // Our cluster id.
     id string
-
-    // Our authorization key.
-    auth string
 
     // Our connection hub.
     *Hub
@@ -80,7 +77,7 @@ func (c *Cluster) doEncode(rev Revision, next bool) ([]byte, error) {
     }
 
     // Encode our tokens.
-    err = c.Access.Encode(rev, info.Access)
+    err = c.Access.Encode(rev, next, info.Access)
     if err != nil {
         return nil, err
     }
@@ -291,10 +288,10 @@ func (c *Cluster) dumpCluster() {
     // Output all nodes.
     utils.Print("CLUSTER", "CLUSTER (rev=%d,master=%t,failover=%t)",
         c.rev,
-        c.ring.IsMaster(HiberaKey),
-        c.ring.IsFailover(HiberaKey))
-    if c.ring.MasterFor(HiberaKey) != nil {
-        utils.Print("CLUSTER", "MASTER %s", c.ring.MasterFor(HiberaKey).Id())
+        c.ring.IsMaster(RootKey),
+        c.ring.IsFailover(RootKey))
+    if c.ring.MasterFor(RootKey) != nil {
+        utils.Print("CLUSTER", "MASTER %s", c.ring.MasterFor(RootKey).Id())
     }
     c.Nodes.dumpNodes()
 }
@@ -333,7 +330,7 @@ func (c *Cluster) changeRevision(rev Revision, force bool) {
 
         // We're the new master for this key.
         if !old_master && new_master {
-            if key != HiberaKey {
+            if key != RootKey {
                 go c.syncData(c.ring, key, true)
             }
 
@@ -342,7 +339,7 @@ func (c *Cluster) changeRevision(rev Revision, force bool) {
         // ring previously, but is now in the ring.
         } else if c.ring.IsFailover(key) &&
             !old_ring.IsNode(key, c.ring.MasterFor(key)) {
-            if key != HiberaKey {
+            if key != RootKey {
                 go c.syncData(c.ring, key, true)
             }
 
@@ -369,9 +366,9 @@ func (c *Cluster) Healthcheck() {
     c.Mutex.Lock()
 
     // If we have unknowns, let's propose a change.
-    master := c.ring.MasterFor(HiberaKey)
+    master := c.ring.MasterFor(RootKey)
     is_master := (master == nil || master == c.Nodes.Self())
-    is_failover := (master != nil && !master.Alive() && c.ring.IsFailover(HiberaKey))
+    is_failover := (master != nil && !master.Alive() && c.ring.IsFailover(RootKey))
 
     if is_master {
         utils.Print("CLUSTER", "HEALTHCHECK-MASTER")
@@ -425,7 +422,7 @@ func (c *Cluster) lockedClusterDataSet(set_rev Revision, delta []byte) (Revision
         // contact a quorum of nodes to ensure that we're in the
         // majority still.
         utils.Print("CLUSTER", "SET-CLUSTER %d", uint64(target_rev))
-        rev, err := c.quorumSet(ring, HiberaKey, target_rev, bytes)
+        rev, err := c.quorumSet(ring, RootKey, target_rev, bytes)
         if err != nil {
             if rev > 0 && (set_rev == 0) {
                 target_rev = rev + 1
@@ -465,7 +462,6 @@ func (c *Cluster) timedHealthcheck() {
 
 func NewCluster(backend *storage.Backend, auth string, domain string, ids []string) *Cluster {
     c := new(Cluster)
-    c.auth = auth
     c.Nodes = NewNodes(ids, domains(domain))
     c.Access = NewAccess(auth)
     c.data = NewData(backend)
@@ -473,7 +469,7 @@ func NewCluster(backend *storage.Backend, auth string, domain string, ids []stri
     c.Hub = NewHub(c)
 
     // Read cluster data.
-    data, rev, err := c.data.DataGet(HiberaKey)
+    data, rev, err := c.data.DataGet(RootKey)
     if err == nil && rev > 0 {
         utils.Print("CLUSTER", "START-FOUND rev=%d", uint64(rev))
         // Load the existing cluster data.

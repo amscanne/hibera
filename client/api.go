@@ -448,3 +448,77 @@ func (h *HiberaAPI) Clear() error {
     }
     return nil
 }
+
+func (h *HiberaAPI) AuthGet(key string) ([]byte, error) {
+    args := h.makeArgs(fmt.Sprintf("/auth/%s", key))
+    resp, err := h.doRequest("GET", args)
+    if err != nil {
+        return nil, err
+    }
+    if resp.StatusCode != 200 {
+        return nil, errors.New(resp.Status)
+    }
+    content, err := h.getContent(resp)
+    if err != nil {
+        return nil, err
+    }
+    return content, err
+}
+
+func (h *HiberaAPI) AuthList() ([]string, error) {
+    args := h.makeArgs("/auth")
+    resp, err := h.doRequest("GET", args)
+    if err != nil {
+        return nil, err
+    }
+    if resp.StatusCode != 200 {
+        return nil, errors.New(resp.Status)
+    }
+    content, err := h.getContent(resp)
+    if err != nil {
+        return nil, err
+    }
+    var items []string
+    err = json.Unmarshal(content, &items)
+    if err != nil {
+        return nil, err
+    }
+    return items, nil
+}
+
+func (h *HiberaAPI) AuthUpdate(key string, value []byte) error {
+    args := h.makeArgs(fmt.Sprintf("/auth/%s", key))
+    args.body = value
+    resp, err := h.doRequest("POST", args)
+    if err != nil {
+        return err
+    }
+    if resp.StatusCode != 200 {
+        return errors.New(resp.Status)
+    }
+    return err
+}
+
+func (h *HiberaAPI) AuthRemove(key string) error {
+    args := h.makeArgs(fmt.Sprintf("/auth/%s", key))
+    resp, err := h.doRequest("DELETE", args)
+    if err != nil {
+        return err
+    }
+    if resp.StatusCode != 200 {
+        return errors.New(resp.Status)
+    }
+    return err
+}
+
+func (h *HiberaAPI) AuthClear() error {
+    args := h.makeArgs("/auth")
+    resp, err := h.doRequest("DELETE", args)
+    if err != nil {
+        return err
+    }
+    if resp.StatusCode != 200 {
+        return errors.New(resp.Status)
+    }
+    return err
+}
