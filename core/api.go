@@ -36,7 +36,7 @@ func (c *Cluster) doRedirect(conn *Connection, key Key) (bool, error) {
 
 func (c *Cluster) Authorize(auth string, key Key, read bool, write bool, execute bool) error {
     // Check for a token.
-    if c.Tokens.Check(auth, string(key), read, write, execute) {
+    if c.Access.Check(auth, string(key), read, write, execute) {
         return nil
     }
 
@@ -54,30 +54,30 @@ func (c *Cluster) Info(conn *Connection, rev Revision) (string, []byte, Revision
     return c.id, bytes, c.rev, err
 }
 
-func (c *Cluster) Activate(conn *Connection) error {
+func (c *Cluster) Activate(conn *Connection) (Revision, error) {
     utils.Print("CLUSTER", "ACTIVATE")
     err := c.Authorize(conn.Auth(), HiberaKey, true, true, false)
     if err != nil {
-        return err
+        return c.rev, err
     }
-    return c.doActivate()
+    return c.rev, c.doActivate()
 }
 
-func (c *Cluster) Deactivate(conn *Connection) error {
+func (c *Cluster) Deactivate(conn *Connection) (Revision, error) {
     utils.Print("CLUSTER", "DEACTIVATE")
     err := c.Authorize(conn.Auth(), HiberaKey, true, true, false)
     if err != nil {
-        return err
+        return c.rev, err
     }
     server, err := c.doRedirect(conn, HiberaKey)
     if err != nil {
-        return err
+        return c.rev, err
     }
     if server {
-        return c.doDeactivate()
+        return c.rev, c.doDeactivate()
     }
 
-    return c.allDeactivate()
+    return c.rev, c.allDeactivate()
 }
 
 func (c *Cluster) Id() string {
@@ -88,16 +88,18 @@ func (c *Cluster) Version() Revision {
     return c.rev
 }
 
-func (c *Cluster) List(conn *Connection) ([]Key, error) {
+func (c *Cluster) List(conn *Connection) (Revision, []Key, error) {
     utils.Print("CLUSTER", "DATA-LIST")
     err := c.Authorize(conn.Auth(), Key(""), true, false, false)
     if err != nil {
-        return nil, err
+        return c.rev, nil, err
     }
     if c.Nodes.Heartbeat(conn.Name("")) {
-        return c.data.DataList()
+        items, err := c.data.DataList()
+        return c.rev, items, err
     }
-    return c.allList()
+    items, err := c.allList()
+    return c.rev, items, err
 }
 
 func (c *Cluster) Get(conn *Connection, key Key, rev Revision, timeout uint) ([]byte, Revision, error) {
@@ -150,16 +152,16 @@ func (c *Cluster) Remove(conn *Connection, key Key, rev Revision) (Revision, err
     return c.quorumRemove(c.ring, key, rev)
 }
 
-func (c *Cluster) Clear(conn *Connection) error {
+func (c *Cluster) Clear(conn *Connection) (Revision, error) {
     utils.Print("CLUSTER", "DATA-CLEAR")
     err := c.Authorize(conn.Auth(), Key(""), false, true, false)
     if err != nil {
-        return err
+        return c.rev, err
     }
     if c.Nodes.Heartbeat(conn.Name("")) {
-        return c.data.DataClear()
+        return c.rev, c.data.DataClear()
     }
-    return c.allClear()
+    return c.rev, c.allClear()
 }
 
 func (c *Cluster) Members(conn *Connection, key Key, name string, limit uint) (int, []string, Revision, error) {

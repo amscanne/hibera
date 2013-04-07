@@ -210,10 +210,10 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
                 }
                 break
             case "POST":
-                err = s.Cluster.Activate(conn)
+                rev, err = s.Cluster.Activate(conn)
                 break
             case "DELETE":
-                err = s.Cluster.Deactivate(conn)
+                rev, err = s.Cluster.Deactivate(conn)
                 break
             }
             break
@@ -222,13 +222,13 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
             switch r.Method {
             case "GET":
                 var items []core.Key
-                items, err = s.Cluster.List(conn)
+                rev, items, err = s.Cluster.List(conn)
                 if err == nil {
                     err = enc.Encode(items)
                 }
                 break
             case "DELETE":
-                err = s.Cluster.Clear(conn)
+                rev, err = s.Cluster.Clear(conn)
                 break
             }
             break
