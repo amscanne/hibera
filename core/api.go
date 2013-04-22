@@ -295,7 +295,6 @@ func (c *Cluster) AuthSet(conn *Connection, key string, value []byte) (Revision,
     }
 
     err = c.Access.Set(key, value)
-    c.changeRevision(c.rev+1, false)
     return c.rev, err
 }
 
@@ -313,8 +312,7 @@ func (c *Cluster) AuthRemove(conn *Connection, key string) (Revision, error) {
         return c.rev, err
     }
 
-    c.Access.Remove(key, c.rev+1)
-    c.changeRevision(c.rev+1, false)
+    c.Access.Remove(key)
     return c.rev, nil
 }
 

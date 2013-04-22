@@ -62,13 +62,13 @@ type Cluster struct {
 
 type Info struct {
     Nodes map[string]*Node
-    Access map[string]*Token
+    Access map[string]map[string]string
 }
 
 func (c *Cluster) doEncode(rev Revision, next bool) ([]byte, error) {
     info := new(Info)
     info.Nodes = make(map[string]*Node)
-    info.Access = make(map[string]*Token)
+    info.Access = make(map[string]map[string]string)
 
     // Encode our nodes.
     err := c.Nodes.Encode(rev, next, info.Nodes)
@@ -77,13 +77,13 @@ func (c *Cluster) doEncode(rev Revision, next bool) ([]byte, error) {
     }
 
     // Encode our tokens.
-    err = c.Access.Encode(rev, next, info.Access)
+    err = c.Access.Encode(next, info.Access)
     if err != nil {
         return nil, err
     }
 
     // Check if we're encoding anything interesting.
-    if len(info.Nodes) == 0 && len(info.Access) == 0 {
+    if next && len(info.Nodes) == 0 && len(info.Access) == 0 {
         return nil, nil
     }
 
@@ -98,7 +98,7 @@ func (c *Cluster) doEncode(rev Revision, next bool) ([]byte, error) {
 func (c *Cluster) doDecode(data []byte) (bool, error) {
     info := new(Info)
     info.Nodes = make(map[string]*Node)
-    info.Access = make(map[string]*Token)
+    info.Access = make(map[string]map[string]string)
 
     // Decode our nodes and tokens.
     buf := bytes.NewBuffer(data)

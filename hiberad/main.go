@@ -5,6 +5,8 @@ import (
     "log"
     "strings"
     "time"
+    "os"
+    "runtime/pprof"
     "math/rand"
     "hibera/storage"
     "hibera/server"
@@ -20,6 +22,7 @@ var domain = flag.String("domain", core.DefaultDomain, "Failure domain for this 
 var keys = flag.Uint("keys", core.DefaultKeys, "The number of keys for this node (weight).")
 var seeds = flag.String("seeds", server.DefaultSeeds, "Seeds for joining the cluster.")
 var active = flag.Uint("active", server.DefaultActive, "Maximum active simutaneous clients.")
+var profile = flag.String("profile", "", "Enabling profiling and write to file.")
 
 func main() {
     // NOTE: We need the random number generator,
@@ -28,6 +31,16 @@ func main() {
     rand.Seed(time.Now().UTC().UnixNano())
 
     flag.Parse()
+
+    // Turn on profiling.
+    if *profile != "" {
+        f, err := os.Create(*profile)
+        if err != nil {
+            log.Fatal(err)
+        }
+        pprof.StartCPUProfile(f)
+        defer pprof.StopCPUProfile()
+    }
 
     // Initialize our storage.
     backend := storage.NewBackend(*path)

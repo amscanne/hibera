@@ -57,6 +57,8 @@ authorization commands:
 
     auth-set <key>               --- Set key details.
 
+    auth-remove <key>            --- Remove auth key.
+
     auth-clear                   --- Clear all keys.
 
 synchronization commands:
@@ -100,13 +102,13 @@ synchronization commands:
 
 data commands:
 
+    list                         --- List all keys.
+
     get <key>                    --- Get the contents of the key.
 
     set <key> [value]            --- Set the contents of the key.
 
-    rm <key>                     --- Remove the given key.
-
-    ls                           --- List all keys.
+    remove <key>                 --- Remove the given key.
 
     clear                        --- Clear all data.
 
@@ -386,12 +388,12 @@ func cli_set(c *client.HiberaAPI, key string, value *string) error {
     return err
 }
 
-func cli_rm(c *client.HiberaAPI, key string) error {
+func cli_remove(c *client.HiberaAPI, key string) error {
     _, err := c.Remove(key, 0)
     return err
 }
 
-func cli_ls(c *client.HiberaAPI) error {
+func cli_list(c *client.HiberaAPI) error {
     items, err := c.List()
     if err != nil {
         return err
@@ -562,11 +564,11 @@ func main() {
             err = cli_set(client(), key, nil)
         }
         break
-    case "rm":
-        err = cli_rm(client(), key)
+    case "remove":
+        err = cli_remove(client(), key)
         break
-    case "ls":
-        err = cli_ls(client())
+    case "list":
+        err = cli_list(client())
         break
     case "clear":
         err = cli_clear(client())
