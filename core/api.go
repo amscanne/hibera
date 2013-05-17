@@ -125,8 +125,8 @@ func (c *Cluster) Get(conn *Connection, key Key, rev Revision, timeout uint) ([]
     if err != nil {
         return nil, Revision(0), err
     }
-    alive := func() bool { return conn.alive() && c.ring.IsMaster(key) }
-    return c.data.DataWatch(conn.EphemId(), key, rev, timeout, alive)
+    valid := func() bool { return c.ring.IsMaster(key) }
+    return c.data.DataWatch(conn.EphemId(), key, rev, timeout, *conn.notifier, valid)
 }
 
 func (c *Cluster) Set(conn *Connection, key Key, rev Revision, value []byte) (Revision, error) {
@@ -200,8 +200,8 @@ func (c *Cluster) Join(conn *Connection, key Key, name string, limit uint, timeo
     if err != nil || server {
         return -1, Revision(0), err
     }
-    alive := func() bool { return conn.alive() && c.ring.IsMaster(key) }
-    return c.data.SyncJoin(conn.EphemId(), key, name, limit, timeout, alive)
+    valid := func() bool { return c.ring.IsMaster(key) }
+    return c.data.SyncJoin(conn.EphemId(), key, name, limit, timeout, *conn.notifier, valid)
 }
 
 func (c *Cluster) Leave(conn *Connection, key Key, name string) (Revision, error) {
@@ -227,8 +227,8 @@ func (c *Cluster) Wait(conn *Connection, key Key, rev Revision, timeout uint) (R
     if err != nil || server {
         return Revision(0), err
     }
-    alive := func() bool { return conn.alive() && c.ring.IsMaster(key) }
-    return c.data.EventWait(conn.EphemId(), key, rev, timeout, alive)
+    valid := func() bool { return c.ring.IsMaster(key) }
+    return c.data.EventWait(conn.EphemId(), key, rev, timeout, *conn.notifier, valid)
 }
 
 func (c *Cluster) Fire(conn *Connection, key Key, rev Revision) (Revision, error) {

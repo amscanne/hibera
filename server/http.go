@@ -54,29 +54,14 @@ func (l Listener) Accept() (net.Conn, error) {
     // Wait for a slot to be available.
     <-l.avail
 
+    // Accept the connection.
     c, err := l.Listener.Accept()
     if err != nil {
         l.avail<- true
         return c, err
     }
 
-    // NOTE: This function should only be called from
-    // contexts where we are not expecting anything to
-    // be read from the socket. i.e. from within the
-    // request handler itself. If it is called from other
-    // places, there is the possibility that it will eat
-    // actual useful input from the user.
-    alive := func() bool {
-        c.SetReadDeadline(time.Now())
-        if _, err := c.Read(make([]byte, 1, 1)); err == io.EOF {
-            return false
-        } else {
-            var zero time.Time
-            c.SetReadDeadline(zero)
-        }
-        return true
-    }
-    return Connection{c, &l, l.Cluster.NewConnection(c.RemoteAddr().String(), alive)}, nil
+    return Connection{c, &l, l.Cluster.NewConnection(c.RemoteAddr().String())}, nil
 }
 
 func (c Connection) RemoteAddr() net.Addr {
@@ -135,7 +120,7 @@ func (s *HTTPServer) getContent(r *http.Request) ([]byte, error) {
     return buf, nil
 }
 
-func (s *HTTPServer) getConnection(r *http.Request, auth string) *core.Connection {
+func (s *HTTPServer) getConnection(r *http.Request, auth string, notifier <-chan bool) *core.Connection {
     // Pull out the relevant conn.
     // NOTE: This is a hack. The underlying connection is our
     // special connection object -- and we return a string which
@@ -149,11 +134,11 @@ func (s *HTTPServer) getConnection(r *http.Request, auth string) *core.Connectio
     if len(r.Header["X-Client-Id"]) > 0 {
         // Return a connection with the asssociate conn.
         return s.Cluster.FindConnection(core.ConnectionId(id),
-            core.UserId(r.Header["X-Client-Id"][0]), auth)
+            core.UserId(r.Header["X-Client-Id"][0]), auth, notifier)
     }
 
     // Return a connection with no associated conn.
-    return s.Cluster.FindConnection(core.ConnectionId(id), "", auth)
+    return s.Cluster.FindConnection(core.ConnectionId(id), "", auth, notifier)
 }
 
 func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
@@ -165,8 +150,8 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
         auth = r.Header["X-Authorization"][0]
     }
 
-    // Pull out a connection.
-    conn := s.getConnection(r, auth)
+    // Pull out a connection (with the close notifiers).
+    conn := s.getConnection(r, auth, w.CloseNotify())
     if conn == nil {
         http.Error(w, "", http.StatusNotFound)
         return

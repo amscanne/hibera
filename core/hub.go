@@ -24,17 +24,18 @@ type Connection struct {
     // The authenictation information for this conn.
     auth string
 
-    // A closure to check whether or not this
-    // connection is currently alive.
-    alive func() bool
-
     // The user associated (if there is one).
     // This will be looked up on the first if
     // the user provided a generated ConnectionId.
     client *Client
 
+    // The notification channel if the underlying
+    // connection drops.
+    notifier *<-chan bool
+
     // Whether this connection has been initialized
     // with a client (above). Client may stil be nil.
+    // NOTE: This will also initialize the notifier.
     inited bool
 }
 
@@ -103,12 +104,12 @@ func (c *Hub) genid() uint64 {
     return atomic.AddUint64(&c.nextid, 1)
 }
 
-func (c *Hub) NewConnection(addr string, alive func() bool) *Connection {
+func (c *Hub) NewConnection(addr string) *Connection {
     // Generate conn with no user, and
     // a straight-forward id. The user can
     // associate some conn-id with their
     // active connection during lookup.
-    conn := &Connection{c, ConnectionId(c.genid()), addr, "", alive, nil, false}
+    conn := &Connection{c, ConnectionId(c.genid()), addr, "", nil, nil, false}
 
     c.Mutex.Lock()
     defer c.Mutex.Unlock()
@@ -118,7 +119,7 @@ func (c *Hub) NewConnection(addr string, alive func() bool) *Connection {
     return conn
 }
 
-func (c *Hub) FindConnection(id ConnectionId, userid UserId, auth string) *Connection {
+func (c *Hub) FindConnection(id ConnectionId, userid UserId, auth string, notifier <-chan bool) *Connection {
     c.Mutex.Lock()
     defer c.Mutex.Unlock()
 
@@ -130,7 +131,9 @@ func (c *Hub) FindConnection(id ConnectionId, userid UserId, auth string) *Conne
     if conn.inited {
         return conn
     }
-    conn.inited = true
+
+    // Save the notification channel.
+    conn.notifier = &notifier
 
     // Create the user if it doesnt exist.
     // NOTE: There are some race conditions here between the
@@ -155,6 +158,7 @@ func (c *Hub) FindConnection(id ConnectionId, userid UserId, auth string) *Conne
         }
     }
 
+    conn.inited = true
     return conn
 }
 
@@ -194,8 +198,8 @@ func (c *Hub) dumpHub() {
         } else {
             clid = uint64(0)
         }
-        utils.Print("HUB", "CONNECTION id=%d addr=%s client=%d alive=%t",
-                    uint64(conn.ConnectionId), conn.addr, clid, conn.alive())
+        utils.Print("HUB", "CONNECTION id=%d addr=%s client=%d",
+                    uint64(conn.ConnectionId), conn.addr, clid)
     }
     for _, client := range c.clients {
         utils.Print("HUB", "CLIENT id=%d userid=%s refs=%d",

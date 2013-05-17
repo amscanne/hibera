@@ -35,29 +35,18 @@ func (l *Lock) unlock(key Key) {
     l.sem <- true
 }
 
-func (l *Lock) wait(key Key, timeout bool, duration time.Duration, alive func() bool) bool {
+func (l *Lock) wait(key Key, timeout bool, duration time.Duration, notifier <-chan bool) bool {
     // Setup some basic channels for doing our wait
     // on this lock. We keep waiting as long as there 
     // is someone on the other end of the connection.
-    // NOTE: When this function returns, we do *not*
-    // want to call alive() anymore.
     timeoutchan := make(chan bool, 1)
-    deadconnchan := make(chan bool, 1)
     wakeupchan := make(chan bool, 1)
 
+    // Start the timeout channel.
     go func() {
         if timeout {
             time.Sleep(duration)
             timeoutchan <- true
-        }
-    }()
-    go func() {
-        for {
-            time.Sleep(time.Second)
-            if !alive() {
-                deadconnchan <- true
-                break
-            }
         }
     }()
 
@@ -75,13 +64,10 @@ func (l *Lock) wait(key Key, timeout bool, duration time.Duration, alive func() 
     select {
         case <- wakeupchan:
         case <- timeoutchan:
-            // Ensure the connection channel is drained.
-            alive = func() bool { return false }
-            <- deadconnchan
             rval = true
             break
 
-        case <- deadconnchan:
+        case <- notifier:
             rval = false
             break
     }
@@ -249,7 +235,11 @@ func (l *data) computeIndex(revmap *EphemeralSet, name string, limit uint) (int,
     return index, members
 }
 
-func (l *data) SyncJoin(id EphemId, key Key, name string, limit uint, timeout uint, alive func() bool) (int, Revision, error) {
+func (l *data) SyncJoin(
+    id EphemId, key Key, name string, limit uint, timeout uint,
+    notifier <-chan bool,
+    valid func() bool) (int, Revision, error) {
+
     lock := l.lock(key)
     defer lock.unlock(key)
 
@@ -295,7 +285,7 @@ func (l *data) SyncJoin(id EphemId, key Key, name string, limit uint, timeout ui
             index, _ := l.computeIndex(revmap, name, limit)
             return index, l.revs[key], nil
         }
-        if !lock.wait(key, timeout > 0, end.Sub(now), alive) {
+        if !lock.wait(key, timeout > 0, end.Sub(now), notifier) || !valid() {
             index, _ := l.computeIndex(revmap, name, limit)
             return index, l.revs[key], nil
         }
@@ -340,7 +330,11 @@ func (l *data) DataGet(key Key) ([]byte, Revision, error) {
     return value, Revision(rev), err
 }
 
-func (l *data) DataWatch(id EphemId, key Key, rev Revision, timeout uint, alive func() bool) ([]byte, Revision, error) {
+func (l *data) DataWatch(
+    id EphemId, key Key, rev Revision, timeout uint,
+    notifier <-chan bool,
+    valid func() bool) ([]byte, Revision, error) {
+
     lock := l.lock(key)
     defer lock.unlock(key)
 
@@ -349,7 +343,7 @@ func (l *data) DataWatch(id EphemId, key Key, rev Revision, timeout uint, alive 
             _, lrev, err := l.store.Read(string(key))
             return Revision(lrev), err
         }
-        rev, err := l.doWait(id, key, lock, rev, timeout, getrev, alive)
+        rev, err := l.doWait(id, key, lock, rev, timeout, getrev, notifier, valid)
         if err != nil {
             return nil, rev, err
         }
@@ -398,7 +392,12 @@ func (l *data) DataRemove(key Key, rev Revision) (Revision, error) {
     })
 }
 
-func (l *data) doWait(id EphemId, key Key, lock *Lock, rev Revision, timeout uint, getrev func() (Revision, error), alive func() bool) (Revision, error) {
+func (l *data) doWait(
+    id EphemId, key Key, lock *Lock, rev Revision, timeout uint,
+    getrev func() (Revision, error),
+    notifier <-chan bool,
+    valid func() bool) (Revision, error) {
+
     start := time.Now()
     end := start.Add(time.Duration(timeout) * time.Millisecond)
 
@@ -422,7 +421,7 @@ func (l *data) doWait(id EphemId, key Key, lock *Lock, rev Revision, timeout uin
         if timeout > 0 && now.After(end) {
             return currev, nil
         }
-        if !lock.wait(key, timeout > 0, end.Sub(now), alive) {
+        if !lock.wait(key, timeout > 0, end.Sub(now), notifier) || !valid() {
             return currev, nil
         }
     }
@@ -431,7 +430,11 @@ func (l *data) doWait(id EphemId, key Key, lock *Lock, rev Revision, timeout uin
     return currev, nil
 }
 
-func (l *data) EventWait(id EphemId, key Key, rev Revision, timeout uint, alive func() bool) (Revision, error) {
+func (l *data) EventWait(
+    id EphemId, key Key, rev Revision, timeout uint,
+    notifier <-chan bool,
+    valid func() bool) (Revision, error) {
+
     lock := l.lock(key)
     defer lock.unlock(key)
 
@@ -442,7 +445,7 @@ func (l *data) EventWait(id EphemId, key Key, rev Revision, timeout uint, alive 
     if rev == 0 {
         rev, _ = getrev()
     }
-    return l.doWait(id, key, lock, rev, timeout, getrev, alive)
+    return l.doWait(id, key, lock, rev, timeout, getrev, notifier, valid)
 }
 
 func (l *data) doFire(key Key, rev Revision, lock *Lock) (Revision, error) {
