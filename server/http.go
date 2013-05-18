@@ -151,7 +151,15 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
     }
 
     // Pull out a connection (with the close notifiers).
-    conn := s.getConnection(r, auth, w.CloseNotify())
+    closeNotifier, ok := w.(http.CloseNotifier)
+    if !ok {
+        // Something is very wrong -- no close notifier?
+        http.Error(w, "", http.StatusInternalServerError)
+        return
+    }
+
+    // Grab the connection object.
+    conn := s.getConnection(r, auth, closeNotifier.CloseNotify())
     if conn == nil {
         http.Error(w, "", http.StatusNotFound)
         return

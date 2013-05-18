@@ -498,7 +498,7 @@ func main() {
     if command == "info" ||
        command == "activate" ||
        command == "deactivate" ||
-       command == "ls" ||
+       command == "list" ||
        command == "clear" {
     } else {
         if len(os.Args) == 1 {
