@@ -1,7 +1,7 @@
 package server
 
 import (
-    "hibera/core"
+    "hibera/cluster"
     "hibera/utils"
 )
 
@@ -12,13 +12,13 @@ type Server struct {
     *GossipServer
 }
 
-func NewServer(cluster *core.Cluster, addr string, port uint, seeds []string, active uint) *Server {
-    http := NewHTTPServer(cluster, addr, port, active)
+func NewServer(c *cluster.Cluster, addr string, port uint, seeds []string, active uint) *Server {
+    http := NewHTTPServer(c, addr, port, active)
     if http == nil {
         return nil
     }
 
-    gossip := NewGossipServer(cluster, addr, port, seeds)
+    gossip := NewGossipServer(c, addr, port, seeds)
     if gossip == nil {
         return nil
     }

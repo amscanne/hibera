@@ -13,6 +13,7 @@ import (
     "time"
     "encoding/json"
     "hibera/core"
+    "hibera/cluster"
     "hibera/client"
     "hibera/utils"
 )
@@ -23,21 +24,22 @@ var DefaultActive = uint(256)
 type Listener struct {
     net.Listener
     avail chan bool
-    *core.Cluster
+    *Hub
 }
 
-type Connection struct {
+type HTTPConnection struct {
     net.Conn
     *Listener
-    *core.Connection
+    *Connection
 }
 
 type Addr struct {
-    core.ConnectionId
+    ConnectionId
 }
 
 type HTTPServer struct {
-    *core.Cluster
+    *cluster.Cluster
+    *Hub
     *Listener
     *http.Server
 }
@@ -61,14 +63,14 @@ func (l Listener) Accept() (net.Conn, error) {
         return c, err
     }
 
-    return Connection{c, &l, l.Cluster.NewConnection(c.RemoteAddr().String())}, nil
+    return HTTPConnection{c, &l, l.Hub.NewConnection(c.RemoteAddr().String())}, nil
 }
 
-func (c Connection) RemoteAddr() net.Addr {
+func (c HTTPConnection) RemoteAddr() net.Addr {
     return Addr{c.Connection.ConnectionId}
 }
 
-func (c Connection) Close() error {
+func (c HTTPConnection) Close() error {
     // Inform the core about this dropped conn.
     c.Connection.Drop()
     err := c.Conn.Close()
@@ -99,6 +101,20 @@ func (s *HTTPServer) intParam(r *http.Request, name string) uint64 {
     return rval
 }
 
+func (s *HTTPServer) boolParam(r *http.Request, name string) bool {
+    values := r.Form[name]
+    if len(values) == 0 {
+        return false
+    }
+    lower := values[0]
+    if lower == "1" ||
+       lower == "true" || lower == "t" ||
+       lower == "y" || lower == "yes" {
+       return true
+    }
+    return false
+}
+
 func (s *HTTPServer) strParam(r *http.Request, name string) string {
     values := r.Form[name]
     if len(values) == 0 {
@@ -120,7 +136,7 @@ func (s *HTTPServer) getContent(r *http.Request) ([]byte, error) {
     return buf, nil
 }
 
-func (s *HTTPServer) getConnection(r *http.Request, auth string, notifier <-chan bool) *core.Connection {
+func (s *HTTPServer) getConnection(r *http.Request, auth string, notifier <-chan bool) *Connection {
     // Pull out the relevant conn.
     // NOTE: This is a hack. The underlying connection is our
     // special connection object -- and we return a string which
@@ -133,12 +149,12 @@ func (s *HTTPServer) getConnection(r *http.Request, auth string, notifier <-chan
 
     if len(r.Header["X-Client-Id"]) > 0 {
         // Return a connection with the asssociate conn.
-        return s.Cluster.FindConnection(core.ConnectionId(id),
-            core.UserId(r.Header["X-Client-Id"][0]), auth, notifier)
+        return s.Hub.FindConnection(ConnectionId(id),
+            UserId(r.Header["X-Client-Id"][0]), auth, notifier)
     }
 
     // Return a connection with no associated conn.
-    return s.Cluster.FindConnection(core.ConnectionId(id), "", auth, notifier)
+    return s.Hub.FindConnection(ConnectionId(id), "", auth, notifier)
 }
 
 func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
@@ -178,9 +194,6 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
     // of form parameters from the body.
     r.ParseForm()
     parts := strings.SplitN(r.URL.Path[1:], "/", 2)
-    if len(parts) == 2 && len(parts[1]) == 0 {
-        parts = parts[0:1]
-    }
 
     // Prepare our response.
     // If we don't handle the request in the switch below,
@@ -196,20 +209,14 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
         case "":
             switch r.Method {
             case "GET":
-                rev = core.Revision(s.intParam(r, "rev"))
                 var id string
                 var data []byte
-                id, data, rev, err = s.Cluster.Info(conn, rev)
+                rev = core.Revision(s.intParam(r, "rev"))
+                id, data, rev, err = s.Cluster.Dump(conn, rev)
                 if err == nil {
                     w.Header().Set("X-Cluster-Id", id)
                     _, err = buf.Write(data)
                 }
-                break
-            case "POST":
-                rev, err = s.Cluster.Activate(conn)
-                break
-            case "DELETE":
-                rev, err = s.Cluster.Deactivate(conn)
                 break
             }
             break
@@ -227,17 +234,31 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
                 break
             }
             break
-        case "auth":
+        case "access":
             switch r.Method {
             case "GET":
-                var items []string
-                items, rev, err = s.Cluster.AuthList(conn)
+                var tokens []string
+                tokens, rev, err = s.Cluster.AccessList(conn)
                 if err == nil {
-                    err = enc.Encode(items)
+                    err = enc.Encode(tokens)
                 }
                 break
+            }
+            break
+        case "nodes":
+            switch r.Method {
+            case "GET":
+                var nodes []string
+                nodes, rev, err = s.Cluster.NodeList(conn)
+                if err == nil {
+                    err = enc.Encode(nodes)
+                }
+                break
+            case "POST":
+                rev, err = s.Cluster.Activate(conn)
+                break
             case "DELETE":
-                rev, err = s.Cluster.AuthClear(conn)
+                rev, err = s.Cluster.Deactivate(conn)
                 break
             }
             break
@@ -307,20 +328,41 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
                 break
             }
             break
-        case "auth":
+        case "access":
             switch r.Method {
             case "GET":
-                var value []byte
-                value, rev, err = s.Cluster.AuthGet(conn, parts[1])
+                var value *core.Token
+                value, rev, err = s.Cluster.AccessGet(conn, parts[1])
                 if err == nil {
-                    _, err = buf.Write(value)
+                    err = enc.Encode(value)
                 }
                 break
             case "POST":
-                rev, err = s.Cluster.AuthSet(conn, parts[1], content)
+                path := s.strParam(r, "path")
+                read := s.boolParam(r, "read")
+                write := s.boolParam(r, "write")
+                execute := s.boolParam(r, "execute")
+                rev, err = s.Cluster.AccessUpdate(conn, parts[1], path, read, write, execute)
                 break
             case "DELETE":
-                rev, err = s.Cluster.AuthRemove(conn, parts[1])
+                rev, err = s.Cluster.AccessRemove(conn, parts[1])
+                break
+            }
+            break
+        case "nodes":
+            switch r.Method {
+            case "GET":
+                var value *core.Node
+                value, rev, err = s.Cluster.NodeGet(conn, parts[1])
+                if err == nil {
+                    err = enc.Encode(value)
+                }
+                break
+            case "POST":
+                rev, err = s.Cluster.NodeAccept(conn, parts[1])
+                break
+            case "DELETE":
+                rev, err = s.Cluster.NodeForget(conn, parts[1])
                 break
             }
             break
@@ -340,7 +382,7 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
         io.Copy(w, buf)
         break
 
-    case *core.Redirect:
+    case *cluster.Redirect:
         // If we've gotten back a redirect error, then
         // we send the client to where it belongs.
         // NOTE: We actually use a permentant redirect
@@ -351,11 +393,18 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
         utils.Print("HTTP", "301 %s", url)
         http.Redirect(w, r, url, http.StatusMovedPermanently)
 
-    case *core.PermissionError:
+    case *cluster.PermissionError:
         // The user doesn't have appropriate permissions.
         url := utils.MakeURL(err.Error(), r.URL.Path+"?"+r.URL.RawQuery, nil)
         utils.Print("HTTP", "403 %s", url)
         http.Error(w, err.Error(), http.StatusForbidden)
+        break
+
+    case *cluster.NotActivatedError:
+        // The user doesn't have appropriate permissions.
+        url := utils.MakeURL(err.Error(), r.URL.Path+"?"+r.URL.RawQuery, nil)
+        utils.Print("HTTP", "503 %s", url)
+        http.Error(w, err.Error(), http.StatusServiceUnavailable)
         break
 
     default:
@@ -370,7 +419,7 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
     }
 }
 
-func NewHTTPServer(cluster *core.Cluster, addr string, port uint, active uint) *HTTPServer {
+func NewHTTPServer(cluster *cluster.Cluster, addr string, port uint, active uint) *HTTPServer {
     // Create our object.
     server := new(HTTPServer)
 
@@ -386,7 +435,8 @@ func NewHTTPServer(cluster *core.Cluster, addr string, port uint, active uint) *
         log.Print("Unable to bind HTTP server: ", err)
         return nil
     }
-    server.Listener = &Listener{ln, make(chan bool, active), cluster}
+    server.Hub = NewHub(cluster)
+    server.Listener = &Listener{ln, make(chan bool, active), server.Hub}
     server.Cluster = cluster
 
     // Fill the available channel slots.

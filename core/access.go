@@ -1,67 +1,26 @@
 package core
 
 import (
-    "bytes"
-    "strings"
-    "encoding/json"
     "sync"
     "regexp"
 )
 
 type Perms struct {
-    re *regexp.Regexp
-
     // Permissions.
     Read bool
     Write bool
     Execute bool
-}
 
-type Token map[string]Perms
-
-func OneToken(path string, read bool, write bool, execute bool) *Token {
-    token := make(Token)
-    if path != "" && (read || write || execute) {
-        re, _ := regexp.Compile(path)
-        token[path] = Perms{re, read, write, execute}
-    }
-    return &token
-}
-
-func (token *Token) toMap() map[string]string {
-    output := make(map[string]string)
-    for path, perms := range *token {
-        str := ""
-        if perms.Read {
-            str += "r"
-        }
-        if perms.Write {
-            str += "w"
-        }
-        if perms.Execute {
-            str += "x"
-        }
-        output[path] = str
-    }
-    return output
-}
-
-func fromMap(input map[string]string) *Token {
-    token := make(Token)
-    for path, perms := range input {
-        read := strings.Contains(perms, "r")
-        write := strings.Contains(perms, "w")
-        execute := strings.Contains(perms, "x")
-        re, _ := regexp.Compile(path)
-        token[path] = Perms{re, read, write, execute}
-    }
-    return &token
+    // Cached regular expression.
+    re *regexp.Regexp
 }
 
 type Access struct {
     // The map of all access.
-    all map[string]*Token
-    proposed map[string]*Token
+    all AccessInfo
+
+    // Proposed tokens.
+    proposed AccessInfo
 
     // The default admin authorization.
     auth string
@@ -74,7 +33,14 @@ func (access *Access) Check(id string, path string, read bool, write bool, execu
     if token == nil {
         return false
     }
-    for path, perms := range *token {
+    for tokpath, perms := range *token {
+        if perms.re == nil {
+            var err error
+            perms.re, err = regexp.Compile(tokpath)
+            if err != nil {
+                continue
+            }
+        }
         if perms.re.Match([]byte(path)) {
             if (!read || perms.Read) && (!write || perms.Write) || (!execute || perms.Execute) {
                 return true
@@ -94,32 +60,28 @@ func (access *Access) List() []string {
     return res
 }
 
-func (access *Access) Get(id string) ([]byte, error) {
+func (access *Access) Get(id string) (*Token, error) {
     token := access.all[id]
-    output := token.toMap()
-    buf := new(bytes.Buffer)
-    enc := json.NewEncoder(buf)
-    err := enc.Encode(&output)
-    return buf.Bytes(), err
+    if token == nil {
+        return nil, nil
+    }
+    return token, nil
 }
 
-func (access *Access) Set(id string, value []byte) error {
-    var input map[string]string
-    buf := bytes.NewBuffer(value)
-    dec := json.NewDecoder(buf)
-    err := dec.Decode(&input)
-    if err != nil {
-        return err
+func (access *Access) Update(id string, path string, read bool, write bool, execute bool) error {
+    if access.proposed[id] == nil {
+        token := make(Token)
+        access.proposed[id] = &token
     }
-    access.proposed[id] = fromMap(input)
+    (*access.proposed[id])[path] = Perms{read, write, execute, nil}
     return nil
 }
 
 func (access *Access) Remove(id string) {
-    access.proposed[id] = OneToken(".*", false, false, false)
+    access.proposed[id] = nil
 }
 
-func (access *Access) Encode(next bool, na map[string]map[string]string) error {
+func (access *Access) Encode(next bool, na AccessInfo) error {
     access.Mutex.Lock()
     defer access.Mutex.Unlock()
 
@@ -129,30 +91,43 @@ func (access *Access) Encode(next bool, na map[string]map[string]string) error {
 
     if next {
         for id, token := range access.proposed {
-            na[id] = token.toMap()
+            na[id] = token
         }
+
     } else {
         for id, token := range access.all {
-            na[id] = token.toMap()
+            na[id] = token
         }
     }
 
     return nil
 }
 
-func (access *Access) Decode(na map[string]map[string]string) error {
+func (access *Access) Decode(na AccessInfo) error {
     access.Mutex.Lock()
     defer access.Mutex.Unlock()
 
     // Update all access tokens.
     for id, token := range na {
-        if len(token) == 0 {
+        if token == nil || len(*token) == 0 {
             delete(access.all, id)
         } else {
-            access.all[id] = fromMap(token)
+            if access.all[id] == nil {
+                token := make(Token)
+                access.all[id] = &token
+            }
+            for tokpath, perms := range *token {
+                if !perms.Read && !perms.Write && !perms.Execute {
+                    delete(*(access.all[id]), tokpath)
+                } else {
+                    (*access.all[id])[tokpath] = perms
+                }
+            }
+            if len(*access.all[id]) == 0 {
+                delete(access.all, id)
+            }
         }
 
-        // Remove any proposals.
         delete(access.proposed, id)
     }
 
@@ -162,8 +137,11 @@ func (access *Access) Decode(na map[string]map[string]string) error {
 func (access *Access) Reset() {
     access.Mutex.Lock()
     defer access.Mutex.Unlock()
-    access.all = make(map[string]*Token)
-    access.all[access.auth] = OneToken(".*", true, true, true)
+    access.all = make(AccessInfo)
+    token := make(Token)
+    access.all[access.auth] = &token
+    (*access.all[access.auth])[".*"] = Perms{true, true, true, nil}
+    access.proposed = make(AccessInfo)
 }
 
 func NewAccess(auth string) *Access {

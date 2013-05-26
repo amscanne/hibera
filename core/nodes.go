@@ -23,11 +23,15 @@ type Node struct {
     // The node keys.
     Keys []string
 
-    // Active is whether or not this node
-    // is in the ring. If active is false
-    // and dropped is above our threshold
-    // we will just disregard the node.
-    Active bool
+    // Available is whether or not the node has
+    // failed liveness tests recently. If it has,
+    // then the node will not be available.
+    Available bool
+
+    // Accepted is whether or not this node has
+    // been accepted into the ring. If true, then
+    // it may paritcipate when available.
+    Accepted bool
 
     // The last revision modified.
     Modified Revision
@@ -54,7 +58,7 @@ func (n *Node) Alive() bool {
 func (n *Node) Id() string {
     if n.id == "" {
         sort.Sort(sort.StringSlice(n.Keys))
-        n.id = mhash(n.Keys)
+        n.id = utils.MHash(n.Keys)
     }
     return n.id
 }
@@ -63,17 +67,22 @@ func NewNode(keys []string, domains []string) *Node {
     node := new(Node)
     node.Keys = keys
     node.Domains = domains
-    node.Active = false
+    node.Available = false
+    node.Accepted = false
     node.Dropped = DropLimit
     return node
 }
 
 type Nodes struct {
     // The map of all nodes.
-    all map[string]*Node
+    all NodeInfo
 
     // Our own node (also in all).
     self *Node
+
+    // Pending accept and forget.
+    toaccept map[string]bool
+    toforget map[string]bool
 
     sync.Mutex
 }
@@ -115,8 +124,9 @@ func (nodes *Nodes) Activate(id string, rev Revision) bool {
     }
 
     // We activate this node.
-    if !node.Active {
-        node.Active = true
+    if !node.Available || !node.Accepted {
+        node.Available = true
+        node.Accepted = true
         node.Modified = rev
     }
     node.RstDropped()
@@ -134,12 +144,46 @@ func (nodes *Nodes) Fail(id string, rev Revision) bool {
     }
 
     // We deactivate this node.
-    if node.Active {
-        node.Active = false
+    if node.Available {
+        node.Available = false
         node.Modified = rev
         return true
     }
     return false
+}
+
+func (nodes *Nodes) List() ([]string, error) {
+    nodes.Mutex.Lock()
+    defer nodes.Mutex.Unlock()
+
+    all := make([]string, len(nodes.all), len(nodes.all))
+    cur := 0
+    for id, _ := range nodes.all {
+        all[cur] = id
+        cur += 1
+    }
+
+    return all, nil
+}
+
+func (nodes *Nodes) Get(id string) (*Node, error) {
+    nodes.Mutex.Lock()
+    defer nodes.Mutex.Unlock()
+    return nodes.all[id], nil
+}
+
+func (nodes *Nodes) Accept(id string) error {
+    nodes.Mutex.Lock()
+    defer nodes.Mutex.Unlock()
+    nodes.toaccept[id] = true
+    return nil
+}
+
+func (nodes *Nodes) Forget(id string) error {
+    nodes.Mutex.Lock()
+    defer nodes.Mutex.Unlock()
+    nodes.toforget[id] = true
+    return nil
 }
 
 func (nodes *Nodes) filter(fn func(node *Node) bool) []*Node {
@@ -156,27 +200,27 @@ func (nodes *Nodes) filter(fn func(node *Node) bool) []*Node {
     return filtered
 }
 
-func (nodes *Nodes) Active() []*Node {
+func (nodes *Nodes) Inuse() []*Node {
     return nodes.filter(func(node *Node) bool {
-        return node.Active
+        return node.Available && node.Accepted
     })
 }
 
 func (nodes *Nodes) Dead() []*Node {
     return nodes.filter(func(node *Node) bool {
-        return node.Active && node != nodes.self && !node.Alive()
+        return node.Available && node.Accepted && node != nodes.self && !node.Alive()
     })
 }
 
 func (nodes *Nodes) Others() []*Node {
     return nodes.filter(func(node *Node) bool {
-        return node.Active && node != nodes.self
+        return node.Available && node.Accepted && node != nodes.self
     })
 }
 
 func (nodes *Nodes) Suspicious() []*Node {
     return nodes.filter(func(node *Node) bool {
-        return node.Active && node.Dropped > 0
+        return node.Available && node.Accepted && node.Dropped > 0
     })
 }
 
@@ -188,7 +232,7 @@ func (nodes *Nodes) Count() int {
     return len(nodes.all)
 }
 
-func (nodes *Nodes) Encode(rev Revision, next bool, na map[string]*Node) error {
+func (nodes *Nodes) Encode(rev Revision, next bool, na NodeInfo) error {
     nodes.Mutex.Lock()
     defer nodes.Mutex.Unlock()
 
@@ -198,7 +242,10 @@ func (nodes *Nodes) Encode(rev Revision, next bool, na map[string]*Node) error {
 
     for id, node := range nodes.all {
         if next {
-            if !node.Active && node.Alive() {
+            if nodes.toforget[id] {
+                na[id] = nil
+
+            } else if (!node.Available && node.Alive()) || nodes.toaccept[id] {
                 // Check if we can't add this domain.
                 doadd := true
                 for _, domain := range node.Domains {
@@ -216,10 +263,11 @@ func (nodes *Nodes) Encode(rev Revision, next bool, na map[string]*Node) error {
 
                 // Propose this as an active node.
                 na[id] = NewNode(node.Keys, node.Domains)
-                na[id].Active = true
+                na[id].Available = node.Alive()
+                na[id].Accepted = nodes.toaccept[id]
                 na[id].Modified = rev
 
-            } else if node.Active && node != nodes.self && !node.Alive() {
+            } else if node.Available && node != nodes.self && !node.Alive() {
                 // Check if we can't remove this domain.
                 doremove := true
                 for _, domain := range node.Domains {
@@ -237,9 +285,10 @@ func (nodes *Nodes) Encode(rev Revision, next bool, na map[string]*Node) error {
 
                 // Propose this as a removed node.
                 na[id] = NewNode(node.Keys, node.Domains)
-                na[id].Active = false
+                na[id].Available = false
                 na[id].Modified = rev
             }
+
         } else {
             if node == nodes.self || node.Modified >= rev {
                 na[id] = node
@@ -272,7 +321,7 @@ func bestAddr(addr1 string, addr2 string) string {
     return addr1
 }
 
-func (nodes *Nodes) Decode(na map[string]*Node) (bool, error) {
+func (nodes *Nodes) Decode(na NodeInfo) (bool, error) {
     nodes.Mutex.Lock()
     defer nodes.Mutex.Unlock()
 
@@ -280,7 +329,7 @@ func (nodes *Nodes) Decode(na map[string]*Node) (bool, error) {
 
     // Update all nodes with revs > Modified.
     for id, node := range na {
-        orig_active := (nodes.all[id] != nil && nodes.all[id].Active)
+        orig_active := (nodes.all[id] != nil && nodes.all[id].Available)
         if nodes.all[id] == nil ||
             nodes.all[id].Modified < node.Modified {
             if id == nodes.self.Id() {
@@ -291,10 +340,13 @@ func (nodes *Nodes) Decode(na map[string]*Node) (bool, error) {
             }
             nodes.all[id] = node
         }
-        now_active := (nodes.all[id] != nil && nodes.all[id].Active)
+        now_active := (nodes.all[id] != nil && nodes.all[id].Available)
         if orig_active != now_active {
             changed = true
         }
+
+        delete(nodes.toaccept, id)
+        delete(nodes.toforget, id)
     }
 
     return changed, nil
@@ -314,10 +366,10 @@ func (nodes *Nodes) Update(id string, addr *net.UDPAddr) {
     node.Addr = addr.String()
 }
 
-func (nodes *Nodes) dumpNodes() {
+func (nodes *Nodes) DumpNodes() {
     for id, node := range nodes.all {
-        utils.Print("CLUSTER", "  %s %s active=%t dropped=%d",
-            id, node.Addr, node.Active, node.Dropped)
+        utils.Print("CLUSTER", "  %s %s available=%t accepted=%t dropped=%d",
+            id, node.Addr, node.Available, node.Accepted, node.Dropped)
     }
 }
 
@@ -331,7 +383,7 @@ func (nodes *Nodes) Reset() {
 
 func NewNodes(keys []string, domains []string) *Nodes {
     nodes := new(Nodes)
-    nodes.all = make(map[string]*Node)
+    nodes.all = make(NodeInfo)
 
     // Nodes are create with hashed keys.
     // NOTE: all other nodes will be added
@@ -342,7 +394,7 @@ func NewNodes(keys []string, domains []string) *Nodes {
     // system.
     hashed := make([]string, len(keys), len(keys))
     for i, key := range keys {
-        hashed[i] = hash(key)
+        hashed[i] = utils.Hash(key)
     }
     nodes.self = NewNode(hashed, domains)
     nodes.all[nodes.self.Id()] = nodes.self
@@ -357,7 +409,8 @@ func NewTestNodes(n uint, k uint, domains []string) *Nodes {
         return nil
     }
     nodes := NewNodes(uuids, domains)
-    nodes.self.Active = true
+    nodes.self.Available = true
+    nodes.self.Accepted = true
 
     for i := uint(0); i < n; i += 1 {
         // Create a new node.
@@ -374,7 +427,8 @@ func NewTestNodes(n uint, k uint, domains []string) *Nodes {
         }
         node := NewNode(uuids, domains)
         nodes.all[node.Id()] = node
-        node.Active = true
+        node.Available = true
+        node.Accepted = true
     }
 
     return nodes

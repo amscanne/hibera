@@ -235,7 +235,7 @@ func (h *HiberaAPI) doRequest(method string, args HttpArgs) (*http.Response, err
     return nil, nil
 }
 
-func (h *HiberaAPI) Info(rev uint64) (string, []byte, uint64, error) {
+func (h *HiberaAPI) Dump(rev uint64) (string, []byte, uint64, error) {
     args := h.makeArgs("/")
     args.params["rev"] = strconv.FormatUint(rev, 10)
     resp, err := h.doRequest("GET", args)
@@ -253,15 +253,137 @@ func (h *HiberaAPI) Info(rev uint64) (string, []byte, uint64, error) {
 }
 
 func (h* HiberaAPI) Activate() error {
-    args := h.makeArgs("/")
+    args := h.makeArgs("/nodes")
     _, err := h.doRequest("POST", args)
     return err
 }
 
 func (h *HiberaAPI) Deactivate() error {
-    args := h.makeArgs("/")
+    args := h.makeArgs("/nodes")
     _, err := h.doRequest("DELETE", args)
     return err
+}
+
+func (h* HiberaAPI) Nodes() ([]string, uint64, error) {
+    args := h.makeArgs("/nodes")
+    resp, err := h.doRequest("GET", args)
+    if err != nil {
+        return nil, 0, err
+    }
+    content, err := h.getContent(resp)
+    if err != nil {
+        rev, _ := h.getRev(resp)
+        return nil, rev, err
+    }
+    var nodes []string
+    err = json.Unmarshal(content, &nodes)
+    if err != nil {
+        rev, _ := h.getRev(resp)
+        return nil, rev, err
+    }
+    rev, err := h.getRev(resp)
+    return nodes, rev, err
+}
+
+func (h* HiberaAPI) NodeInfo(id string) ([]byte, uint64, error) {
+    args := h.makeArgs(fmt.Sprintf("/nodes/%s", id))
+    resp, err := h.doRequest("GET", args)
+    if err != nil {
+        return nil, 0, err
+    }
+    content, err := h.getContent(resp)
+    if err != nil {
+        rev, _ := h.getRev(resp)
+        return nil, rev, err
+    }
+    rev, err := h.getRev(resp)
+    return content, rev, err
+}
+
+func (h* HiberaAPI) Accept(id string) (uint64, error) {
+    args := h.makeArgs(fmt.Sprintf("/nodes/%s", id))
+    resp, err := h.doRequest("POST", args)
+    if err != nil {
+        return 0, err
+    }
+    rev, err := h.getRev(resp)
+    return rev, err
+}
+
+func (h* HiberaAPI) Forget(id string) (uint64, error) {
+    args := h.makeArgs(fmt.Sprintf("/nodes/%s", id))
+    resp, err := h.doRequest("DELETE", args)
+    if err != nil {
+        return 0, err
+    }
+    rev, err := h.getRev(resp)
+    return rev, err
+}
+
+func (h* HiberaAPI) Tokens() ([]string, uint64, error) {
+    args := h.makeArgs("/access")
+    resp, err := h.doRequest("GET", args)
+    if err != nil {
+        return nil, 0, err
+    }
+    content, err := h.getContent(resp)
+    if err != nil {
+        rev, _ := h.getRev(resp)
+        return nil, rev, err
+    }
+    var tokens []string
+    err = json.Unmarshal(content, &tokens)
+    if err != nil {
+        rev, _ := h.getRev(resp)
+        return nil, rev, err
+    }
+    rev, err := h.getRev(resp)
+    return tokens, rev, err
+}
+
+func (h* HiberaAPI) Grant(token string, path string, read bool, write bool, execute bool) (uint64, error) {
+    args := h.makeArgs(fmt.Sprintf("/access/%s", token))
+    args.params["path"] = path
+    boolToStr := func(val bool) string {
+        if val {
+            return "true"
+        }
+        return "false"
+    }
+    args.params["read"] = boolToStr(read)
+    args.params["write"] = boolToStr(write)
+    args.params["execute"] = boolToStr(execute)
+    resp, err := h.doRequest("POST", args)
+    if err != nil {
+        return 0, err
+    }
+    rev, err := h.getRev(resp)
+    return rev, err
+}
+
+func (h* HiberaAPI) Permissions(token string) ([]byte, uint64, error) {
+    args := h.makeArgs(fmt.Sprintf("/access/%s", token))
+    resp, err := h.doRequest("GET", args)
+    if err != nil {
+        return nil, 0, err
+    }
+    content, err := h.getContent(resp)
+    if err != nil {
+        rev, _ := h.getRev(resp)
+        return nil, rev, err
+    }
+    rev, err := h.getRev(resp)
+    return content, rev, err
+}
+
+func (h* HiberaAPI) Revoke(token string) (uint64, error) {
+    args := h.makeArgs(fmt.Sprintf("/access/%s", token))
+    resp, err := h.doRequest("DELETE", args)
+    if err != nil {
+        return 0, err
+    }
+    rev, err := h.getRev(resp)
+    return rev, err
 }
 
 func (h *HiberaAPI) Join(key string, name string, limit uint, timeout uint) (int, uint64, error) {

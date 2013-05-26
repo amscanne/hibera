@@ -98,7 +98,7 @@ func NewLock() *Lock {
     return lock
 }
 
-type data struct {
+type Data struct {
     // Synchronization.
     // The global.Cond.L protects access to
     // the map of all locks. We could easily
@@ -108,7 +108,7 @@ type data struct {
     revs RevisionMap
     *sync.Cond
 
-    // In-memory ephemeral data.
+    // In-memory ephemera.
     // (Kept synchronized by other modules).
     keys map[Key]*EphemeralSet
 
@@ -117,20 +117,20 @@ type data struct {
     store *storage.Backend
 }
 
-func (l *data) lock(key Key) *Lock {
-    l.Cond.L.Lock()
-    lock := l.sync[key]
+func (d *Data) lock(key Key) *Lock {
+    d.Cond.L.Lock()
+    lock := d.sync[key]
     if lock == nil {
         lock = NewLock()
-        l.sync[key] = lock
+        d.sync[key] = lock
     }
-    l.Cond.L.Unlock()
+    d.Cond.L.Unlock()
     lock.lock(key)
     return lock
 }
 
-func (l *data) DataList() ([]Key, error) {
-    items, err := l.store.List()
+func (d *Data) DataList() ([]Key, error) {
+    items, err := d.store.List()
     if err != nil {
         return nil, err
     }
@@ -142,22 +142,22 @@ func (l *data) DataList() ([]Key, error) {
     return keys, nil
 }
 
-func (l *data) DataClear() error {
-    l.Cond.L.Lock()
-    items, err := l.store.List()
+func (d *Data) DataClear() error {
+    d.Cond.L.Lock()
+    items, err := d.store.List()
     if err != nil {
-        l.Cond.L.Unlock()
+        d.Cond.L.Unlock()
         return err
     }
-    err = l.store.Clear()
-    l.Cond.L.Unlock()
+    err = d.store.Clear()
+    d.Cond.L.Unlock()
     if err != nil {
         return err
     }
 
     // Fire data watches.
     for _, key := range items {
-        lock := l.lock(Key(key))
+        lock := d.lock(Key(key))
         lock.notify(Key(key))
         lock.unlock(Key(key))
     }
@@ -165,24 +165,24 @@ func (l *data) DataClear() error {
     return nil
 }
 
-func (l *data) SyncMembers(key Key, name string, limit uint) (int, []string, Revision, error) {
-    lock := l.lock(key)
+func (d *Data) SyncMembers(key Key, name string, limit uint) (int, []string, Revision, error) {
+    lock := d.lock(key)
     defer lock.unlock(key)
 
     // Lookup the key.
     index := -1
-    revmap := l.keys[key]
+    revmap := d.keys[key]
     if revmap == nil {
         // This is valid, it's an empty key.
-        return index, make([]string, 0), l.revs[key], nil
+        return index, make([]string, 0), d.revs[key], nil
     }
 
     // Return the members and rev.
-    index, members := l.computeIndex(revmap, name, limit)
-    return index, members, l.revs[key], nil
+    index, members := d.computeIndex(revmap, name, limit)
+    return index, members, d.revs[key], nil
 }
 
-func (l *data) computeIndex(revmap *EphemeralSet, name string, limit uint) (int, []string) {
+func (d *Data) computeIndex(revmap *EphemeralSet, name string, limit uint) (int, []string) {
     // Aggregate all members across clients.
     allmap := make(map[string]Revision, 0)
     for _, set := range *revmap {
@@ -235,12 +235,12 @@ func (l *data) computeIndex(revmap *EphemeralSet, name string, limit uint) (int,
     return index, members
 }
 
-func (l *data) SyncJoin(
+func (d *Data) SyncJoin(
     id EphemId, key Key, name string, limit uint, timeout uint,
     notifier <-chan bool,
     valid func() bool) (int, Revision, error) {
 
-    lock := l.lock(key)
+    lock := d.lock(key)
     defer lock.unlock(key)
 
     // Go through in a safe way.
@@ -250,11 +250,11 @@ func (l *data) SyncJoin(
     var revmap *EphemeralSet
     for {
         // Lookup the key.
-        revmap = l.keys[key]
+        revmap = d.keys[key]
         if revmap == nil {
             newmap := make(EphemeralSet)
             revmap = &newmap
-            l.keys[key] = revmap
+            d.keys[key] = revmap
         }
 
         // Lookup the key and see if we're a member.
@@ -265,8 +265,8 @@ func (l *data) SyncJoin(
 
         // Check that we're still not there already.
         if (*revmap)[id][name] > 0 {
-            index, _ := l.computeIndex(revmap, name, limit)
-            return index, l.revs[key], nil
+            index, _ := d.computeIndex(revmap, name, limit)
+            return index, d.revs[key], nil
         }
 
         // Count the number of holders.
@@ -282,28 +282,28 @@ func (l *data) SyncJoin(
         // Wait for a change.
         now := time.Now()
         if timeout > 0 && now.After(end) {
-            index, _ := l.computeIndex(revmap, name, limit)
-            return index, l.revs[key], nil
+            index, _ := d.computeIndex(revmap, name, limit)
+            return index, d.revs[key], nil
         }
         if !lock.wait(key, timeout > 0, end.Sub(now), notifier) || !valid() {
-            index, _ := l.computeIndex(revmap, name, limit)
-            return index, l.revs[key], nil
+            index, _ := d.computeIndex(revmap, name, limit)
+            return index, d.revs[key], nil
         }
     }
 
     // Join and fire.
-    rev, err := l.doFire(key, 0, lock)
+    rev, err := d.doFire(key, 0, lock)
     (*revmap)[id][name] = rev
     utils.Print("DATA", "JOIN key=%s index=%d id=%d", string(key), index, uint64(id))
     return index, rev, err
 }
 
-func (l *data) SyncLeave(id EphemId, key Key, name string) (Revision, error) {
-    lock := l.lock(key)
+func (d *Data) SyncLeave(id EphemId, key Key, name string) (Revision, error) {
+    lock := d.lock(key)
     defer lock.unlock(key)
 
     // Lookup the key and see if we're a member.
-    revmap := l.keys[key]
+    revmap := d.keys[key]
     if revmap == nil {
         return 0, NotFound
     }
@@ -317,51 +317,51 @@ func (l *data) SyncLeave(id EphemId, key Key, name string) (Revision, error) {
         }
     }
     if len(*revmap) == 0 {
-        delete(l.keys, key)
+        delete(d.keys, key)
     }
 
     utils.Print("DATA", "LEAVE key=%s id=%d", string(key), uint64(id))
-    return l.doFire(key, 0, lock)
+    return d.doFire(key, 0, lock)
 }
 
-func (l *data) DataGet(key Key) ([]byte, Revision, error) {
+func (d *Data) DataGet(key Key) ([]byte, Revision, error) {
     // Read the local value available.
-    value, rev, err := l.store.Read(string(key))
+    value, rev, err := d.store.Read(string(key))
     return value, Revision(rev), err
 }
 
-func (l *data) DataWatch(
+func (d *Data) DataWatch(
     id EphemId, key Key, rev Revision, timeout uint,
     notifier <-chan bool,
     valid func() bool) ([]byte, Revision, error) {
 
-    lock := l.lock(key)
+    lock := d.lock(key)
     defer lock.unlock(key)
 
     if id > 0 {
         getrev := func() (Revision, error) {
-            _, lrev, err := l.store.Read(string(key))
+            _, lrev, err := d.store.Read(string(key))
             return Revision(lrev), err
         }
-        rev, err := l.doWait(id, key, lock, rev, timeout, getrev, notifier, valid)
+        rev, err := d.doWait(id, key, lock, rev, timeout, getrev, notifier, valid)
         if err != nil {
             return nil, rev, err
         }
     }
 
     // Read the local store.
-    return l.DataGet(key)
+    return d.DataGet(key)
 }
 
-func (l *data) DataModify(key Key, rev Revision, mod func(Revision) error) (Revision, error) {
-    lock := l.lock(key)
+func (d *Data) DataModify(key Key, rev Revision, mod func(Revision) error) (Revision, error) {
+    lock := d.lock(key)
     defer func() {
         lock.notify(key)
         lock.unlock(key)
     }()
 
     // Read the existing data.
-    _, orev, err := l.store.Read(string(key))
+    _, orev, err := d.store.Read(string(key))
     if err != nil {
         return Revision(orev), err
     }
@@ -376,23 +376,23 @@ func (l *data) DataModify(key Key, rev Revision, mod func(Revision) error) (Revi
     return rev, mod(rev)
 }
 
-func (l *data) DataSet(key Key, rev Revision, value []byte) (Revision, error) {
-    return l.DataModify(key, rev, func(rev Revision) error {
-        return l.store.Write(string(key), value, uint64(rev))
+func (d *Data) DataSet(key Key, rev Revision, value []byte) (Revision, error) {
+    return d.DataModify(key, rev, func(rev Revision) error {
+        return d.store.Write(string(key), value, uint64(rev))
     })
 }
 
-func (l *data) DataRemove(key Key, rev Revision) (Revision, error) {
-    return l.DataModify(key, rev, func(rev Revision) error {
-        err := l.store.Delete(string(key))
+func (d *Data) DataRemove(key Key, rev Revision) (Revision, error) {
+    return d.DataModify(key, rev, func(rev Revision) error {
+        err := d.store.Delete(string(key))
         if err == nil {
-            delete(l.revs, key)
+            delete(d.revs, key)
         }
         return err
     })
 }
 
-func (l *data) doWait(
+func (d *Data) doWait(
     id EphemId, key Key, lock *Lock, rev Revision, timeout uint,
     getrev func() (Revision, error),
     notifier <-chan bool,
@@ -430,35 +430,35 @@ func (l *data) doWait(
     return currev, nil
 }
 
-func (l *data) EventWait(
+func (d *Data) EventWait(
     id EphemId, key Key, rev Revision, timeout uint,
     notifier <-chan bool,
     valid func() bool) (Revision, error) {
 
-    lock := l.lock(key)
+    lock := d.lock(key)
     defer lock.unlock(key)
 
     getrev := func() (Revision, error) {
-        return l.revs[key], nil
+        return d.revs[key], nil
     }
     // If the rev is 0, then we start waiting on the current rev.
     if rev == 0 {
         rev, _ = getrev()
     }
-    return l.doWait(id, key, lock, rev, timeout, getrev, notifier, valid)
+    return d.doWait(id, key, lock, rev, timeout, getrev, notifier, valid)
 }
 
-func (l *data) doFire(key Key, rev Revision, lock *Lock) (Revision, error) {
+func (d *Data) doFire(key Key, rev Revision, lock *Lock) (Revision, error) {
     // Check our condition.
-    if rev != 0 && rev <= l.revs[key] {
-        return l.revs[key], NotFound
+    if rev != 0 && rev <= d.revs[key] {
+        return d.revs[key], NotFound
     }
 
     // Update our rev.
     if rev == 0 {
-        rev = l.revs[key] + 1
+        rev = d.revs[key] + 1
     }
-    l.revs[key] = rev
+    d.revs[key] = rev
 
     // Broadcast.
     lock.notify(key)
@@ -466,59 +466,59 @@ func (l *data) doFire(key Key, rev Revision, lock *Lock) (Revision, error) {
     return rev, nil
 }
 
-func (l *data) EventFire(key Key, rev Revision) (Revision, error) {
-    lock := l.lock(key)
+func (d *Data) EventFire(key Key, rev Revision) (Revision, error) {
+    lock := d.lock(key)
     defer lock.unlock(key)
 
     // Fire on a synchronization item.
-    return l.doFire(key, rev, lock)
+    return d.doFire(key, rev, lock)
 }
 
-func (l *data) Purge(id EphemId) {
+func (d *Data) Purge(id EphemId) {
     utils.Print("DATA", "PURGE id=%d", uint64(id))
     paths := make([]Key, 0)
 
     // Kill off all ephemeral nodes.
-    l.Cond.L.Lock()
-    for key, members := range l.keys {
+    d.Cond.L.Lock()
+    for key, members := range d.keys {
         if len((*members)[id]) > 0 {
             paths = append(paths, key)
         }
         delete(*members, id)
     }
-    l.Cond.L.Unlock()
+    d.Cond.L.Unlock()
 
     // Fire watches.
     for _, path := range paths {
-        l.EventFire(path, 0)
+        d.EventFire(path, 0)
     }
 }
 
-func (l *data) dumpData() {
-    l.Cond.L.Lock()
-    defer l.Cond.L.Unlock()
+func (d *Data) DumpData() {
+    d.Cond.L.Lock()
+    defer d.Cond.L.Unlock()
 
     // Schedule an update for every key.
-    items, err := l.store.List()
+    items, err := d.store.List()
     if err != nil {
         return
     }
     utils.Print("DATA", "ITEMS count=%d", len(items))
     for _, item := range items {
-        utils.Print("DATA", "  %s rev=%d", item, uint64(l.revs[Key(item)]))
+        utils.Print("DATA", "  %s rev=%d", item, uint64(d.revs[Key(item)]))
     }
 }
 
-func (l *data) saveClusterId(id string) error {
-    return l.store.SetCluster(id)
+func (d *Data) SaveClusterId(id string) error {
+    return d.store.SetCluster(id)
 }
 
-func (l *data) loadClusterId() (string, error) {
-    return l.store.GetCluster()
+func (d *Data) LoadClusterId() (string, error) {
+    return d.store.GetCluster()
 }
 
-func NewData(store *storage.Backend) *data {
-    d := new(data)
+func NewData(store *storage.Backend) *Data {
+    d := new(Data)
     d.Cond = sync.NewCond(new(sync.Mutex))
     d.store = store
     d.sync = make(map[Key]*Lock)

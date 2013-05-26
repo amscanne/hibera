@@ -28,8 +28,10 @@ var limit = flag.Uint("limit", 0, "Limit for machines to run or simultanous lock
 var output = flag.String("output", "", "Output file for sync.")
 var delay = flag.Uint("delay", 1000, "Delay and retry failed requests.")
 var data = flag.Bool("data", false, "Use the synchronization group data mapping.")
+var path = flag.String("path", ".*", "The path for a given token.")
+var perms = flag.String("perms", "rwx", "Permissions (combination of r,w,x).")
 
-var usagemsg = `usage: hibera <command> <key> [options]
+var mainmsg = `usage: hibera <command> ... [options]
 
 options for all commands:
 
@@ -39,30 +41,38 @@ options for all commands:
     [-auth <authorization-key>]  --- The authorization key.
 
     [-delay <delay>]             --- Delay in milliseconds to
-                                     reconnect to API servers.
 
-cluster commands:
+classes of commands:
 
-    info                         --- Show cluster info.
+    cluster
+    access
+    sync
+    data
+    event
+    upstart
 
+Use help <class> to get a full list of available commands.
+`
+
+var clustermsg = `
     activate                     --- Activate the node.
-
     deactivate                   --- Deactivate the entire cluster.
+    nodes                        --- List all nodes.
+    nodeinfo <id>                --- Show node info.
+    accept <id>                  --- Accept the node into the cluster.
+    forget <id>                  --- Remove the node from the cluster.
+`
 
-authorization commands:
+var accessmsg = `
+    tokens                       --- Show access tokens.
+    permissions <token>          --- Show the given token.
+    grant <token>                --- Grant given permissions.
+        [-path <path>]
+        [-perms <perms>]
+    revoke <token>               --- Remove the given key.
+`
 
-    auth-list                    --- Show auth keys.
-
-    auth-get <key>               --- Show key details.
-
-    auth-set <key>               --- Set key details.
-
-    auth-remove <key>            --- Remove auth key.
-
-    auth-clear                   --- Clear all keys.
-
-synchronization commands:
-
+var syncmsg = `
     run <key>                    --- Conditionally run up-to <limit>
         [-name <name>]               process across the cluster.
         [-limit <limit>]             If you use the run-script element,
@@ -99,33 +109,27 @@ synchronization commands:
     out <key>                    --- If this process is part of
          [-name <name>]              the synchronization group named,
          [-limit <limit>]            set the associated data.
+`
 
-data commands:
-
+var datamsg = `
     list                         --- List all keys.
-
     get <key>                    --- Get the contents of the key.
-
     set <key> [value]            --- Set the contents of the key.
-
     remove <key>                 --- Remove the given key.
-
     clear                        --- Clear all data.
-
     sync <key>                   --- Synchronize a key, either as
          [-output <file>]            stdin to a named script to
          [-timeout <timeout>]        directly to the named file.
          [<run-script> ...]
+`
 
-event commands:
-
+var eventmsg = `
     watch <key>                  --- Wait for an update of the key.
          [-timeout <timeout>]
-
     fire <key>                   --- Notify all waiters on the key.
+`
 
-helper commands:
-
+var upstartmsg =`
     generate <config> <out-dir>  --- Generate an upstart configuration
                                      for the given config file.
 
@@ -143,8 +147,27 @@ func do_exec(command []string, input []byte) error {
     return cmd.Run()
 }
 
-func cli_info(c *client.HiberaAPI, rev uint64) error {
-    id, value, rev, err := c.Info(rev)
+func cli_activate(c *client.HiberaAPI) error {
+    return c.Activate()
+}
+
+func cli_deactivate(c *client.HiberaAPI) error {
+    return c.Deactivate()
+}
+
+func cli_nodes(c *client.HiberaAPI) error {
+    nodes, _, err := c.Nodes()
+    if err != nil {
+        return err
+    }
+    for _, node := range nodes {
+        fmt.Printf("%s\n", node)
+    }
+    return nil
+}
+
+func cli_nodeinfo(c *client.HiberaAPI, id string) error {
+    value, _, err := c.NodeInfo(id)
     if err != nil {
         return err
     }
@@ -153,17 +176,56 @@ func cli_info(c *client.HiberaAPI, rev uint64) error {
     if err != nil {
         return err
     }
-    fmt.Printf("%d %s\n", rev, id)
     os.Stderr.Write(formatted.Bytes())
     return nil
 }
 
-func cli_activate(c *client.HiberaAPI) error {
-    return c.Activate()
+func cli_accept(c *client.HiberaAPI, id string) error {
+    _, err := c.Accept(id)
+    return err
 }
 
-func cli_deactivate(c *client.HiberaAPI) error {
-    return c.Deactivate()
+func cli_forget(c *client.HiberaAPI, id string) error {
+    _, err := c.Forget(id)
+    return err
+}
+
+func cli_tokens(c *client.HiberaAPI) error {
+    tokens, _, err := c.Tokens()
+    if err != nil {
+        return err
+    }
+    for _, token := range tokens {
+        fmt.Printf("%s\n", token)
+    }
+    return nil
+}
+
+func cli_permissions(c *client.HiberaAPI, id string) error {
+    value, _, err := c.Permissions(id)
+    if err != nil {
+        return err
+    }
+    formatted := bytes.NewBuffer(nil)
+    err = json.Indent(formatted, value, "", "  ")
+    if err != nil {
+        return err
+    }
+    os.Stderr.Write(formatted.Bytes())
+    return nil
+}
+
+func cli_grant(c *client.HiberaAPI, id string, path string, perms string) error {
+    read := strings.Index(perms, "r") >= 0
+    write := strings.Index(perms, "w") >= 0
+    execute := strings.Index(perms, "x") >= 0
+    _, err := c.Grant(id, path, read, write, execute)
+    return err
+}
+
+func cli_revoke(c *client.HiberaAPI, id string) error {
+    _, err := c.Revoke(id)
+    return err
 }
 
 func cli_run(c *client.HiberaAPI, key string, name string, limit uint, timeout uint, start []string, stop []string, cmd []string, dodata bool) error {
@@ -450,8 +512,8 @@ func cli_fire(c *client.HiberaAPI, key string) error {
     return err
 }
 
-func usage() {
-    fmt.Printf("%s\n", usagemsg)
+func usage(msg string) {
+    fmt.Printf("%s\n", msg)
     os.Exit(1)
 }
 
@@ -488,21 +550,22 @@ func main() {
     rand.Seed(time.Now().UTC().UnixNano())
 
     // Pull out our arguments.
-    if len(os.Args) == 1 {
-        usage()
+    if len(os.Args) < 2 {
+        usage(mainmsg)
     }
     command := os.Args[1]
     os.Args = os.Args[1:]
 
     key := ""
-    if command == "info" ||
+    if command == "nodes" ||
+       command == "tokens" ||
        command == "activate" ||
        command == "deactivate" ||
        command == "list" ||
        command == "clear" {
     } else {
-        if len(os.Args) == 1 {
-            usage()
+        if len(os.Args) < 2 {
+            usage(mainmsg)
         }
         key = os.Args[1]
         os.Args = os.Args[1:]
@@ -516,14 +579,60 @@ func main() {
 
     // Do our stuff.
     switch command {
-    case "info":
-        err = cli_info(client(), 0)
+    case "help":
+        switch key {
+            case "cluster":
+                usage(clustermsg)
+                break
+            case "access":
+                usage(accessmsg)
+                break
+            case "sync":
+                usage(syncmsg)
+                break
+            case "data":
+                usage(datamsg)
+                break
+            case "event":
+                usage(eventmsg)
+                break
+            case "upstart":
+                usage(upstartmsg)
+                break
+            default:
+                usage(mainmsg)
+                break
+        }
         break
     case "activate":
         err = cli_activate(client())
         break
     case "deactivate":
         err = cli_deactivate(client())
+        break
+    case "nodes":
+        err = cli_nodes(client())
+        break
+    case "nodeinfo":
+        err = cli_nodeinfo(client(), key)
+        break
+    case "accept":
+        err = cli_accept(client(), key)
+        break
+    case "forget":
+        err = cli_forget(client(), key)
+        break
+    case "tokens":
+        err = cli_tokens(client())
+        break
+    case "permissions":
+        err = cli_permissions(client(), key)
+        break
+    case "grant":
+        err = cli_grant(client(), key, *path, *perms)
+        break
+    case "revoke":
+        err = cli_revoke(client(), key)
         break
     case "run":
         cmd := make_command(flag.Args()...)
@@ -587,14 +696,14 @@ func main() {
         if flag.NArg() == 1 {
             err = cli_generate(key, flag.Args()[0], *api)
         } else {
-            usage()
+            usage(mainmsg)
         }
         break
     case "update":
         err = cli_update(client(), key, flag.Args()...)
         break
     default:
-        usage()
+        usage(mainmsg)
     }
 
     if err != nil {

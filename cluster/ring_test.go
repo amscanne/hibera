@@ -1,21 +1,23 @@
-package core
+package cluster
 
 import (
     "testing"
+    "hibera/core"
+    "hibera/utils"
 )
 
 var DefaultSize = uint(128)
 
 func Setup(size uint, keys uint) *ring {
-    nodes := NewTestNodes(size+1, keys+1, domains("test"))
+    nodes := core.NewTestNodes(size+1, keys+1, domains("test"))
     return NewRing(nodes)
 }
 
 func TestHash(t *testing.T) {
-    if hash("a") == hash("b") {
+    if utils.Hash("a") == utils.Hash("b") {
         t.Fail()
     }
-    if hash("a") != hash("a") {
+    if utils.Hash("a") != utils.Hash("a") {
         t.Fail()
     }
 }
@@ -31,13 +33,13 @@ func BenchmarkRecomputeByKeys(b *testing.B) {
 func BenchmarkCached(b *testing.B) {
     r := Setup(DefaultSize, DefaultKeys)
     for i := 0; i < b.N; i += 1 {
-        r.NodesFor(Key(""))
+        r.NodesFor(core.Key(""))
     }
 }
 
 func BenchmarkUncached(b *testing.B) {
     r := Setup(DefaultSize, DefaultKeys)
     for i := 0; i < b.N; i += 1 {
-        r.lookup(hash(""))
+        r.lookup(utils.Hash(""))
     }
 }

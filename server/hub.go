@@ -1,9 +1,11 @@
-package core
+package server
 
 import (
     "strings"
     "sync"
     "sync/atomic"
+    "hibera/core"
+    "hibera/cluster"
     "hibera/utils"
 )
 
@@ -39,7 +41,6 @@ type Connection struct {
     inited bool
 }
 
-type EphemId uint64
 type ClientId uint64
 type UserId string
 
@@ -76,7 +77,7 @@ type Hub struct {
     // We maintain a reference to this so that
     // ephemeral nodes can be purged when all the
     // relevant connections have been dropped.
-    *Cluster
+    *cluster.Cluster
 }
 
 func (c *Connection) Name(name string) string {
@@ -89,15 +90,26 @@ func (c *Connection) Name(name string) string {
     return string(c.addr)
 }
 
+func (c *Connection) ServerId() string {
+    return c.Name("")
+}
+
 func (c *Connection) Auth() string {
     return c.auth
 }
 
-func (c *Connection) EphemId() EphemId {
+func (c *Connection) EphemId() core.EphemId {
     if c.client != nil {
-        return EphemId(c.client.ClientId)
+        return core.EphemId(c.client.ClientId)
     }
-    return EphemId(c.ConnectionId)
+    return core.EphemId(c.ConnectionId)
+}
+
+func (c *Connection) Notifier() <-chan bool {
+    if c.notifier != nil {
+        return *c.notifier
+    }
+    return make(chan bool)
 }
 
 func (c *Hub) genid() uint64 {
@@ -149,7 +161,7 @@ func (c *Hub) FindConnection(id ConnectionId, userid UserId, auth string, notifi
             conn.client.ClientId = ClientId(c.genid())
             conn.client.UserId = userid
             noport := strings.Split(string(conn.addr), ":")[0]
-            conn.client.Name = hash(string(userid))[:8] + "@" + noport
+            conn.client.Name = utils.Hash(string(userid))[:8] + "@" + noport
             conn.client.refs = 1
             c.clients[userid] = conn.client
         } else {
@@ -168,7 +180,7 @@ func (c *Hub) DropConnection(conn *Connection) {
 
     // Delete this connection.
     delete(c.connections, conn.ConnectionId)
-    c.Cluster.Purge(EphemId(conn.ConnectionId))
+    c.Cluster.Purge(core.EphemId(conn.ConnectionId))
 
     // Shuffle userid mappings.
     if conn.client != nil {
@@ -178,7 +190,7 @@ func (c *Hub) DropConnection(conn *Connection) {
             // purge all related keys from the
             // underlying storage system.
             delete(c.clients, conn.client.UserId)
-            c.Cluster.Purge(EphemId(conn.client.ClientId))
+            c.Cluster.Purge(core.EphemId(conn.client.ClientId))
             conn.client = nil
         }
     }
@@ -207,11 +219,11 @@ func (c *Hub) dumpHub() {
     }
 }
 
-func NewHub(cluster *Cluster) *Hub {
+func NewHub(c *cluster.Cluster) *Hub {
     hub := new(Hub)
     hub.connections = make(map[ConnectionId]*Connection)
     hub.clients = make(map[UserId]*Client)
-    hub.Cluster = cluster
+    hub.Cluster = c
 
     // NOTE: We start with a nextid that is 1, because
     // some parts of the code consider nextid == 0 to be

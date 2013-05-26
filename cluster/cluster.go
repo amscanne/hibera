@@ -1,4 +1,4 @@
-package core
+package cluster
 
 import (
     "net"
@@ -9,47 +9,45 @@ import (
     "bytes"
     "os/signal"
     "encoding/json"
+    "hibera/core"
     "hibera/client"
     "hibera/storage"
     "hibera/utils"
 )
 
-type Key string
-type Revision uint64
-
 var DefaultKeys = uint(128)
-var RootKey = Key("")
+var RootKey = core.Key("")
 
 type Cluster struct {
     // Our cluster id.
     id string
 
-    // Our connection hub.
-    *Hub
+    // Our built-in auth token.
+    auth string
 
     // The cluster revision.
     // When the cluster has not yet been activated (i.e.
     // we've just started and not yet seen any active nodes
     // or participated in a paxos round) then this number
     // will be zero.
-    rev Revision
+    rev core.Revision
 
     // Our local datastore.
     // Some of these functions are exported and used directly
     // by the calling servers (HTTPServer).
     // NOTE: Not exported so that it is not serialized.
-    *data
+    *core.Data
 
     // Our node map.
     // This represents the consensus of what the cluster looks
     // like and is computed by the changing versions above.
     // Similarly, some functions are exported and used directly
     // by the calling servers (GossipServer).
-    *Nodes
+    *core.Nodes
 
     // Our token list.
     // This represents the available access tokens.
-    *Access
+    *core.Access
 
     // Our ring.
     // This routes requests, etc.
@@ -60,15 +58,8 @@ type Cluster struct {
     sync.Mutex
 }
 
-type Info struct {
-    Nodes map[string]*Node
-    Access map[string]map[string]string
-}
-
-func (c *Cluster) doEncode(rev Revision, next bool) ([]byte, error) {
-    info := new(Info)
-    info.Nodes = make(map[string]*Node)
-    info.Access = make(map[string]map[string]string)
+func (c *Cluster) doEncode(rev core.Revision, next bool) ([]byte, error) {
+    info := core.NewInfo()
 
     // Encode our nodes.
     err := c.Nodes.Encode(rev, next, info.Nodes)
@@ -96,9 +87,7 @@ func (c *Cluster) doEncode(rev Revision, next bool) ([]byte, error) {
 }
 
 func (c *Cluster) doDecode(data []byte) (bool, error) {
-    info := new(Info)
-    info.Nodes = make(map[string]*Node)
-    info.Access = make(map[string]map[string]string)
+    info := core.NewInfo()
 
     // Decode our nodes and tokens.
     buf := bytes.NewBuffer(data)
@@ -123,14 +112,15 @@ func (c *Cluster) doActivate() error {
     c.Mutex.Lock()
 
     // If we're already activated, ignore.
-    if c.id != "" {
+    if c.id != "" || c.rev != core.Revision(0) {
         utils.Print("CLUSTER", "ALREADY-ACTIVATED")
         c.Mutex.Unlock()
         return nil
     }
 
     // Activate our node.
-    if !c.Nodes.Activate(c.Nodes.Self().Id(), c.rev) {
+    c.Nodes.Reset()
+    if !c.Nodes.Activate(c.Nodes.Self().Id(), core.Revision(1)) {
         utils.Print("CLUSTER", "ACTIVATE-ERROR")
         c.Mutex.Unlock()
         return nil
@@ -144,7 +134,7 @@ func (c *Cluster) doActivate() error {
         return err
     }
     c.id = uuid
-    c.data.saveClusterId(c.id)
+    c.Data.SaveClusterId(c.id)
 
     // Write the cluster data.
     bytes, err := c.doEncode(0, false)
@@ -155,7 +145,7 @@ func (c *Cluster) doActivate() error {
     }
 
     // Do the quorum set.
-    c.changeRevision(Revision(1), true)
+    c.changeRevision(core.Revision(1), true)
     rev, err := c.lockedClusterDataSet(0, bytes)
     if err != nil {
         utils.Print("CLUSTER", "WRITE-ERROR %s", err.Error())
@@ -176,24 +166,24 @@ func (c *Cluster) doDeactivate() error {
 
     // Reset our id.
     c.id = ""
-    c.data.saveClusterId(c.id)
+    c.Data.SaveClusterId(c.id)
 
     // Reset our revision (hard).
-    c.rev = Revision(0)
+    c.rev = core.Revision(0)
 
     // Reset the nodes state.
     c.Nodes.Reset()
 
     // Reset authentication tokens.
-    c.Access = NewAccess(c.auth)
+    c.Access = core.NewAccess(c.auth)
 
     return nil
 }
 
-func (c *Cluster) doSync(id string, addr *net.UDPAddr, from Revision) {
+func (c *Cluster) doSync(id string, addr *net.UDPAddr, from core.Revision) {
     // Pull the remote info from the node.
     cl := client.NewHiberaAPI(utils.AsURLs(addr), c.auth, c.Nodes.Self().Id(), 0)
-    id, data, rev, err := cl.Info(uint64(from))
+    id, data, rev, err := cl.Dump(uint64(from))
     if err != nil {
         utils.Print("CLUSTER", "SYNC-CLIENT-ERROR id=%s %s",
             id, err.Error())
@@ -216,18 +206,16 @@ func (c *Cluster) doSync(id string, addr *net.UDPAddr, from Revision) {
 
     // Update our nodemap.
     force, err := c.doDecode(data)
-    c.Nodes.Update(id, addr)
     if err != nil {
-        utils.Print("CLUSTER", "SYNC-DATA-ERROR id=%s %s",
-            id, err.Error())
+        utils.Print("CLUSTER", "SYNC-DATA-ERROR id=%s %s", id, err.Error())
     }
 
     // Update our revision.
-    c.changeRevision(Revision(rev), force)
+    c.changeRevision(core.Revision(rev), force)
     utils.Print("CLUSTER", "SYNC-SUCCESS id=%s", id)
 }
 
-func (c *Cluster) Heartbeat(id string, addr *net.UDPAddr, rev Revision, nodes uint64, dead []string) {
+func (c *Cluster) Heartbeat(id string, addr *net.UDPAddr, rev core.Revision, nodes uint64, dead []string) {
     c.Mutex.Lock()
     defer c.Mutex.Unlock()
 
@@ -250,7 +238,7 @@ func (c *Cluster) Heartbeat(id string, addr *net.UDPAddr, rev Revision, nodes ui
     }
 }
 
-func (c *Cluster) syncData(ring *ring, key Key, quorum bool) {
+func (c *Cluster) syncData(ring *ring, key core.Key, quorum bool) {
     // Pull in the quorum value (from the old ring).
     value, rev, err := c.quorumGet(ring, key)
     if err != nil {
@@ -273,7 +261,7 @@ func (c *Cluster) syncData(ring *ring, key Key, quorum bool) {
         }
     } else {
         // Set the local data.
-        rev, err = c.data.DataSet(key, rev, value)
+        rev, err = c.Data.DataSet(key, rev, value)
         if err != nil {
             // Same as per above.
             utils.Print("CLUSTER", "SYNC-LOCAL-ERROR key=%s rev=%d %s", string(key), uint64(rev), err.Error())
@@ -284,7 +272,7 @@ func (c *Cluster) syncData(ring *ring, key Key, quorum bool) {
     utils.Print("CLUSTER", "SYNC-OKAY key=%s rev=%d", string(key), uint64(rev))
 }
 
-func (c *Cluster) dumpCluster() {
+func (c *Cluster) DumpCluster() {
     // Output all nodes.
     utils.Print("CLUSTER", "CLUSTER (rev=%d,master=%t,failover=%t)",
         c.rev,
@@ -293,10 +281,10 @@ func (c *Cluster) dumpCluster() {
     if c.ring.MasterFor(RootKey) != nil {
         utils.Print("CLUSTER", "MASTER %s", c.ring.MasterFor(RootKey).Id())
     }
-    c.Nodes.dumpNodes()
+    c.Nodes.DumpNodes()
 }
 
-func (c *Cluster) changeRevision(rev Revision, force bool) {
+func (c *Cluster) changeRevision(rev core.Revision, force bool) {
     // We only update revisions unless force is set.
     // Force will be set when we are joining some other
     // cluster (with a potentially conflicting history)
@@ -311,7 +299,7 @@ func (c *Cluster) changeRevision(rev Revision, force bool) {
     // has the correct version.
     old_ring := c.ring
     c.ring = NewRing(c.Nodes)
-    items, err := c.data.DataList()
+    items, err := c.Data.DataList()
     if err != nil {
         utils.Print("CLUSTER", "REVISION-DATA-ERROR rev=%d force=%t", uint64(rev), force)
         return
@@ -319,7 +307,7 @@ func (c *Cluster) changeRevision(rev Revision, force bool) {
 
     // Update the revision.
     c.rev = rev
-    c.dumpCluster()
+    c.DumpCluster()
 
     // Schedule updates for every key.
     for _, key := range items {
@@ -352,12 +340,12 @@ func (c *Cluster) changeRevision(rev Revision, force bool) {
 
         // We don't have anything to do with this key.
         if !new_slave && !new_master {
-            c.data.DataRemove(key, 0)
+            c.Data.DataRemove(key, 0)
         }
 
         // We aren't the master for this key.
         if !new_master {
-            c.data.EventFire(key, 0)
+            c.Data.EventFire(key, 0)
         }
     }
 }
@@ -399,7 +387,7 @@ func (c *Cluster) Healthcheck() {
     }
 }
 
-func (c *Cluster) lockedClusterDataSet(set_rev Revision, delta []byte) (Revision, error) {
+func (c *Cluster) lockedClusterDataSet(set_rev core.Revision, delta []byte) (core.Revision, error) {
     // Encode a full cluster dump.
     bytes, err := c.doEncode(0, false)
     if err != nil {
@@ -407,7 +395,7 @@ func (c *Cluster) lockedClusterDataSet(set_rev Revision, delta []byte) (Revision
     }
 
     orig_rev := c.rev
-    var target_rev Revision
+    var target_rev core.Revision
     if set_rev == 0 {
         target_rev = c.rev + 1
     } else {
@@ -462,14 +450,14 @@ func (c *Cluster) timedHealthcheck() {
 
 func NewCluster(backend *storage.Backend, auth string, domain string, ids []string) *Cluster {
     c := new(Cluster)
-    c.Nodes = NewNodes(ids, domains(domain))
-    c.Access = NewAccess(auth)
-    c.data = NewData(backend)
+    c.Nodes = core.NewNodes(ids, domains(domain))
+    c.Access = core.NewAccess(auth)
+    c.Data = core.NewData(backend)
     c.ring = NewRing(c.Nodes)
-    c.Hub = NewHub(c)
+    c.auth = auth
 
     // Read cluster data.
-    data, rev, err := c.data.DataGet(RootKey)
+    data, rev, err := c.Data.DataGet(RootKey)
     if err == nil && rev > 0 {
         utils.Print("CLUSTER", "START-FOUND rev=%d", uint64(rev))
         // Load the existing cluster data.
@@ -482,7 +470,7 @@ func NewCluster(backend *storage.Backend, auth string, domain string, ids []stri
 
     // Load a cluster id (only if active).
     if c.rev != 0 {
-        c.id, err = c.data.loadClusterId()
+        c.id, err = c.Data.LoadClusterId()
         if err != nil {
             // Crap.
             utils.Print("CLUSTER", "ID-LOAD-ERROR %s", err.Error())
@@ -499,12 +487,11 @@ func NewCluster(backend *storage.Backend, auth string, domain string, ids []stri
         for {
             sig := <-sigchan
             if sig == syscall.SIGUSR1 {
-                c.dumpCluster()
-                c.data.dumpData()
-                c.Hub.dumpHub()
-                items, err := c.data.DataList()
+                c.DumpCluster()
+                c.Data.DumpData()
+                items, err := c.Data.DataList()
                 if err == nil {
-                    c.ring.dumpRing(items)
+                    c.ring.DumpRing(items)
                 }
             }
         }

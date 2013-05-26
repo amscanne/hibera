@@ -1,23 +1,24 @@
-package core
+package cluster
 
 import (
     "fmt"
     "errors"
+    "hibera/core"
     "hibera/client"
     "hibera/utils"
 )
 
 type QuorumResult struct {
-    node  *Node
-    rev   Revision
+    node  *core.Node
+    rev   core.Revision
     value []byte
     err   error
 }
 
-func (c *Cluster) doSet(node *Node, key Key, rev Revision, value []byte) (Revision, error) {
+func (c *Cluster) doSet(node *core.Node, key core.Key, rev core.Revision, value []byte) (core.Revision, error) {
     if node == c.Nodes.Self() {
         utils.Print("QUORUM", "    SET-LOCAL key=%s rev=%d", string(key), uint64(rev))
-        return c.data.DataSet(key, rev, value)
+        return c.Data.DataSet(key, rev, value)
     }
 
     utils.Print("QUORUM", "    SET-REMOTE key=%s rev=%d", string(key), uint64(rev))
@@ -25,13 +26,13 @@ func (c *Cluster) doSet(node *Node, key Key, rev Revision, value []byte) (Revisi
     urls[0] = utils.MakeURL(node.Addr, "", nil)
     cl := client.NewHiberaAPI(urls, c.auth, c.Id(), 0)
     rrev, err := cl.Set(string(key), uint64(rev), value)
-    return Revision(rrev), err
+    return core.Revision(rrev), err
 }
 
-func (c *Cluster) doGet(node *Node, key Key) ([]byte, Revision, error) {
+func (c *Cluster) doGet(node *core.Node, key core.Key) ([]byte, core.Revision, error) {
     if node == c.Nodes.Self() {
         utils.Print("QUORUM", "    GET-LOCAL key=%s", string(key))
-        return c.data.DataGet(key)
+        return c.Data.DataGet(key)
     }
 
     utils.Print("QUORUM", "    GET-REMOTE key=%s", string(key))
@@ -39,13 +40,13 @@ func (c *Cluster) doGet(node *Node, key Key) ([]byte, Revision, error) {
     urls[0] = utils.MakeURL(node.Addr, "", nil)
     cl := client.NewHiberaAPI(urls, c.auth, c.Id(), 0)
     value, rev, err := cl.Get(string(key), 0, 0)
-    return value, Revision(rev), err
+    return value, core.Revision(rev), err
 }
 
-func (c *Cluster) doRemove(node *Node, key Key, rev Revision) (Revision, error) {
+func (c *Cluster) doRemove(node *core.Node, key core.Key, rev core.Revision) (core.Revision, error) {
     if node == c.Nodes.Self() {
         utils.Print("QUORUM", "    REMOVE-LOCAL key=%s rev=%d", string(key), uint64(rev))
-        return c.data.DataRemove(key, rev)
+        return c.Data.DataRemove(key, rev)
     }
 
     utils.Print("QUORUM", "    REMOVE-REMOTE key=%s rev=%d", string(key), uint64(rev))
@@ -53,10 +54,10 @@ func (c *Cluster) doRemove(node *Node, key Key, rev Revision) (Revision, error) 
     urls[0] = utils.MakeURL(node.Addr, "", nil)
     cl := client.NewHiberaAPI(urls, c.auth, c.Id(), 0)
     rrev, err := cl.Remove(string(key), uint64(rev))
-    return Revision(rrev), err
+    return core.Revision(rrev), err
 }
 
-func NewQuorumError(revcounts map[Revision]int) error {
+func NewQuorumError(revcounts map[core.Revision]int) error {
     s := ""
     for rev, count := range revcounts {
         if len(s) > 0 {
@@ -67,18 +68,19 @@ func NewQuorumError(revcounts map[Revision]int) error {
     return errors.New(fmt.Sprintf("QuorumError %s", s))
 }
 
-func (c *Cluster) quorum(ring *ring, key Key, fn func(*Node, chan<- *QuorumResult)) (*QuorumResult, error) {
+func (c *Cluster) quorum(ring *ring, key core.Key, fn func(*core.Node, chan<- *QuorumResult)) (*QuorumResult, error) {
     nodes := ring.NodesFor(key)
-    self := c.Nodes.Self()
+    real_self := c.Nodes.Self()
+    var self *core.Node
     res := make(chan *QuorumResult)
     var err error
-    maxrev := Revision(0)
+    maxrev := core.Revision(0)
 
     utils.Print("QUORUM", "START %s (%d)", string(key), len(nodes))
 
     // Setup all the requests.
     for _, node := range nodes {
-        if node != self {
+        if node != real_self {
             go fn(node, res)
         } else {
             self = node
@@ -112,8 +114,8 @@ func (c *Cluster) quorum(ring *ring, key Key, fn func(*Node, chan<- *QuorumResul
     }
 
     // Check if there's a quorum.
-    revcounts := make(map[Revision]int)
-    revrefs := make(map[Revision]*QuorumResult)
+    revcounts := make(map[core.Revision]int)
+    revrefs := make(map[core.Revision]*QuorumResult)
     for i, _ := range nodes {
         if qrs[i] != nil && qrs[i].err == nil {
             revcounts[qrs[i].rev] += 1
@@ -182,7 +184,7 @@ func (c *Cluster) quorum(ring *ring, key Key, fn func(*Node, chan<- *QuorumResul
     do_self()
 
     // Check for the case of local authority.
-    if len(nodes) == 1 && nodes[0] == self && self_qr != nil {
+    if len(nodes) == 1 && self_qr != nil {
         return self_qr, nil
     }
 
@@ -203,15 +205,15 @@ func (c *Cluster) quorum(ring *ring, key Key, fn func(*Node, chan<- *QuorumResul
     return &QuorumResult{rev: maxrev}, err
 }
 
-func (c *Cluster) quorumGet(ring *ring, key Key) ([]byte, Revision, error) {
-    fn := func(node *Node, res chan<- *QuorumResult) {
+func (c *Cluster) quorumGet(ring *ring, key core.Key) ([]byte, core.Revision, error) {
+    fn := func(node *core.Node, res chan<- *QuorumResult) {
         utils.Print("QUORUM", "  GET key=%s", string(key))
         value, rev, err := c.doGet(node, key)
         res <- &QuorumResult{node, rev, value, err}
     }
     qr, err := c.quorum(ring, key, fn)
     var value []byte
-    var rev Revision
+    var rev core.Revision
     if qr != nil {
         value = qr.value
         rev = qr.rev
@@ -219,8 +221,8 @@ func (c *Cluster) quorumGet(ring *ring, key Key) ([]byte, Revision, error) {
     return value, rev, err
 }
 
-func (c *Cluster) quorumSet(ring *ring, key Key, rev Revision, value []byte) (Revision, error) {
-    fn := func(node *Node, res chan<- *QuorumResult) {
+func (c *Cluster) quorumSet(ring *ring, key core.Key, rev core.Revision, value []byte) (core.Revision, error) {
+    fn := func(node *core.Node, res chan<- *QuorumResult) {
         utils.Print("QUORUM", "  SET key=%s rev=%d len=%d",
                     string(key), uint64(rev), len(value))
         rev, err := c.doSet(node, key, rev, value)
@@ -233,8 +235,8 @@ func (c *Cluster) quorumSet(ring *ring, key Key, rev Revision, value []byte) (Re
     return rev, err
 }
 
-func (c *Cluster) quorumRemove(ring *ring, key Key, rev Revision) (Revision, error) {
-    fn := func(node *Node, res chan<- *QuorumResult) {
+func (c *Cluster) quorumRemove(ring *ring, key core.Key, rev core.Revision) (core.Revision, error) {
+    fn := func(node *core.Node, res chan<- *QuorumResult) {
         utils.Print("QUORUM", "  REMOVE key=%s rev=%d",
                     string(key), uint64(rev))
         rev, err := c.doRemove(node, key, rev)
@@ -248,14 +250,14 @@ func (c *Cluster) quorumRemove(ring *ring, key Key, rev Revision) (Revision, err
 }
 
 type ListResult struct {
-    items []Key
+    items []core.Key
     err   error
 }
 
-func (c *Cluster) doList(node *Node) ([]Key, error) {
+func (c *Cluster) doList(node *core.Node) ([]core.Key, error) {
     if node == c.Nodes.Self() {
         utils.Print("QUORUM", "    LIST-LOCAL")
-        return c.data.DataList()
+        return c.Data.DataList()
     }
 
     utils.Print("QUORUM", "    LIST-REMOTE")
@@ -266,17 +268,17 @@ func (c *Cluster) doList(node *Node) ([]Key, error) {
     if items == nil || err != nil {
         return nil, err
     }
-    keys := make([]Key, len(items), len(items))
+    keys := make([]core.Key, len(items), len(items))
     for i, item := range items {
-        keys[i] = Key(item)
+        keys[i] = core.Key(item)
     }
     return keys, nil
 }
 
-func (c *Cluster) doClear(node *Node) error {
+func (c *Cluster) doClear(node *core.Node) error {
     if node == c.Nodes.Self() {
         utils.Print("QUORUM", "    CLEAR-LOCAL")
-        return c.data.DataClear()
+        return c.Data.DataClear()
     }
 
     utils.Print("QUORUM", "    CLEAR-REMOTE")
@@ -286,7 +288,7 @@ func (c *Cluster) doClear(node *Node) error {
     return cl.Clear()
 }
 
-func (c *Cluster) doReset(node *Node) error {
+func (c *Cluster) doReset(node *core.Node) error {
     if node == c.Nodes.Self() {
         utils.Print("QUORUM", "    DEACTIVATE-LOCAL")
         return c.doDeactivate()
@@ -299,14 +301,14 @@ func (c *Cluster) doReset(node *Node) error {
     return cl.Deactivate()
 }
 
-func (c *Cluster) allList() ([]Key, error) {
-    nodes := c.Nodes.Active()
-    items := make(map[Key]bool)
+func (c *Cluster) allList() ([]core.Key, error) {
+    nodes := c.Nodes.Inuse()
+    items := make(map[core.Key]bool)
 
     utils.Print("QUORUM", "LIST %d", len(nodes))
 
     // Setup all the requests.
-    fn := func(node *Node, res chan<- *ListResult) {
+    fn := func(node *core.Node, res chan<- *ListResult) {
         items, err := c.doList(node)
         res <- &ListResult{items, err}
     }
@@ -336,7 +338,7 @@ func (c *Cluster) allList() ([]Key, error) {
     }
 
     // Build our result.
-    itemsarr := make([]Key, len(items), len(items))
+    itemsarr := make([]core.Key, len(items), len(items))
     i := 0
     for item, _ := range items {
         itemsarr[i] = item
@@ -351,40 +353,13 @@ func (c *Cluster) allList() ([]Key, error) {
 }
 
 func (c *Cluster) allClear() error {
-    nodes := c.Nodes.Active()
+    nodes := c.Nodes.Inuse()
 
     utils.Print("QUORUM", "CLEAR %d", len(nodes))
 
     // Setup all the requests.
-    fn := func(node *Node, res chan<- error) {
+    fn := func(node *core.Node, res chan<- error) {
         res <- c.doClear(node)
-    }
-    reschan := make(chan error)
-    for _, node := range nodes {
-        go fn(node, reschan)
-    }
-
-    // Read all results.
-    var err error
-    for i, _ := range nodes {
-        nerr := <-reschan
-        if nerr != nil {
-            utils.Print("QUORUM", "  %d %s", i, err)
-            err = nerr
-        }
-    }
-
-    return err
-}
-
-func (c *Cluster) allDeactivate() error {
-    nodes := c.Nodes.Active()
-
-    utils.Print("QUORUM", "DEACTIVATE %d", len(nodes))
-
-    // Setup all the requests.
-    fn := func(node *Node, res chan<- error) {
-        res <- c.doReset(node)
     }
     reschan := make(chan error)
     for _, node := range nodes {

@@ -1,64 +1,48 @@
-package core
+package cluster
 
 import (
     "os"
     "sync"
     "sort"
-    "io"
-    "encoding/hex"
-    "crypto/sha1"
+    "hibera/core"
     "hibera/utils"
 )
 
 func defaultDomain() string {
-    domain, err := os.Hostname()
+    hostname, err := os.Hostname()
     if err != nil {
         return ""
     }
-    return domain
+    return hostname
 }
 
 var DefaultDomain = defaultDomain()
 
 type ring struct {
     // Our key map.
-    // This is a simple map of all node Keys to the appropriate node.
-    keymap map[string]*Node
+    // This is a simple map of all node core.Keys to the appropriate node.
+    keymap map[string]*core.Node
 
     // Our node map.
     // The id map above is computed from the node map whenever it changes.
-    *Nodes
+    *core.Nodes
 
     // Sorted keys.
     // This is a sequence of sorted keys for fast searching.
     sorted []string
 
     // Our cache.
-    // This is a simple cache of Key to the appropriate nodes.
-    cache map[string][]*Node
+    // This is a simple cache of core.Key to the appropriate nodes.
+    cache map[string][]*core.Node
 
     sync.Mutex
 }
 
-func NewRing(nodes *Nodes) *ring {
+func NewRing(nodes *core.Nodes) *ring {
     r := new(ring)
     r.Nodes = nodes
     r.Recompute()
     return r
-}
-
-func hash(id string) string {
-    h := sha1.New()
-    io.WriteString(h, id)
-    return hex.EncodeToString(h.Sum(nil))
-}
-
-func mhash(ids []string) string {
-    h := sha1.New()
-    for _, id := range ids {
-        io.WriteString(h, id)
-    }
-    return hex.EncodeToString(h.Sum(nil))
 }
 
 func domains(domain string) []string {
@@ -67,19 +51,21 @@ func domains(domain string) []string {
     for i, c := range domain {
         if c == '.' {
             domains = append(domains, domain[lasti:len(domain)])
-            lasti = i
+            lasti = i+1
         }
     }
-    domains = append(domains, domain[lasti:len(domain)])
+    if lasti < len(domain) {
+        domains = append(domains, domain[lasti:len(domain)])
+    }
     return domains
 }
 
 func (r *ring) Recompute() {
     // Make a new keymap.
-    keymap := make(map[string]*Node)
+    keymap := make(map[string]*core.Node)
     sorted := make([]string, 0)
 
-    for _, node := range r.Nodes.Active() {
+    for _, node := range r.Nodes.Inuse() {
         for _, key := range node.Keys {
             keymap[key] = node
             sorted = append(sorted, key)
@@ -96,14 +82,14 @@ func (r *ring) Recompute() {
     r.sorted = sorted
 
     // Clear the cache.
-    r.cache = make(map[string][]*Node)
+    r.cache = make(map[string][]*core.Node)
 }
 
-func (r *ring) IsMaster(key Key) bool {
+func (r *ring) IsMaster(key core.Key) bool {
     return r.MasterFor(key) == r.Nodes.Self()
 }
 
-func (r *ring) MasterFor(key Key) *Node {
+func (r *ring) MasterFor(key core.Key) *core.Node {
     nodes := r.NodesFor(key)
     if nodes == nil || len(nodes) < 1 {
         return nil
@@ -111,12 +97,12 @@ func (r *ring) MasterFor(key Key) *Node {
     return nodes[0]
 }
 
-func (r *ring) IsFailover(key Key) bool {
+func (r *ring) IsFailover(key core.Key) bool {
     slaves := r.SlavesFor(key)
     return slaves != nil && len(slaves) > 0 && slaves[0] == r.Nodes.Self()
 }
 
-func (r *ring) IsSlave(key Key) bool {
+func (r *ring) IsSlave(key core.Key) bool {
     slaves := r.SlavesFor(key)
     if slaves == nil {
         return false
@@ -129,7 +115,7 @@ func (r *ring) IsSlave(key Key) bool {
     return false
 }
 
-func (r *ring) SlavesFor(key Key) []*Node {
+func (r *ring) SlavesFor(key core.Key) []*core.Node {
     nodes := r.NodesFor(key)
     if nodes == nil || len(nodes) < 2 {
         return nil
@@ -137,7 +123,7 @@ func (r *ring) SlavesFor(key Key) []*Node {
     return nodes[1:len(nodes)]
 }
 
-func (r *ring) IsNode(key Key, check *Node) bool {
+func (r *ring) IsNode(key core.Key, check *core.Node) bool {
     nodes := r.NodesFor(key)
     if nodes == nil {
         return false
@@ -150,13 +136,13 @@ func (r *ring) IsNode(key Key, check *Node) bool {
     return false
 }
 
-func (r *ring) lookup(h string) []*Node {
+func (r *ring) lookup(h string) []*core.Node {
     if len(r.sorted) == 0 {
         return nil
     }
 
     // Search in our sorted array.
-    nodes := make([]*Node, 0)
+    nodes := make([]*core.Node, 0)
     start := sort.SearchStrings(r.sorted, h)
     if start >= len(r.sorted) {
         // Wrap around the ring.
@@ -199,12 +185,12 @@ func (r *ring) lookup(h string) []*Node {
     return nodes
 }
 
-func (r *ring) NodesFor(key Key) []*Node {
+func (r *ring) NodesFor(key core.Key) []*core.Node {
     r.Mutex.Lock()
     defer r.Mutex.Unlock()
 
     // Check if it's been cached.
-    h := hash(string(key))
+    h := utils.Hash(string(key))
     cached := r.cache[h]
     if cached == nil {
         // Do a manual lookup.
@@ -218,7 +204,7 @@ func (r *ring) NodesFor(key Key) []*Node {
     return cached
 }
 
-func (r *ring) dumpRing(items []Key) {
+func (r *ring) DumpRing(items []core.Key) {
     utils.Print("RING", "size=%d items=%d", len(r.sorted), len(items))
 
     for _, item := range items {

@@ -8,12 +8,13 @@ import (
     "time"
     "code.google.com/p/goprotobuf/proto"
     "hibera/core"
+    "hibera/cluster"
     "hibera/client"
     "hibera/utils"
 )
 
 type GossipServer struct {
-    *core.Cluster
+    *cluster.Cluster
     conn *net.UDPConn
     seeds []string
 }
@@ -117,7 +118,7 @@ func (s *GossipServer) Sender() {
     }
 }
 
-func NewGossipServer(cluster *core.Cluster, addr string, port uint, seeds []string) *GossipServer {
+func NewGossipServer(c *cluster.Cluster, addr string, port uint, seeds []string) *GossipServer {
     udpaddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", addr, port))
     if err != nil {
         log.Print("Unable to resolve address: ", err)
@@ -131,7 +132,7 @@ func NewGossipServer(cluster *core.Cluster, addr string, port uint, seeds []stri
     }
 
     gs := new(GossipServer)
-    gs.Cluster = cluster
+    gs.Cluster = c
     gs.conn = conn
     gs.seeds = seeds
     return gs
