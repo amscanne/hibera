@@ -2,16 +2,19 @@ package main
 
 import (
     "flag"
-    "log"
-    "strings"
-    "time"
-    "os"
-    "runtime/pprof"
-    "math/rand"
-    "hibera/storage"
+    "fmt"
+    "hibera/client"
     "hibera/cluster"
     "hibera/server"
-    "hibera/client"
+    "hibera/storage"
+    "log"
+    "math/rand"
+    "net"
+    "os"
+    "runtime"
+    "runtime/pprof"
+    "strings"
+    "time"
 )
 
 var auth = flag.String("auth", "", "Authorization key.")
@@ -24,13 +27,41 @@ var seeds = flag.String("seeds", server.DefaultSeeds, "Seeds for joining the clu
 var active = flag.Uint("active", server.DefaultActive, "Maximum active simutaneous clients.")
 var profile = flag.String("profile", "", "Enabling profiling and write to file.")
 
+func discoverAddress() string {
+    addrs, _ := net.InterfaceAddrs()
+    for _, addr := range addrs {
+        if ipnet, ok := addr.(*net.IPNet); ok {
+            if ipnet.IP.IsGlobalUnicast() {
+                return ipnet.IP.String()
+            }
+        }
+    }
+
+    return ""
+}
+
 func main() {
     // NOTE: We need the random number generator,
     // as it will be seed with 1 by default (and
     // hence always exhibit the same sequence).
     rand.Seed(time.Now().UTC().UnixNano())
 
+    // Parse all flags
     flag.Parse()
+
+    // Sanity check addresses, ports, etc.
+    var addr string
+    if *bind == "" {
+        addr = fmt.Sprintf("%s:%d", discoverAddress(), *port)
+    } else {
+        addr = fmt.Sprintf("%s:%d", *bind, *port)
+    }
+    if *port == 0 {
+        log.Fatal("Sorry, port can't be 0.")
+    }
+
+    // Crank up processors.
+    runtime.GOMAXPROCS(4)
 
     // Turn on profiling.
     if *profile != "" {
@@ -55,7 +86,7 @@ func main() {
     if err != nil {
         log.Fatal("Unable to load keys: ", err)
     }
-    c := cluster.NewCluster(backend, *auth, *domain, ids)
+    c := cluster.NewCluster(backend, addr, *auth, *domain, ids)
     if c == nil {
         log.Fatal("Unable to create cluster.")
     }

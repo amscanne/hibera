@@ -1,10 +1,10 @@
 package cluster
 
 import (
-    "fmt"
     "errors"
-    "hibera/core"
+    "fmt"
     "hibera/client"
+    "hibera/core"
     "hibera/utils"
 )
 
@@ -25,7 +25,7 @@ func (c *Cluster) doSet(node *core.Node, key core.Key, rev core.Revision, value 
     urls := make([]string, 1, 1)
     urls[0] = utils.MakeURL(node.Addr, "", nil)
     cl := client.NewHiberaAPI(urls, c.auth, c.Id(), 0)
-    rrev, err := cl.Set(string(key), uint64(rev), value)
+    rrev, err := cl.DataSet(string(key), uint64(rev), value)
     return core.Revision(rrev), err
 }
 
@@ -39,7 +39,7 @@ func (c *Cluster) doGet(node *core.Node, key core.Key) ([]byte, core.Revision, e
     urls := make([]string, 1, 1)
     urls[0] = utils.MakeURL(node.Addr, "", nil)
     cl := client.NewHiberaAPI(urls, c.auth, c.Id(), 0)
-    value, rev, err := cl.Get(string(key), 0, 0)
+    value, rev, err := cl.DataGet(string(key), 0, 0)
     return value, core.Revision(rev), err
 }
 
@@ -53,7 +53,7 @@ func (c *Cluster) doRemove(node *core.Node, key core.Key, rev core.Revision) (co
     urls := make([]string, 1, 1)
     urls[0] = utils.MakeURL(node.Addr, "", nil)
     cl := client.NewHiberaAPI(urls, c.auth, c.Id(), 0)
-    rrev, err := cl.Remove(string(key), uint64(rev))
+    rrev, err := cl.DataRemove(string(key), uint64(rev))
     return core.Revision(rrev), err
 }
 
@@ -151,11 +151,11 @@ func (c *Cluster) quorum(ring *ring, key core.Key, fn func(*core.Node, chan<- *Q
             utils.Print("QUORUM", "SUCCESS rev=%d", uint(rev))
             return revrefs[rev], nil
 
-        // If the local node is one of the quorum.
-        // This is a complex structure to support the writing
-        // of the local node only after the remote nodes have
-        // successfully written. Note that above and below we
-        // may have to do the local function regardless.
+            // If the local node is one of the quorum.
+            // This is a complex structure to support the writing
+            // of the local node only after the remote nodes have
+            // successfully written. Note that above and below we
+            // may have to do the local function regardless.
 
         } else if self != nil && (count+1) > (len(nodes)/2) {
 
@@ -224,7 +224,7 @@ func (c *Cluster) quorumGet(ring *ring, key core.Key) ([]byte, core.Revision, er
 func (c *Cluster) quorumSet(ring *ring, key core.Key, rev core.Revision, value []byte) (core.Revision, error) {
     fn := func(node *core.Node, res chan<- *QuorumResult) {
         utils.Print("QUORUM", "  SET key=%s rev=%d len=%d",
-                    string(key), uint64(rev), len(value))
+            string(key), uint64(rev), len(value))
         rev, err := c.doSet(node, key, rev, value)
         res <- &QuorumResult{node, rev, value, err}
     }
@@ -238,7 +238,7 @@ func (c *Cluster) quorumSet(ring *ring, key core.Key, rev core.Revision, value [
 func (c *Cluster) quorumRemove(ring *ring, key core.Key, rev core.Revision) (core.Revision, error) {
     fn := func(node *core.Node, res chan<- *QuorumResult) {
         utils.Print("QUORUM", "  REMOVE key=%s rev=%d",
-                    string(key), uint64(rev))
+            string(key), uint64(rev))
         rev, err := c.doRemove(node, key, rev)
         res <- &QuorumResult{node, rev, nil, err}
     }
@@ -264,7 +264,7 @@ func (c *Cluster) doList(node *core.Node) ([]core.Key, error) {
     urls := make([]string, 1, 1)
     urls[0] = utils.MakeURL(node.Addr, "", nil)
     cl := client.NewHiberaAPI(urls, c.auth, c.Id(), 0)
-    items, err := cl.List()
+    items, err := cl.DataList()
     if items == nil || err != nil {
         return nil, err
     }
@@ -273,32 +273,6 @@ func (c *Cluster) doList(node *core.Node) ([]core.Key, error) {
         keys[i] = core.Key(item)
     }
     return keys, nil
-}
-
-func (c *Cluster) doClear(node *core.Node) error {
-    if node == c.Nodes.Self() {
-        utils.Print("QUORUM", "    CLEAR-LOCAL")
-        return c.Data.DataClear()
-    }
-
-    utils.Print("QUORUM", "    CLEAR-REMOTE")
-    urls := make([]string, 1, 1)
-    urls[0] = utils.MakeURL(node.Addr, "", nil)
-    cl := client.NewHiberaAPI(urls, c.auth, c.Id(), 0)
-    return cl.Clear()
-}
-
-func (c *Cluster) doReset(node *core.Node) error {
-    if node == c.Nodes.Self() {
-        utils.Print("QUORUM", "    DEACTIVATE-LOCAL")
-        return c.doDeactivate()
-    }
-
-    utils.Print("QUORUM", "    DEACTIVATE-REMOTE")
-    urls := make([]string, 1, 1)
-    urls[0] = utils.MakeURL(node.Addr, "", nil)
-    cl := client.NewHiberaAPI(urls, c.auth, c.Id(), 0)
-    return cl.Deactivate()
 }
 
 func (c *Cluster) allList() ([]core.Key, error) {
@@ -350,31 +324,4 @@ func (c *Cluster) allList() ([]core.Key, error) {
         return itemsarr, nil
     }
     return itemsarr, err
-}
-
-func (c *Cluster) allClear() error {
-    nodes := c.Nodes.Inuse()
-
-    utils.Print("QUORUM", "CLEAR %d", len(nodes))
-
-    // Setup all the requests.
-    fn := func(node *core.Node, res chan<- error) {
-        res <- c.doClear(node)
-    }
-    reschan := make(chan error)
-    for _, node := range nodes {
-        go fn(node, reschan)
-    }
-
-    // Read all results.
-    var err error
-    for i, _ := range nodes {
-        nerr := <-reschan
-        if nerr != nil {
-            utils.Print("QUORUM", "  %d %s", i, err)
-            err = nerr
-        }
-    }
-
-    return err
 }

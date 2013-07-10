@@ -1,11 +1,11 @@
 package cluster
 
 import (
-    "os"
-    "sync"
-    "sort"
     "hibera/core"
     "hibera/utils"
+    "os"
+    "sort"
+    "sync"
 )
 
 func defaultDomain() string {
@@ -51,7 +51,7 @@ func domains(domain string) []string {
     for i, c := range domain {
         if c == '.' {
             domains = append(domains, domain[lasti:len(domain)])
-            lasti = i+1
+            lasti = i + 1
         }
     }
     if lasti < len(domain) {
@@ -202,19 +202,4 @@ func (r *ring) NodesFor(key core.Key) []*core.Node {
     }
 
     return cached
-}
-
-func (r *ring) DumpRing(items []core.Key) {
-    utils.Print("RING", "size=%d items=%d", len(r.sorted), len(items))
-
-    for _, item := range items {
-        var masterstr string
-        master := r.MasterFor(item)
-        if master != nil {
-            masterstr = master.Id()
-        } else {
-            masterstr = "nil"
-        }
-        utils.Print("RING", "  MAP key=%s master=%s", string(item), masterstr)
-    }
 }

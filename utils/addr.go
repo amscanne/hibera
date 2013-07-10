@@ -1,12 +1,12 @@
 package utils
 
 import (
-    "net"
-    "fmt"
     "bytes"
+    "fmt"
+    "net"
+    "net/url"
     "strconv"
     "strings"
-    "net/url"
 )
 
 func ParseAddr(addr string, defaultHost string, defaultPort uint) (string, uint) {

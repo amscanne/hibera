@@ -1,18 +1,15 @@
 package cluster
 
 import (
-    "net"
-    "time"
-    "sync"
-    "os"
-    "syscall"
     "bytes"
-    "os/signal"
     "encoding/json"
-    "hibera/core"
     "hibera/client"
+    "hibera/core"
     "hibera/storage"
     "hibera/utils"
+    "net"
+    "sync"
+    "time"
 )
 
 var DefaultKeys = uint(128)
@@ -20,7 +17,7 @@ var RootKey = core.Key("")
 
 type Cluster struct {
     // Our cluster id.
-    id string
+    id  string
 
     // Our built-in auth token.
     auth string
@@ -62,19 +59,22 @@ func (c *Cluster) doEncode(rev core.Revision, next bool) ([]byte, error) {
     info := core.NewInfo()
 
     // Encode our nodes.
-    err := c.Nodes.Encode(rev, next, info.Nodes)
+    nodes_changed, err := c.Nodes.Encode(rev, next, info.Nodes)
     if err != nil {
+        utils.Print("CLUSTER", "ENCODING-NODES-ERROR %s", err)
         return nil, err
     }
 
     // Encode our tokens.
-    err = c.Access.Encode(next, info.Access)
+    access_changed, err := c.Access.Encode(next, info.Access)
     if err != nil {
+        utils.Print("CLUSTER", "ENCODING-ACCESS-ERROR %s", err)
         return nil, err
     }
 
     // Check if we're encoding anything interesting.
-    if next && len(info.Nodes) == 0 && len(info.Access) == 0 {
+    if next && !nodes_changed && !access_changed {
+        utils.Print("CLUSTER", "NOTHING-DOING")
         return nil, nil
     }
 
@@ -108,13 +108,14 @@ func (c *Cluster) doDecode(data []byte) (bool, error) {
     return force, err
 }
 
-func (c *Cluster) doActivate() error {
-    c.Mutex.Lock()
+func (c *Cluster) Active() bool {
+    return c.id != "" && c.rev != core.Revision(0)
+}
 
+func (c *Cluster) doActivate() error {
     // If we're already activated, ignore.
-    if c.id != "" || c.rev != core.Revision(0) {
+    if c.Active() {
         utils.Print("CLUSTER", "ALREADY-ACTIVATED")
-        c.Mutex.Unlock()
         return nil
     }
 
@@ -122,7 +123,6 @@ func (c *Cluster) doActivate() error {
     c.Nodes.Reset()
     if !c.Nodes.Activate(c.Nodes.Self().Id(), core.Revision(1)) {
         utils.Print("CLUSTER", "ACTIVATE-ERROR")
-        c.Mutex.Unlock()
         return nil
     }
 
@@ -130,49 +130,42 @@ func (c *Cluster) doActivate() error {
     uuid, err := utils.Uuid()
     if err != nil {
         utils.Print("CLUSTER", "ID-ERROR")
-        c.Mutex.Unlock()
         return err
     }
     c.id = uuid
     c.Data.SaveClusterId(c.id)
-
-    // Write the cluster data.
-    bytes, err := c.doEncode(0, false)
-    if err != nil {
-        utils.Print("CLUSTER", "ENCODE-ERROR")
-        c.Mutex.Unlock()
-        return err
-    }
+    c.changeRevision(core.Revision(1), true)
+    utils.Print("CLUSTER", "ACTIVATED")
 
     // Do the quorum set.
-    c.changeRevision(core.Revision(1), true)
-    rev, err := c.lockedClusterDataSet(0, bytes)
+    bytes, err := c.doEncode(core.Revision(0), false)
+    if bytes == nil || err != nil {
+        return err
+    }
+    rev, err := c.lockedClusterDataSet(bytes, c.rev)
     if err != nil {
         utils.Print("CLUSTER", "WRITE-ERROR %s", err.Error())
         return err
     }
 
-    c.Mutex.Lock()
     utils.Print("CLUSTER", "ACTIVATE-OKAY rev=%d", c.rev)
     c.changeRevision(rev, true)
-    c.Mutex.Unlock()
 
     return nil
 }
 
 func (c *Cluster) doDeactivate() error {
-    c.Mutex.Lock()
-    defer c.Mutex.Unlock()
-
     // Reset our id.
     c.id = ""
     c.Data.SaveClusterId(c.id)
 
     // Reset our revision (hard).
     c.rev = core.Revision(0)
+    c.Data.DataRemove(RootKey, 0)
 
     // Reset the nodes state.
     c.Nodes.Reset()
+    c.ring = NewRing(c.Nodes)
 
     // Reset authentication tokens.
     c.Access = core.NewAccess(c.auth)
@@ -180,13 +173,12 @@ func (c *Cluster) doDeactivate() error {
     return nil
 }
 
-func (c *Cluster) doSync(id string, addr *net.UDPAddr, from core.Revision) {
+func (c *Cluster) doSync(addr *net.UDPAddr, from core.Revision) {
     // Pull the remote info from the node.
-    cl := client.NewHiberaAPI(utils.AsURLs(addr), c.auth, c.Nodes.Self().Id(), 0)
-    id, data, rev, err := cl.Dump(uint64(from))
+    cl := client.NewHiberaAPI(utils.AsURLs(addr), c.auth, c.Id(), 0)
+    id, data, rev, err := cl.Info(uint64(from))
     if err != nil {
-        utils.Print("CLUSTER", "SYNC-CLIENT-ERROR id=%s %s",
-            id, err.Error())
+        utils.Print("CLUSTER", "SYNC-CLIENT-ERROR id=%s %s", id, err.Error())
         return
     }
 
@@ -194,9 +186,11 @@ func (c *Cluster) doSync(id string, addr *net.UDPAddr, from core.Revision) {
     defer c.Mutex.Unlock()
 
     // Take on the identity if we have none.
-    if c.id == "" {
+    if c.id == "" && rev > 0 {
         c.id = id
         c.Access.Reset()
+        c.Data.SaveClusterId(c.id)
+        utils.Print("CLUSTER", "SYNC-ACTIVATE id=%s", id)
     }
 
     // Check that the sync is legit.
@@ -231,9 +225,9 @@ func (c *Cluster) Heartbeat(id string, addr *net.UDPAddr, rev core.Revision, nod
         // Refresh addr will go get info
         // from this node by address.
         if rev > c.rev {
-            go c.doSync(id, addr, c.rev)
+            go c.doSync(addr, c.rev)
         } else {
-            go c.doSync(id, addr, 0)
+            go c.doSync(addr, 0)
         }
     }
 }
@@ -272,18 +266,6 @@ func (c *Cluster) syncData(ring *ring, key core.Key, quorum bool) {
     utils.Print("CLUSTER", "SYNC-OKAY key=%s rev=%d", string(key), uint64(rev))
 }
 
-func (c *Cluster) DumpCluster() {
-    // Output all nodes.
-    utils.Print("CLUSTER", "CLUSTER (rev=%d,master=%t,failover=%t)",
-        c.rev,
-        c.ring.IsMaster(RootKey),
-        c.ring.IsFailover(RootKey))
-    if c.ring.MasterFor(RootKey) != nil {
-        utils.Print("CLUSTER", "MASTER %s", c.ring.MasterFor(RootKey).Id())
-    }
-    c.Nodes.DumpNodes()
-}
-
 func (c *Cluster) changeRevision(rev core.Revision, force bool) {
     // We only update revisions unless force is set.
     // Force will be set when we are joining some other
@@ -307,7 +289,6 @@ func (c *Cluster) changeRevision(rev core.Revision, force bool) {
 
     // Update the revision.
     c.rev = rev
-    c.DumpCluster()
 
     // Schedule updates for every key.
     for _, key := range items {
@@ -322,18 +303,18 @@ func (c *Cluster) changeRevision(rev core.Revision, force bool) {
                 go c.syncData(c.ring, key, true)
             }
 
-        // Ensure that the master is aware of this key.
-        // This happens if the new master was not in the
-        // ring previously, but is now in the ring.
+            // Ensure that the master is aware of this key.
+            // This happens if the new master was not in the
+            // ring previously, but is now in the ring.
         } else if c.ring.IsFailover(key) &&
             !old_ring.IsNode(key, c.ring.MasterFor(key)) {
             if key != RootKey {
                 go c.syncData(c.ring, key, true)
             }
 
-        // We're a slave for this key, make sure we're
-        // synchronized (this may generate some extra
-        // traffic, but whatever).
+            // We're a slave for this key, make sure we're
+            // synchronized (this may generate some extra
+            // traffic, but whatever).
         } else if new_slave {
             go c.syncData(c.ring, key, false)
         }
@@ -352,91 +333,75 @@ func (c *Cluster) changeRevision(rev core.Revision, force bool) {
 
 func (c *Cluster) Healthcheck() {
     c.Mutex.Lock()
+    defer c.Mutex.Unlock()
 
-    // If we have unknowns, let's propose a change.
-    master := c.ring.MasterFor(RootKey)
-    is_master := (master == nil || master == c.Nodes.Self())
-    is_failover := (master != nil && !master.Alive() && c.ring.IsFailover(RootKey))
-
-    if is_master {
-        utils.Print("CLUSTER", "HEALTHCHECK-MASTER")
-    } else if is_failover {
-        utils.Print("CLUSTER", "HEALTHCHECK-FAILOVER")
-    } else {
-        c.Mutex.Unlock()
+    // If we're not active skip it.
+    if !c.Active() {
         return
     }
 
-    if is_master || is_failover {
-        // Encode a cluster delta.
-        delta, err := c.doEncode(c.rev+1, true)
+    for {
+        // If we have unknowns, let's propose a change.
+        target_rev := c.rev + 1
+        master := c.ring.MasterFor(RootKey)
+        is_master := (master == nil || master == c.Nodes.Self())
+        is_failover := (master != nil && !master.Alive() && c.ring.IsFailover(RootKey))
 
-        // Check if everything is okay.
-        if delta == nil || err != nil {
-            c.Mutex.Unlock()
-            return
+        if is_master {
+            utils.Print("CLUSTER", "HEALTHCHECK-MASTER")
+        } else if is_failover {
+            utils.Print("CLUSTER", "HEALTHCHECK-FAILOVER")
         }
 
-        // Try to do the data set.
-        c.lockedClusterDataSet(0, delta)
+        if is_master || is_failover {
+            // Encode a cluster delta.
+            bytes, err := c.doEncode(c.rev+1, true)
 
-    } else {
-        // Nothing to be done anyways, wait for either
-        // the master or the failover master to adjust.
-        c.Mutex.Unlock()
+            // Check if everything is okay.
+            if bytes == nil || err != nil {
+                break
+            }
+
+            // Try to do the data set.
+            target_rev, err = c.lockedClusterDataSet(bytes, target_rev)
+            if err == nil {
+                // Updated successfully.
+                break
+            }
+
+        } else {
+            // We're no longer the master.
+            break
+        }
     }
 }
 
-func (c *Cluster) lockedClusterDataSet(set_rev core.Revision, delta []byte) (core.Revision, error) {
-    // Encode a full cluster dump.
-    bytes, err := c.doEncode(0, false)
-    if err != nil {
-        return c.rev, err
-    }
-
+func (c *Cluster) lockedClusterDataSet(bytes []byte, target_rev core.Revision) (core.Revision, error) {
     orig_rev := c.rev
-    var target_rev core.Revision
-    if set_rev == 0 {
-        target_rev = c.rev + 1
-    } else {
-        target_rev = set_rev
-    }
     ring := c.ring
     c.Mutex.Unlock()
 
-    for {
-        // Update the node configuration and bump our cluster
-        // version number. Note that we must first successfully
-        // contact a quorum of nodes to ensure that we're in the
-        // majority still.
-        utils.Print("CLUSTER", "SET-CLUSTER %d", uint64(target_rev))
-        rev, err := c.quorumSet(ring, RootKey, target_rev, bytes)
-        if err != nil {
-            if rev > 0 && (set_rev == 0) {
-                target_rev = rev + 1
-                continue
-            } else {
-                utils.Print("CLUSTER", "WRITE-ERROR %s", err.Error())
-                return rev, err
-            }
-        }
-
+    // Update the node configuration and bump our cluster
+    // version number. Note that we must first successfully
+    // contact a quorum of nodes to ensure that we're in the
+    // majority still.
+    utils.Print("CLUSTER", "SET-CLUSTER")
+    rev, err := c.quorumSet(ring, RootKey, target_rev, bytes)
+    if err != nil {
         c.Mutex.Lock()
-        if c.rev != orig_rev {
-            defer c.Mutex.Unlock()
-            return c.rev, nil
-        }
-        force, err := c.doDecode(delta)
-        if err != nil {
-            utils.Print("CLUSTER", "DECODE-ERROR %s", err.Error())
-            defer c.Mutex.Unlock()
-            return c.rev, err
-        }
-        c.changeRevision(target_rev, force)
-        break
+        return rev, err
     }
 
-    defer c.Mutex.Unlock()
+    c.Mutex.Lock()
+    if c.rev != orig_rev {
+        return c.rev, nil
+    }
+    force, err := c.doDecode(bytes)
+    if err != nil {
+        utils.Print("CLUSTER", "DECODE-ERROR %s", err.Error())
+        return c.rev, err
+    }
+    c.changeRevision(rev, force)
     return c.rev, nil
 }
 
@@ -448,9 +413,9 @@ func (c *Cluster) timedHealthcheck() {
     time.AfterFunc(time.Duration(1)*time.Second, f)
 }
 
-func NewCluster(backend *storage.Backend, auth string, domain string, ids []string) *Cluster {
+func NewCluster(backend *storage.Backend, addr string, auth string, domain string, ids []string) *Cluster {
     c := new(Cluster)
-    c.Nodes = core.NewNodes(ids, domains(domain))
+    c.Nodes = core.NewNodes(addr, ids, domains(domain))
     c.Access = core.NewAccess(auth)
     c.Data = core.NewData(backend)
     c.ring = NewRing(c.Nodes)
@@ -460,16 +425,20 @@ func NewCluster(backend *storage.Backend, auth string, domain string, ids []stri
     data, rev, err := c.Data.DataGet(RootKey)
     if err == nil && rev > 0 {
         utils.Print("CLUSTER", "START-FOUND rev=%d", uint64(rev))
+
         // Load the existing cluster data.
         force, err := c.doDecode(data)
         if err == nil {
             utils.Print("CLUSTER", "START-DECODED rev=%d", uint64(rev))
             c.changeRevision(rev, force)
+        } else {
+            c.Data.DataRemove(RootKey, 0)
         }
     }
 
     // Load a cluster id (only if active).
     if c.rev != 0 {
+        utils.Print("CLUSTER", "LOADING-ID...")
         c.id, err = c.Data.LoadClusterId()
         if err != nil {
             // Crap.
@@ -480,24 +449,6 @@ func NewCluster(backend *storage.Backend, auth string, domain string, ids []stri
 
     // Start running our healthcheck.
     go c.timedHealthcheck()
-
-    // Setup a debug handler.
-    sigchan := make(chan os.Signal)
-    handler := func() {
-        for {
-            sig := <-sigchan
-            if sig == syscall.SIGUSR1 {
-                c.DumpCluster()
-                c.Data.DumpData()
-                items, err := c.Data.DataList()
-                if err == nil {
-                    c.ring.DumpRing(items)
-                }
-            }
-        }
-    }
-    signal.Notify(sigchan, syscall.SIGUSR1)
-    go handler()
 
     return c
 }

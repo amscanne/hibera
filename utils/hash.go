@@ -1,9 +1,9 @@
 package utils
 
 import (
-    "io"
-    "encoding/hex"
     "crypto/sha1"
+    "encoding/hex"
+    "io"
 )
 
 func Hash(id string) string {
@@ -19,4 +19,3 @@ func MHash(ids []string) string {
     }
     return hex.EncodeToString(h.Sum(nil))
 }
-

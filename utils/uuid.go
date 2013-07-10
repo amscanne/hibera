@@ -1,8 +1,8 @@
 package utils
 
 import (
-    "strings"
     "io/ioutil"
+    "strings"
 )
 
 func Uuid() (string, error) {

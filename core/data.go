@@ -2,10 +2,10 @@ package core
 
 import (
     "errors"
-    "sync"
-    "time"
     "hibera/storage"
     "hibera/utils"
+    "sync"
+    "time"
 )
 
 // The ephemeral id is used to identify and remove
@@ -20,13 +20,13 @@ type EphemeralSet map[EphemId]NameMap
 var NotFound = errors.New("Key not found or inconsistent")
 
 type Lock struct {
-    sem chan bool
+    sem     chan bool
     waiters []chan bool
 }
 
 func (l *Lock) lock(key Key) {
     utils.Print("DATA", "key=%s acquiring", string(key))
-    <- l.sem
+    <-l.sem
     utils.Print("DATA", "key=%s acquired", string(key))
 }
 
@@ -37,7 +37,7 @@ func (l *Lock) unlock(key Key) {
 
 func (l *Lock) wait(key Key, timeout bool, duration time.Duration, notifier <-chan bool) bool {
     // Setup some basic channels for doing our wait
-    // on this lock. We keep waiting as long as there 
+    // on this lock. We keep waiting as long as there
     // is someone on the other end of the connection.
     timeoutchan := make(chan bool, 1)
     wakeupchan := make(chan bool, 1)
@@ -62,18 +62,18 @@ func (l *Lock) wait(key Key, timeout bool, duration time.Duration, notifier <-ch
     rval := true
 
     select {
-        case <- wakeupchan:
-        case <- timeoutchan:
-            rval = true
-            break
+    case <-wakeupchan:
+    case <-timeoutchan:
+        rval = true
+        break
 
-        case <- notifier:
-            rval = false
-            break
+    case <-notifier:
+        rval = false
+        break
     }
 
     // Reaquire the lock before returning.
-    <- l.sem
+    <-l.sem
 
     return rval
 }
@@ -140,29 +140,6 @@ func (d *Data) DataList() ([]Key, error) {
     }
 
     return keys, nil
-}
-
-func (d *Data) DataClear() error {
-    d.Cond.L.Lock()
-    items, err := d.store.List()
-    if err != nil {
-        d.Cond.L.Unlock()
-        return err
-    }
-    err = d.store.Clear()
-    d.Cond.L.Unlock()
-    if err != nil {
-        return err
-    }
-
-    // Fire data watches.
-    for _, key := range items {
-        lock := d.lock(Key(key))
-        lock.notify(Key(key))
-        lock.unlock(Key(key))
-    }
-
-    return nil
 }
 
 func (d *Data) SyncMembers(key Key, name string, limit uint) (int, []string, Revision, error) {
@@ -368,7 +345,7 @@ func (d *Data) DataModify(key Key, rev Revision, mod func(Revision) error) (Revi
     if rev == 0 {
         rev = Revision(orev) + 1
     }
-    if rev != 0 && rev <= Revision(orev) {
+    if rev <= Revision(orev) {
         return Revision(orev), err
     }
 
@@ -379,6 +356,12 @@ func (d *Data) DataModify(key Key, rev Revision, mod func(Revision) error) (Revi
 func (d *Data) DataSet(key Key, rev Revision, value []byte) (Revision, error) {
     return d.DataModify(key, rev, func(rev Revision) error {
         return d.store.Write(string(key), value, uint64(rev))
+    })
+}
+
+func (d *Data) DataPromise(key Key, rev Revision) (Revision, error) {
+    return d.DataModify(key, rev, func(rev Revision) error {
+        return d.store.Promise(string(key), uint64(rev))
     })
 }
 
@@ -491,21 +474,6 @@ func (d *Data) Purge(id EphemId) {
     // Fire watches.
     for _, path := range paths {
         d.EventFire(path, 0)
-    }
-}
-
-func (d *Data) DumpData() {
-    d.Cond.L.Lock()
-    defer d.Cond.L.Unlock()
-
-    // Schedule an update for every key.
-    items, err := d.store.List()
-    if err != nil {
-        return
-    }
-    utils.Print("DATA", "ITEMS count=%d", len(items))
-    for _, item := range items {
-        utils.Print("DATA", "  %s rev=%d", item, uint64(d.revs[Key(item)]))
     }
 }
 

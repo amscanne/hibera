@@ -1,18 +1,23 @@
 package server
 
 import (
+    "hibera/cluster"
+    "hibera/core"
+    "hibera/utils"
+    "net"
     "strings"
     "sync"
     "sync/atomic"
-    "hibera/core"
-    "hibera/cluster"
-    "hibera/utils"
+    "time"
 )
 
 type ConnectionId uint64
 type Connection struct {
     // A reference to the associated core.
     *Hub
+
+    // The underlying connection.
+    raw net.Conn
 
     // A unique Connection (per-connection).
     // This is generated automatically and can
@@ -23,7 +28,10 @@ type Connection struct {
     // The address associated with this conn.
     addr string
 
-    // The authenictation information for this conn.
+    // The namespace used for this connection.
+    ns  core.Namespace
+
+    // The authentication information for this conn.
     auth string
 
     // The user associated (if there is one).
@@ -57,6 +65,9 @@ type Client struct {
     // above is not exposed for security reasons.
     Name string
 
+    // The print-friendly version of this name.
+    friendlyName string
+
     // The number of active Connection objects
     // refering to this User object. The User
     // objects are reference counted and garbage
@@ -85,13 +96,20 @@ func (c *Connection) Name(name string) string {
         return name
     }
     if c.client != nil {
+        return c.client.friendlyName
+    }
+    return c.ServerId()
+}
+
+func (c *Connection) ServerId() string {
+    if c.client != nil {
         return c.client.Name
     }
     return string(c.addr)
 }
 
-func (c *Connection) ServerId() string {
-    return c.Name("")
+func (c *Connection) Namespace() core.Namespace {
+    return c.ns
 }
 
 func (c *Connection) Auth() string {
@@ -116,12 +134,16 @@ func (c *Hub) genid() uint64 {
     return atomic.AddUint64(&c.nextid, 1)
 }
 
-func (c *Hub) NewConnection(addr string) *Connection {
-    // Generate conn with no user, and
-    // a straight-forward id. The user can
-    // associate some conn-id with their
-    // active connection during lookup.
-    conn := &Connection{c, ConnectionId(c.genid()), addr, "", nil, nil, false}
+func (c *Hub) NewConnection(raw net.Conn) *Connection {
+    // Generate conn with no user, and a straight-forward id.
+    // The user can associate some namespace and conn-id with their
+    // active connection once the connection has been authenticated.
+    addr := raw.RemoteAddr().String()
+    conn := &Connection{c, raw, ConnectionId(c.genid()), addr, "", "", nil, nil, false}
+
+    // Set an initial read deadline on the connection.
+    raw.SetReadDeadline(time.Now().Add(time.Second))
+    raw.SetWriteDeadline(time.Now().Add(time.Second))
 
     c.Mutex.Lock()
     defer c.Mutex.Unlock()
@@ -131,7 +153,7 @@ func (c *Hub) NewConnection(addr string) *Connection {
     return conn
 }
 
-func (c *Hub) FindConnection(id ConnectionId, userid UserId, auth string, notifier <-chan bool) *Connection {
+func (c *Hub) FindConnection(id ConnectionId, userid UserId, ns string, auth string, notifier <-chan bool) *Connection {
     c.Mutex.Lock()
     defer c.Mutex.Unlock()
 
@@ -139,7 +161,11 @@ func (c *Hub) FindConnection(id ConnectionId, userid UserId, auth string, notifi
     if conn == nil {
         return nil
     }
+
+    // Save the namespace and authentication information.
+    conn.ns = core.Namespace(ns)
     conn.auth = auth
+
     if conn.inited {
         return conn
     }
@@ -160,8 +186,9 @@ func (c *Hub) FindConnection(id ConnectionId, userid UserId, auth string, notifi
             conn.client = new(Client)
             conn.client.ClientId = ClientId(c.genid())
             conn.client.UserId = userid
+            conn.client.Name = string(userid)
             noport := strings.Split(string(conn.addr), ":")[0]
-            conn.client.Name = utils.Hash(string(userid))[:8] + "@" + noport
+            conn.client.friendlyName = utils.Hash(string(userid))[:8] + "@" + noport
             conn.client.refs = 1
             c.clients[userid] = conn.client
         } else {
@@ -200,9 +227,15 @@ func (c *Connection) Drop() {
     c.Hub.DropConnection(c)
 }
 
+func (c *Connection) DisableTimeouts() {
+    // Disable the timeout.
+    c.raw.SetReadDeadline(time.Time{})
+    c.raw.SetWriteDeadline(time.Time{})
+}
+
 func (c *Hub) dumpHub() {
     utils.Print("HUB", "HUB connections=%d clients=%d",
-                len(c.connections), len(c.clients))
+        len(c.connections), len(c.clients))
     for _, conn := range c.connections {
         var clid uint64
         if conn.client != nil {
@@ -211,11 +244,11 @@ func (c *Hub) dumpHub() {
             clid = uint64(0)
         }
         utils.Print("HUB", "CONNECTION id=%d addr=%s client=%d",
-                    uint64(conn.ConnectionId), conn.addr, clid)
+            uint64(conn.ConnectionId), conn.addr, clid)
     }
     for _, client := range c.clients {
         utils.Print("HUB", "CLIENT id=%d userid=%s refs=%d",
-                    uint64(client.ClientId), client.UserId, client.refs)
+            uint64(client.ClientId), client.UserId, client.refs)
     }
 }
 

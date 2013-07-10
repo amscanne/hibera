@@ -1,8 +1,8 @@
 package utils
 
 import (
-    "os"
     "log"
+    "os"
     "strconv"
 )
 
@@ -13,8 +13,8 @@ func isLogging(module string) bool {
     val, present := cache[module]
     if !present {
         all_on := os.Getenv("HIBERA_LOG_ALL") == "true"
-        module_on := os.Getenv("HIBERA_LOG_" + module) == "true"
-        module_off := os.Getenv("HIBERA_LOG_" + module) == "false"
+        module_on := os.Getenv("HIBERA_LOG_"+module) == "true"
+        module_off := os.Getenv("HIBERA_LOG_"+module) == "false"
         val = module_on || (all_on && !module_off)
         cache[module] = val
     }
@@ -23,6 +23,6 @@ func isLogging(module string) bool {
 
 func Print(module string, fmt string, v ...interface{}) {
     if isLogging(module) {
-        log.Printf(pid + " " + module + " " + fmt, v...)
+        log.Printf(pid+" "+module+" "+fmt, v...)
     }
 }

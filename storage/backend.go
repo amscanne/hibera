@@ -1,17 +1,17 @@
 package storage
 
 import (
-    "os"
-    "io"
-    "log"
-    "path"
     "bytes"
-    "strings"
-    "syscall"
-    "io/ioutil"
     "encoding/binary"
     "encoding/gob"
     "hibera/utils"
+    "io"
+    "io/ioutil"
+    "log"
+    "os"
+    "path"
+    "strings"
+    "syscall"
 )
 
 var DefaultPath = "/var/lib/hibera"
@@ -35,12 +35,15 @@ type Update struct {
 
 type Backend struct {
     path string
-    memory map[string]Val
+
+    accepted map[string]Val
+    promised map[string]uint64
+
     cluster *os.File
-    data *os.File
-    log1 *os.File
-    log2 *os.File
-    cs chan *Update
+    data    *os.File
+    log1    *os.File
+    log2    *os.File
+    cs      chan *Update
 }
 
 func OpenLocked(filename string) (*os.File, error) {
@@ -81,7 +84,8 @@ func NewBackend(p string) *Backend {
 }
 
 func (b *Backend) init() error {
-    b.memory = make(map[string]Val)
+    b.accepted = make(map[string]Val)
+    b.promised = make(map[string]uint64)
 
     // Open our files.
     cluster, err := OpenLocked(path.Join(b.path, "cluster"))
@@ -242,7 +246,7 @@ func (b *Backend) pivotLogs() error {
     if err != nil {
         return err
     }
-    for key, val := range b.memory {
+    for key, val := range b.accepted {
         err = serialize(data, &Entry{key, val})
         if err != nil {
             return err
@@ -276,9 +280,9 @@ func (b *Backend) loadFile(file *os.File) error {
 
         // Atomic set on our map.
         if entry.Val.Value == nil {
-            delete(b.memory, entry.Key)
+            delete(b.accepted, entry.Key)
         } else {
-            b.memory[entry.Key] = entry.Val
+            b.accepted[entry.Key] = entry.Val
         }
     }
 
@@ -307,12 +311,13 @@ func (b *Backend) logWriter() {
     }
 
     process := func(update *Update) {
-        // Update the in-memory database.
-        // NOTE: This should be atomic.
         if update.Entry.Val.Value == nil {
-            delete(b.memory, update.Entry.Key)
+            // It's a promise, try to set.
+            delete(b.accepted, update.Entry.Key)
         } else {
-            b.memory[update.Entry.Key] = update.Entry.Val
+            // Update the in-memory database.
+            // NOTE: This should be atomic.
+            b.accepted[update.Entry.Key] = update.Entry.Val
         }
 
         // Serialize the entry to the log.
@@ -323,20 +328,20 @@ func (b *Backend) logWriter() {
     }
 
     for {
-        // Nothing in the queue?
-        // Block indefinitely.
         if len(finished) == 0 {
+            // Nothing in the queue?
+            // Block indefinitely.
             select {
             case update := <-b.cs:
                 process(update)
                 break
             }
 
+        } else if len(finished) < MaximumLogBatch {
             // Something in the queue?
             // Do a non-blocking call. If we don't
             // find anything right now, then we do
             // a flush log to complete this batch.
-        } else if len(finished) < MaximumLogBatch {
             select {
             case update := <-b.cs:
                 process(update)
@@ -346,9 +351,9 @@ func (b *Backend) logWriter() {
                 break
             }
 
+        } else {
             // We're at a full batch.
             // We have to do a flush of the log.
-        } else {
             complete()
         }
     }
@@ -358,13 +363,17 @@ func (b *Backend) Write(key string, value []byte, rev uint64) error {
     val := Val{rev, value}
     entry := Entry{key, val}
     update := &Update{entry, make(chan error, 1)}
-    b.cs<- update
+    b.cs <- update
     return <-update.result
 }
 
 func (b *Backend) Read(key string) ([]byte, uint64, error) {
-    val := b.memory[key]
+    val := b.accepted[key]
     return val.Value, val.Rev, nil
+}
+
+func (b *Backend) Promise(key string, rev uint64) error {
+    return b.Write(key, nil, rev)
 }
 
 func (b *Backend) Delete(key string) error {
@@ -372,8 +381,8 @@ func (b *Backend) Delete(key string) error {
 }
 
 func (b *Backend) List() ([]string, error) {
-    keys := make([]string, 0, len(b.memory))
-    for k, _ := range b.memory {
+    keys := make([]string, 0, len(b.accepted))
+    for k, _ := range b.accepted {
         keys = append(keys, k)
     }
     return keys, nil

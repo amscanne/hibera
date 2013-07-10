@@ -1,21 +1,21 @@
 package server
 
 import (
-    "fmt"
-    "log"
-    "net"
-    "math/rand"
-    "time"
     "code.google.com/p/goprotobuf/proto"
-    "hibera/core"
-    "hibera/cluster"
+    "fmt"
     "hibera/client"
+    "hibera/cluster"
+    "hibera/core"
     "hibera/utils"
+    "log"
+    "math/rand"
+    "net"
+    "time"
 )
 
 type GossipServer struct {
     *cluster.Cluster
-    conn *net.UDPConn
+    conn  *net.UDPConn
     seeds []string
 }
 
@@ -87,7 +87,7 @@ func (s *GossipServer) heartbeat() {
     if nodes == nil {
         nodes = make([]*core.Node, 0, 0)
     }
-    if len(nodes) + len(s.seeds) == 0 {
+    if len(nodes)+len(s.seeds) == 0 {
         return
     }
     index := rand.Int() % (len(nodes) + len(s.seeds))
@@ -148,8 +148,8 @@ func (s *GossipServer) process(addr *net.UDPAddr, m *Message) {
             TYPE_name[int32(m.GetType())], addr, m.GetVersion())
     }
 
-    // Check for our own id.
-    if gossip != nil && *gossip.Id == s.Cluster.Id() {
+    // Check for our own id (prevents broadcast from looping back).
+    if gossip != nil && *gossip.Id == s.Cluster.Nodes.Self().Id() {
         return
     }
 

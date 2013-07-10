@@ -1,9 +1,9 @@
 package cluster
 
 import (
-    "testing"
     "hibera/core"
     "hibera/utils"
+    "testing"
 )
 
 var DefaultSize = uint(128)
