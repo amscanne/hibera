@@ -23,7 +23,8 @@ type GossipServer struct {
 var DefaultSeeds = "255.255.255.255"
 
 // The frequency (in ms) of heartbeats.
-var Heartbeat = 1000
+var MinHeartbeat = 10
+var MaxHeartbeat = 1000
 
 // The number of dead servers to encode in a heartbeat.
 var DeadServers = 5
@@ -52,10 +53,9 @@ func (s *GossipServer) sendPingPong(addr *net.UDPAddr, pong bool) {
     dead := s.Cluster.Dead()
     perm := rand.Perm(len(dead))
     if len(dead) > DeadServers {
-        dead = dead[0:DeadServers]
         perm = perm[0:DeadServers]
     }
-    gossip := make([]string, len(dead))
+    gossip := make([]string, len(perm))
     for i, v := range perm {
         gossip[i] = dead[v].Id()
         utils.Print("GOSSIP", "DEAD %s", gossip[i])
@@ -80,7 +80,7 @@ func (s *GossipServer) heartbeat() {
     // there are currently some) and seeds. The reason to mix
     // the seeds is to ensure that at cluster creation time, we
     // don't end up with two split clusters.
-    nodes := s.Cluster.Suspicious()
+    nodes := s.Cluster.Suspicious(s.Cluster.Version())
     if nodes == nil || len(nodes) == 0 {
         nodes = s.Cluster.Others()
     }
@@ -113,8 +113,13 @@ func (s *GossipServer) heartbeat() {
 
 func (s *GossipServer) Sender() {
     for {
-        time.Sleep(time.Duration(Heartbeat) * time.Millisecond)
-        s.heartbeat()
+        if s.Cluster.HasSuspicious(s.Cluster.Version()) {
+            s.heartbeat()
+            time.Sleep(time.Duration(MinHeartbeat) * time.Millisecond)
+        } else {
+            s.heartbeat()
+            time.Sleep(time.Duration(MaxHeartbeat) * time.Millisecond)
+        }
     }
 }
 
@@ -139,16 +144,8 @@ func NewGossipServer(c *cluster.Cluster, addr string, port uint, seeds []string)
 }
 
 func (s *GossipServer) process(addr *net.UDPAddr, m *Message) {
-    gossip := m.GetGossip()
-    if gossip != nil {
-        utils.Print("GOSSIP", "RECV %s (addr=%s,version=%d,id=%s)",
-            TYPE_name[int32(m.GetType())], addr, m.GetVersion(), *gossip.Id)
-    } else {
-        utils.Print("GOSSIP", "RECV %s (addr=%s,version=%d)",
-            TYPE_name[int32(m.GetType())], addr, m.GetVersion())
-    }
-
     // Check for our own id (prevents broadcast from looping back).
+    gossip := m.GetGossip()
     if gossip != nil && *gossip.Id == s.Cluster.Nodes.Self().Id() {
         return
     }

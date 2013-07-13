@@ -9,7 +9,7 @@ import (
 var DefaultSize = uint(128)
 
 func Setup(size uint, keys uint) *ring {
-    nodes := core.NewTestNodes(size+1, keys+1, domains("test"))
+    nodes := core.NewTestNodes(size+1, keys+1)
     return NewRing(nodes)
 }
 
@@ -33,13 +33,13 @@ func BenchmarkRecomputeByKeys(b *testing.B) {
 func BenchmarkCached(b *testing.B) {
     r := Setup(DefaultSize, DefaultKeys)
     for i := 0; i < b.N; i += 1 {
-        r.NodesFor(core.Key(""))
+        r.NodesFor(core.Key(""), 3)
     }
 }
 
 func BenchmarkUncached(b *testing.B) {
     r := Setup(DefaultSize, DefaultKeys)
     for i := 0; i < b.N; i += 1 {
-        r.lookup(utils.Hash(""))
+        r.lookup(utils.Hash(""), 3)
     }
 }

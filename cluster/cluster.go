@@ -13,11 +13,12 @@ import (
 )
 
 var DefaultKeys = uint(128)
+var DefaultN = uint(1)
 var RootKey = core.Key("")
 
 type Cluster struct {
     // Our cluster id.
-    id  string
+    id string
 
     // Our built-in auth token.
     auth string
@@ -28,6 +29,9 @@ type Cluster struct {
     // or participated in a paxos round) then this number
     // will be zero.
     rev core.Revision
+
+    // Our replication factor.
+    N int
 
     // Our local datastore.
     // Some of these functions are exported and used directly
@@ -55,11 +59,11 @@ type Cluster struct {
     sync.Mutex
 }
 
-func (c *Cluster) doEncode(rev core.Revision, next bool) ([]byte, error) {
+func (c *Cluster) doEncode(next bool) ([]byte, error) {
     info := core.NewInfo()
 
     // Encode our nodes.
-    nodes_changed, err := c.Nodes.Encode(rev, next, info.Nodes)
+    nodes_changed, err := c.Nodes.Encode(c.rev, next, info.Nodes, c.N)
     if err != nil {
         utils.Print("CLUSTER", "ENCODING-NODES-ERROR %s", err)
         return nil, err
@@ -138,7 +142,7 @@ func (c *Cluster) doActivate() error {
     utils.Print("CLUSTER", "ACTIVATED")
 
     // Do the quorum set.
-    bytes, err := c.doEncode(core.Revision(0), false)
+    bytes, err := c.doEncode(false)
     if bytes == nil || err != nil {
         return err
     }
@@ -219,7 +223,7 @@ func (c *Cluster) Heartbeat(id string, addr *net.UDPAddr, rev core.Revision, nod
     }
 
     // Update our nodes.
-    if !c.Nodes.Heartbeat(id) ||
+    if !c.Nodes.Heartbeat(id, rev) ||
         (rev > c.rev || (rev == c.rev && nodes > uint64(c.Count()))) {
         // We don't know about this node.
         // Refresh addr will go get info
@@ -295,7 +299,7 @@ func (c *Cluster) changeRevision(rev core.Revision, force bool) {
 
         old_master := old_ring.IsMaster(key)
         new_master := c.ring.IsMaster(key)
-        new_slave := c.ring.IsSlave(key)
+        new_slave := c.ring.IsSlave(key, 2 * c.N + 1)
 
         // We're the new master for this key.
         if !old_master && new_master {
@@ -306,8 +310,8 @@ func (c *Cluster) changeRevision(rev core.Revision, force bool) {
             // Ensure that the master is aware of this key.
             // This happens if the new master was not in the
             // ring previously, but is now in the ring.
-        } else if c.ring.IsFailover(key) &&
-            !old_ring.IsNode(key, c.ring.MasterFor(key)) {
+        } else if c.ring.IsFailover(key, 2 * c.N + 1) &&
+            !old_ring.IsNode(key, c.ring.MasterFor(key), 2 * c.N + 1) {
             if key != RootKey {
                 go c.syncData(c.ring, key, true)
             }
@@ -345,7 +349,7 @@ func (c *Cluster) Healthcheck() {
         target_rev := c.rev + 1
         master := c.ring.MasterFor(RootKey)
         is_master := (master == nil || master == c.Nodes.Self())
-        is_failover := (master != nil && !master.Alive() && c.ring.IsFailover(RootKey))
+        is_failover := (master != nil && !master.Alive() && c.ring.IsFailover(RootKey, 2 * c.N + 1))
 
         if is_master {
             utils.Print("CLUSTER", "HEALTHCHECK-MASTER")
@@ -355,7 +359,7 @@ func (c *Cluster) Healthcheck() {
 
         if is_master || is_failover {
             // Encode a cluster delta.
-            bytes, err := c.doEncode(c.rev+1, true)
+            bytes, err := c.doEncode(true)
 
             // Check if everything is okay.
             if bytes == nil || err != nil {
@@ -413,9 +417,10 @@ func (c *Cluster) timedHealthcheck() {
     time.AfterFunc(time.Duration(1)*time.Second, f)
 }
 
-func NewCluster(backend *storage.Backend, addr string, auth string, domain string, ids []string) *Cluster {
+func NewCluster(N uint, backend *storage.Backend, addr string, auth string, domain string, ids []string) *Cluster {
     c := new(Cluster)
-    c.Nodes = core.NewNodes(addr, ids, domains(domain))
+    c.N = int(N)
+    c.Nodes = core.NewNodes(addr, ids, domain)
     c.Access = core.NewAccess(auth)
     c.Data = core.NewData(backend)
     c.ring = NewRing(c.Nodes)

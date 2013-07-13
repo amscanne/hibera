@@ -69,7 +69,7 @@ func NewQuorumError(revcounts map[core.Revision]int) error {
 }
 
 func (c *Cluster) quorum(ring *ring, key core.Key, fn func(*core.Node, chan<- *QuorumResult)) (*QuorumResult, error) {
-    nodes := ring.NodesFor(key)
+    nodes := ring.NodesFor(key, 2 * c.N + 1)
     real_self := c.Nodes.Self()
     var self *core.Node
     res := make(chan *QuorumResult)

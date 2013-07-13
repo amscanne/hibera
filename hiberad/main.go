@@ -17,6 +17,7 @@ import (
     "time"
 )
 
+var N = flag.Uint("N", cluster.DefaultN, "Replication factor (will be 2N + 1).")
 var auth = flag.String("auth", "", "Authorization key.")
 var bind = flag.String("bind", server.DefaultBind, "Bind address for the server.")
 var port = flag.Uint("port", client.DefaultPort, "Bind port for the server.")
@@ -86,7 +87,7 @@ func main() {
     if err != nil {
         log.Fatal("Unable to load keys: ", err)
     }
-    c := cluster.NewCluster(backend, addr, *auth, *domain, ids)
+    c := cluster.NewCluster(*N, backend, addr, *auth, *domain, ids)
     if c == nil {
         log.Fatal("Unable to create cluster.")
     }

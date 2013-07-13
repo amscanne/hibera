@@ -5,6 +5,7 @@ import (
     "sort"
     "sync"
     "sync/atomic"
+    "fmt"
 )
 
 var DropLimit = uint32(10)
@@ -17,7 +18,7 @@ type Node struct {
     id  string
 
     // The node domain.
-    Domains []string
+    Domain string
 
     // The node keys.
     Keys []string
@@ -29,6 +30,9 @@ type Node struct {
 
     // The last revision modified.
     Modified Revision
+
+    // The last reported revision.
+    Current Revision
 
     // The number of messages sent without
     // us hearing a peep back from the node.
@@ -57,13 +61,14 @@ func (n *Node) Id() string {
     return n.id
 }
 
-func NewNode(addr string, keys []string, domains []string) *Node {
+func NewNode(addr string, keys []string, domain string) *Node {
     node := new(Node)
     node.Addr = addr
     node.Keys = keys
-    node.Domains = domains
+    node.Domain = domain
     node.Active = false
-    node.Dropped = DropLimit
+    node.Dropped = 0
+    node.Current = 0
     return node
 }
 
@@ -77,7 +82,7 @@ type Nodes struct {
     sync.Mutex
 }
 
-func (nodes *Nodes) Heartbeat(id string) bool {
+func (nodes *Nodes) Heartbeat(id string, rev Revision) bool {
     nodes.Mutex.Lock()
     defer nodes.Mutex.Unlock()
 
@@ -88,6 +93,9 @@ func (nodes *Nodes) Heartbeat(id string) bool {
         // will be removed and replaced by other nodes,
         // but we allow that to happen organically.
         node.RstDropped()
+        if rev > node.Current {
+            node.Current = rev
+        }
         return true
     }
 
@@ -100,7 +108,9 @@ func (nodes *Nodes) NoHeartbeat(id string) {
 
     node := nodes.all[id]
     if node != nil && node != nodes.self && node.Id() == id {
-        node.IncDropped()
+        if node.Dropped == 0 {
+            node.IncDropped()
+        }
     }
 }
 
@@ -117,38 +127,22 @@ func (nodes *Nodes) Activate(id string, rev Revision) bool {
     if !node.Active {
         node.Active = true
         node.Modified = rev
+        node.Current = 0
     }
     node.RstDropped()
 
     return true
 }
 
-func (nodes *Nodes) Fail(id string, rev Revision) bool {
-    nodes.Mutex.Lock()
-    defer nodes.Mutex.Unlock()
-
-    node := nodes.all[id]
-    if node == nil {
-        return false
-    }
-
-    // We deactivate this node.
-    if node.Active {
-        node.Active = false
-        node.Modified = rev
-        return true
-    }
-    return false
-}
-
-func (nodes *Nodes) Active() (map[string]string, error) {
+func (nodes *Nodes) Dump() (map[string]string, error) {
     nodes.Mutex.Lock()
     defer nodes.Mutex.Unlock()
 
     all := make(map[string]string)
     for id, node := range nodes.all {
         if node.Active {
-            all[id] = node.Addr
+            // Generate a generally useful string to describe the node.
+            all[fmt.Sprintf("%s:%s@%d", node.Domain, id, node.Current)] = node.Addr
         }
     }
 
@@ -193,10 +187,14 @@ func (nodes *Nodes) Others() []*Node {
     })
 }
 
-func (nodes *Nodes) Suspicious() []*Node {
+func (nodes *Nodes) Suspicious(rev Revision) []*Node {
     return nodes.filter(func(node *Node) bool {
-        return node.Active && node.Dropped > 0
+        return node.Active && (node.Dropped > 0 || node.Current < rev)
     })
+}
+
+func (nodes *Nodes) HasSuspicious(rev Revision) bool {
+    return len(nodes.Suspicious(rev)) > 0
 }
 
 func (nodes *Nodes) Self() *Node {
@@ -207,60 +205,60 @@ func (nodes *Nodes) Count() int {
     return len(nodes.all)
 }
 
-func (nodes *Nodes) Encode(rev Revision, next bool, na NodeInfo) (bool, error) {
+func (nodes *Nodes) Encode(rev Revision, next bool, na NodeInfo, N int) (bool, error) {
     nodes.Mutex.Lock()
     defer nodes.Mutex.Unlock()
 
     // Create a list of nodes modified after rev.
-    adddomain := make(map[string]bool)
-    removedomain := make(map[string]bool)
     changed := false
+    domains := make(map[string]bool)
+
+    // We're always up-to-date.
+    nodes.Self().Current = rev
+
+    // Check that we are allowed to fail nodes.
+    // If there are nodes that are not currently marked as
+    // dead, and those nodes are not yet up to the latest 
+    // revision -- then we can't fail others. We will either
+    // need to fail those nodes, or we will need to wait until
+    // they are up to date. Note that they should become up to
+    // date pretty quickly, as they are currently suspicious.
+    if next {
+        for _, node := range nodes.all {
+            if node.Active && node.Alive() && node.Current < rev {
+                next = false
+                break
+            }
+        }
+    }
 
     for id, node := range nodes.all {
 
-        if next && (!node.Active && node.Alive()) {
+        if next && !node.Active && node.Alive() {
             // Check if we can't add this domain.
-            doadd := true
-            for _, domain := range node.Domains {
-                if adddomain[domain] {
-                    doadd = false
-                    break
-                }
+            // We limit ourselves to adding & removing nodes
+            // from a single domain at a time. This is done
+            // to ensure that the cluster can reach a consistent
+            // state after each transition.
+            if domains[node.Domain] || len(domains) < N {
+                // Propose this as an active node.
+                domains[node.Domain] = true
+                na[id] = NewNode(node.Addr, node.Keys, node.Domain)
+                na[id].Active = node.Alive()
+                na[id].Modified = rev+1
+                changed = true
             }
-            if !doadd {
-                continue
-            }
-            for _, domain := range node.Domains {
-                adddomain[domain] = true
-            }
-
-            // Propose this as an active node.
-            na[id] = NewNode(node.Addr, node.Keys, node.Domains)
-            na[id].Active = node.Alive()
-            na[id].Modified = rev
-            changed = true
 
         } else if next && node.Active && node != nodes.self && !node.Alive() {
             // Check if we can't remove this domain.
-            doremove := true
-            for _, domain := range node.Domains {
-                if removedomain[domain] {
-                    doremove = false
-                    break
-                }
+            if domains[node.Domain] || len(domains) < N {
+                // Propose this as a removed node.
+                domains[node.Domain] = true
+                na[id] = NewNode(node.Addr, node.Keys, node.Domain)
+                na[id].Active = false
+                na[id].Modified = rev+1
+                changed = true
             }
-            if !doremove {
-                continue
-            }
-            for _, domain := range node.Domains {
-                removedomain[domain] = true
-            }
-
-            // Propose this as a removed node.
-            na[id] = NewNode(node.Addr, node.Keys, node.Domains)
-            na[id].Active = false
-            na[id].Modified = rev
-            changed = true
 
         } else if node == nodes.self || node.Modified >= rev {
             na[id] = node
@@ -303,7 +301,7 @@ func (nodes *Nodes) Reset() {
     }
 }
 
-func NewNodes(addr string, keys []string, domains []string) *Nodes {
+func NewNodes(addr string, keys []string, domain string) *Nodes {
     nodes := new(Nodes)
     nodes.all = make(NodeInfo)
 
@@ -318,19 +316,19 @@ func NewNodes(addr string, keys []string, domains []string) *Nodes {
     for i, key := range keys {
         hashed[i] = utils.Hash(key)
     }
-    nodes.self = NewNode(addr, hashed, domains)
+    nodes.self = NewNode(addr, hashed, domain)
     nodes.all[nodes.self.Id()] = nodes.self
 
     return nodes
 }
 
-func NewTestNodes(n uint, k uint, domains []string) *Nodes {
+func NewTestNodes(n uint, k uint) *Nodes {
     // Create ourselves.
     uuids, err := utils.Uuids(k)
     if err != nil {
         return nil
     }
-    nodes := NewNodes("", uuids, domains)
+    nodes := NewNodes("localhost", uuids, "self")
     nodes.self.Active = true
 
     for i := uint(0); i < n; i += 1 {
@@ -346,7 +344,8 @@ func NewTestNodes(n uint, k uint, domains []string) *Nodes {
         if err != nil {
             return nil
         }
-        node := NewNode("", uuids, domains)
+        name := fmt.Sprintf("other-%d", i)
+        node := NewNode(name, uuids, name)
         nodes.all[node.Id()] = node
         node.Active = true
     }

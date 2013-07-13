@@ -45,21 +45,6 @@ func NewRing(nodes *core.Nodes) *ring {
     return r
 }
 
-func domains(domain string) []string {
-    domains := make([]string, 0, 0)
-    lasti := 0
-    for i, c := range domain {
-        if c == '.' {
-            domains = append(domains, domain[lasti:len(domain)])
-            lasti = i + 1
-        }
-    }
-    if lasti < len(domain) {
-        domains = append(domains, domain[lasti:len(domain)])
-    }
-    return domains
-}
-
 func (r *ring) Recompute() {
     // Make a new keymap.
     keymap := make(map[string]*core.Node)
@@ -90,20 +75,20 @@ func (r *ring) IsMaster(key core.Key) bool {
 }
 
 func (r *ring) MasterFor(key core.Key) *core.Node {
-    nodes := r.NodesFor(key)
+    nodes := r.NodesFor(key, 1)
     if nodes == nil || len(nodes) < 1 {
         return nil
     }
     return nodes[0]
 }
 
-func (r *ring) IsFailover(key core.Key) bool {
-    slaves := r.SlavesFor(key)
+func (r *ring) IsFailover(key core.Key, N int) bool {
+    slaves := r.SlavesFor(key, N)
     return slaves != nil && len(slaves) > 0 && slaves[0] == r.Nodes.Self()
 }
 
-func (r *ring) IsSlave(key core.Key) bool {
-    slaves := r.SlavesFor(key)
+func (r *ring) IsSlave(key core.Key, N int) bool {
+    slaves := r.SlavesFor(key, N)
     if slaves == nil {
         return false
     }
@@ -115,16 +100,16 @@ func (r *ring) IsSlave(key core.Key) bool {
     return false
 }
 
-func (r *ring) SlavesFor(key core.Key) []*core.Node {
-    nodes := r.NodesFor(key)
+func (r *ring) SlavesFor(key core.Key, N int) []*core.Node {
+    nodes := r.NodesFor(key, N)
     if nodes == nil || len(nodes) < 2 {
         return nil
     }
     return nodes[1:len(nodes)]
 }
 
-func (r *ring) IsNode(key core.Key, check *core.Node) bool {
-    nodes := r.NodesFor(key)
+func (r *ring) IsNode(key core.Key, check *core.Node, N int) bool {
+    nodes := r.NodesFor(key, N)
     if nodes == nil {
         return false
     }
@@ -136,7 +121,7 @@ func (r *ring) IsNode(key core.Key, check *core.Node) bool {
     return false
 }
 
-func (r *ring) lookup(h string) []*core.Node {
+func (r *ring) lookup(h string, N int) []*core.Node {
     if len(r.sorted) == 0 {
         return nil
     }
@@ -148,7 +133,7 @@ func (r *ring) lookup(h string) []*core.Node {
         // Wrap around the ring.
         start = 0
     }
-    perdomain := make(map[string]uint)
+    perdomain := make(map[string]bool)
     pernode := make(map[string]bool)
     current := start
 
@@ -157,19 +142,9 @@ func (r *ring) lookup(h string) []*core.Node {
         node := r.keymap[r.sorted[current]]
 
         if !pernode[node.Addr] {
-            add := false
-
             // Check if it satisfies a domain.
-            for _, domain := range node.Domains {
-                if len(nodes) < 3 || perdomain[domain] < 3 {
-                    perdomain[domain] += 1
-                    add = true
-                    break
-                }
-            }
-
-            // Add this node.
-            if add {
+            if len(nodes) < N && !perdomain[node.Domain] {
+                perdomain[node.Domain] = true
                 pernode[node.Addr] = true
                 nodes = append(nodes, node)
             }
@@ -185,7 +160,7 @@ func (r *ring) lookup(h string) []*core.Node {
     return nodes
 }
 
-func (r *ring) NodesFor(key core.Key) []*core.Node {
+func (r *ring) NodesFor(key core.Key, N int) []*core.Node {
     r.Mutex.Lock()
     defer r.Mutex.Unlock()
 
@@ -194,7 +169,7 @@ func (r *ring) NodesFor(key core.Key) []*core.Node {
     cached := r.cache[h]
     if cached == nil {
         // Do a manual lookup.
-        nodes := r.lookup(h)
+        nodes := r.lookup(h, N)
 
         // Cache the value.
         r.cache[h] = nodes

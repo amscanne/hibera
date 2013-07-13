@@ -56,7 +56,7 @@ func (c *Cluster) doRedirect(conn Connection, key core.Key) (bool, error) {
     }
 
     // Check for other servers.
-    if c.Nodes.Heartbeat(conn.ServerId()) {
+    if c.Nodes.Heartbeat(conn.ServerId(), 0) {
         utils.Print("CLUSTER", "REDIRECT IS-SERVER key=%s", string(key))
         return true, nil
     }
@@ -106,7 +106,7 @@ func (c *Cluster) Info(conn Connection, rev core.Revision) (string, []byte, core
     // the client anyways, it makes sense to handle this here.
     c.Mutex.Lock()
     defer c.Mutex.Unlock()
-    bytes, err := c.doEncode(rev, false)
+    bytes, err := c.doEncode(false)
     return c.id, bytes, c.rev, err
 }
 
@@ -163,7 +163,7 @@ func (c *Cluster) NodeList(conn Connection) (map[string]string, core.Revision, e
         return nil, c.rev, err
     }
 
-    nodes, err := c.Nodes.Active()
+    nodes, err := c.Nodes.Dump()
     return nodes, c.rev, err
 }
 
