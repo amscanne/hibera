@@ -14,8 +14,14 @@ import (
 )
 
 type GossipServer struct {
+    // The cluster.
     *cluster.Cluster
-    conn  *net.UDPConn
+
+    // The bound UDP socket.
+    conn *net.UDPConn
+
+    // The list of seeds to heartbeat, when
+    // no other known nodes are available.
     seeds []string
 }
 
@@ -30,19 +36,11 @@ var MaxHeartbeat = 1000
 var DeadServers = 5
 
 func (s *GossipServer) send(addr *net.UDPAddr, m *Message) error {
-    gossip := m.GetGossip()
-    if gossip != nil {
-        utils.Print("GOSSIP", "SEND %s (addr=%s,version=%d,id=%s)",
-            TYPE_name[int32(m.GetType())], addr, m.GetVersion(), *gossip.Id)
-    } else {
-        utils.Print("GOSSIP", "SEND %s (addr=%s,version=%d)",
-            TYPE_name[int32(m.GetType())], addr, m.GetVersion())
-    }
-
     data, err := proto.Marshal(m)
     if err != nil {
         return err
     }
+
     // Send the packet.
     _, err = s.conn.WriteToUDP(data, addr)
     return err
@@ -50,26 +48,27 @@ func (s *GossipServer) send(addr *net.UDPAddr, m *Message) error {
 
 func (s *GossipServer) sendPingPong(addr *net.UDPAddr, pong bool) {
     // Construct our list of dead nodes.
+    // We randomly select up to DeadServers from
+    // the list of all dead servers.
     dead := s.Cluster.Dead()
     perm := rand.Perm(len(dead))
     if len(dead) > DeadServers {
         perm = perm[0:DeadServers]
     }
+
     gossip := make([]string, len(perm))
     for i, v := range perm {
         gossip[i] = dead[v].Id()
-        utils.Print("GOSSIP", "DEAD %s", gossip[i])
     }
 
     // Build our ping message.
     t := uint32(TYPE_PING)
     version := uint64(s.Cluster.Version())
-    nodes := uint64(s.Cluster.Count())
     id := s.Cluster.Id()
     if pong {
         t = uint32(TYPE_PONG)
     }
-    m := &Message{&t, &version, &nodes, &Gossip{&id, gossip, nil}, nil}
+    m := &Message{&t, &version, &id, gossip, nil}
     s.send(addr, m)
 }
 
@@ -145,14 +144,13 @@ func NewGossipServer(c *cluster.Cluster, addr string, port uint, seeds []string)
 
 func (s *GossipServer) process(addr *net.UDPAddr, m *Message) {
     // Check for our own id (prevents broadcast from looping back).
-    gossip := m.GetGossip()
-    if gossip != nil && *gossip.Id == s.Cluster.Nodes.Self().Id() {
+    if m.GetId() == s.Cluster.Nodes.Self().Id() {
         return
     }
 
-    // Heartbeat.
-    s.Cluster.Heartbeat(*gossip.Id, addr,
-        core.Revision(m.GetVersion()), m.GetNodes(), gossip.Dead)
+    // Update the cluster status based on gossip.
+    s.Cluster.GossipUpdate(addr, m.GetId(),
+        core.Revision(m.GetVersion()), m.GetDead())
 
     if m.GetType() == uint32(TYPE_PING) && s.Cluster.Version() > 0 {
         // Respond to the ping.

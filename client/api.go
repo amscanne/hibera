@@ -6,6 +6,7 @@ import (
     "encoding/json"
     "errors"
     "fmt"
+    "hibera/core"
     "hibera/utils"
     "io"
     "math/rand"
@@ -55,6 +56,13 @@ var skipRedirect = errors.New("")
 
 func noRedirect(req *http.Request, via []*http.Request) error {
     return skipRedirect
+}
+
+func boolToStr(val bool) string {
+    if val {
+        return "true"
+    }
+    return "false"
 }
 
 func NewHiberaAPI(urls []string, auth string, clientid string, delay uint) *HiberaAPI {
@@ -127,14 +135,6 @@ func (h *HiberaAPI) makeArgs(path string) HttpArgs {
     headers := make(map[string]string)
     params := make(map[string]string)
     return HttpArgs{path, headers, params, nil}
-}
-
-func (h *HiberaAPI) getClusterId(resp *http.Response) string {
-    ids := resp.Header["X-Cluster-Id"]
-    if len(ids) == 0 {
-        return ""
-    }
-    return ids[0]
 }
 
 func (h *HiberaAPI) getRev(resp *http.Response) (uint64, error) {
@@ -255,21 +255,20 @@ func (h *HiberaAPI) doRequest(method string, args HttpArgs, hint string) (*http.
     return nil, nil
 }
 
-func (h *HiberaAPI) Info(rev uint64) (string, []byte, uint64, error) {
+func (h *HiberaAPI) Info(rev uint64) ([]byte, uint64, error) {
     args := h.makeArgs("/")
     args.params["rev"] = strconv.FormatUint(rev, 10)
     resp, err := h.doRequest("GET", args, "")
     if err != nil {
-        return "", nil, 0, err
+        return nil, 0, err
     }
-    id := h.getClusterId(resp)
     content, err := h.getContent(resp)
     if err != nil {
         rev, _ = h.getRev(resp)
-        return id, nil, rev, err
+        return nil, rev, err
     }
     rev, err = h.getRev(resp)
-    return id, content, rev, err
+    return content, rev, err
 }
 
 func (h *HiberaAPI) Activate() error {
@@ -284,8 +283,9 @@ func (h *HiberaAPI) Deactivate() error {
     return err
 }
 
-func (h *HiberaAPI) Nodes() (map[string]string, uint64, error) {
+func (h *HiberaAPI) NodeList(active bool) ([]string, uint64, error) {
     args := h.makeArgs("/nodes")
+    args.params["active"] = boolToStr(active)
     resp, err := h.doRequest("GET", args, "")
     if err != nil {
         return nil, 0, err
@@ -295,7 +295,7 @@ func (h *HiberaAPI) Nodes() (map[string]string, uint64, error) {
         rev, _ := h.getRev(resp)
         return nil, rev, err
     }
-    var nodes map[string]string
+    var nodes []string
     err = json.Unmarshal(content, &nodes)
     if err != nil {
         rev, _ := h.getRev(resp)
@@ -305,7 +305,7 @@ func (h *HiberaAPI) Nodes() (map[string]string, uint64, error) {
     return nodes, rev, err
 }
 
-func (h *HiberaAPI) NodeGet(id string) ([]byte, uint64, error) {
+func (h *HiberaAPI) NodeGet(id string) (*core.Node, uint64, error) {
     args := h.makeArgs(fmt.Sprintf("/nodes/%s", id))
     resp, err := h.doRequest("GET", args, id)
     if err != nil {
@@ -316,8 +316,14 @@ func (h *HiberaAPI) NodeGet(id string) ([]byte, uint64, error) {
         rev, _ := h.getRev(resp)
         return nil, rev, err
     }
+    var node core.Node
+    err = json.Unmarshal(content, &node)
+    if err != nil {
+        rev, _ := h.getRev(resp)
+        return nil, rev, err
+    }
     rev, err := h.getRev(resp)
-    return content, rev, err
+    return &node, rev, err
 }
 
 func (h *HiberaAPI) AccessList() ([]string, uint64, error) {
@@ -344,12 +350,6 @@ func (h *HiberaAPI) AccessList() ([]string, uint64, error) {
 func (h *HiberaAPI) AccessGrant(token string, path string, read bool, write bool, execute bool) (uint64, error) {
     args := h.makeArgs(fmt.Sprintf("/access/%s", token))
     args.params["path"] = path
-    boolToStr := func(val bool) string {
-        if val {
-            return "true"
-        }
-        return "false"
-    }
     args.params["read"] = boolToStr(read)
     args.params["write"] = boolToStr(write)
     args.params["execute"] = boolToStr(execute)
@@ -361,7 +361,7 @@ func (h *HiberaAPI) AccessGrant(token string, path string, read bool, write bool
     return rev, err
 }
 
-func (h *HiberaAPI) AccessGet(token string) ([]byte, uint64, error) {
+func (h *HiberaAPI) AccessGet(token string) (*core.Token, uint64, error) {
     args := h.makeArgs(fmt.Sprintf("/access/%s", token))
     resp, err := h.doRequest("GET", args, "")
     if err != nil {
@@ -372,8 +372,14 @@ func (h *HiberaAPI) AccessGet(token string) ([]byte, uint64, error) {
         rev, _ := h.getRev(resp)
         return nil, rev, err
     }
+    var val core.Token
+    err = json.Unmarshal(content, &val)
+    if err != nil {
+        rev, _ := h.getRev(resp)
+        return nil, rev, err
+    }
     rev, err := h.getRev(resp)
-    return content, rev, err
+    return &val, rev, err
 }
 
 func (h *HiberaAPI) AccessRevoke(token string) (uint64, error) {

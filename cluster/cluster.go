@@ -17,9 +17,6 @@ var DefaultN = uint(1)
 var RootKey = core.Key("")
 
 type Cluster struct {
-    // Our cluster id.
-    id string
-
     // Our built-in auth token.
     auth string
 
@@ -55,6 +52,9 @@ type Cluster struct {
     // This is computed each round based on the node map above.
     // NOTE: Not exported so that it is not serialized.
     *ring
+
+    // Cache of connections to other servers.
+    clients map[string]*client.HiberaAPI
 
     sync.Mutex
 }
@@ -113,7 +113,7 @@ func (c *Cluster) doDecode(data []byte) (bool, error) {
 }
 
 func (c *Cluster) Active() bool {
-    return c.id != "" && c.rev != core.Revision(0)
+    return c.rev != core.Revision(0)
 }
 
 func (c *Cluster) doActivate() error {
@@ -130,39 +130,22 @@ func (c *Cluster) doActivate() error {
         return nil
     }
 
-    // Generate and save the cluster id.
-    uuid, err := utils.Uuid()
-    if err != nil {
-        utils.Print("CLUSTER", "ID-ERROR")
-        return err
-    }
-    c.id = uuid
-    c.Data.SaveClusterId(c.id)
-    c.changeRevision(core.Revision(1), true)
-    utils.Print("CLUSTER", "ACTIVATED")
-
-    // Do the quorum set.
+    // Do the data set.
     bytes, err := c.doEncode(false)
     if bytes == nil || err != nil {
         return err
     }
-    rev, err := c.lockedClusterDataSet(bytes, c.rev)
-    if err != nil {
-        utils.Print("CLUSTER", "WRITE-ERROR %s", err.Error())
+    rev, err := c.Data.DataSet(RootKey, core.Revision(1), bytes)
+    if err != nil || rev != core.Revision(1) {
         return err
     }
 
-    utils.Print("CLUSTER", "ACTIVATE-OKAY rev=%d", c.rev)
-    c.changeRevision(rev, true)
-
+    // Save the revision.
+    c.changeRevision(core.Revision(1), true)
     return nil
 }
 
 func (c *Cluster) doDeactivate() error {
-    // Reset our id.
-    c.id = ""
-    c.Data.SaveClusterId(c.id)
-
     // Reset our revision (hard).
     c.rev = core.Revision(0)
     c.Data.DataRemove(RootKey, 0)
@@ -179,41 +162,28 @@ func (c *Cluster) doDeactivate() error {
 
 func (c *Cluster) doSync(addr *net.UDPAddr, from core.Revision) {
     // Pull the remote info from the node.
-    cl := client.NewHiberaAPI(utils.AsURLs(addr), c.auth, c.Id(), 0)
-    id, data, rev, err := cl.Info(uint64(from))
+    cl := c.getClient(utils.AsURL(addr))
+    data, rev, err := cl.Info(uint64(from))
     if err != nil {
-        utils.Print("CLUSTER", "SYNC-CLIENT-ERROR id=%s %s", id, err.Error())
+        utils.Print("CLUSTER", "SYNC-CLIENT-ERROR %s", err.Error())
         return
     }
 
     c.Mutex.Lock()
     defer c.Mutex.Unlock()
 
-    // Take on the identity if we have none.
-    if c.id == "" && rev > 0 {
-        c.id = id
-        c.Access.Reset()
-        c.Data.SaveClusterId(c.id)
-        utils.Print("CLUSTER", "SYNC-ACTIVATE id=%s", id)
-    }
-
-    // Check that the sync is legit.
-    if c.id != id {
-        return
-    }
-
     // Update our nodemap.
     force, err := c.doDecode(data)
     if err != nil {
-        utils.Print("CLUSTER", "SYNC-DATA-ERROR id=%s %s", id, err.Error())
+        utils.Print("CLUSTER", "SYNC-DATA-ERROR %s", err.Error())
     }
 
     // Update our revision.
     c.changeRevision(core.Revision(rev), force)
-    utils.Print("CLUSTER", "SYNC-SUCCESS id=%s", id)
+    utils.Print("CLUSTER", "SYNC-SUCCESS")
 }
 
-func (c *Cluster) Heartbeat(id string, addr *net.UDPAddr, rev core.Revision, nodes uint64, dead []string) {
+func (c *Cluster) GossipUpdate(addr *net.UDPAddr, id string, rev core.Revision, dead []string) {
     c.Mutex.Lock()
     defer c.Mutex.Unlock()
 
@@ -223,8 +193,7 @@ func (c *Cluster) Heartbeat(id string, addr *net.UDPAddr, rev core.Revision, nod
     }
 
     // Update our nodes.
-    if !c.Nodes.Heartbeat(id, rev) ||
-        (rev > c.rev || (rev == c.rev && nodes > uint64(c.Count()))) {
+    if !c.Nodes.Heartbeat(id, rev) || rev > c.rev {
         // We don't know about this node.
         // Refresh addr will go get info
         // from this node by address.
@@ -247,24 +216,14 @@ func (c *Cluster) syncData(ring *ring, key core.Key, quorum bool) {
         return
     }
 
-    if quorum {
-        // Set the full cluster.
-        rev, err = c.quorumSet(ring, key, rev, value)
-        if err != nil {
-            // It's possible that the cluster has changed again by the time this
-            // set has actually had a chance to run. That's okay, at some point
-            // the most recent quorumSet will work (setting the most recent ring).
-            utils.Print("CLUSTER", "SYNC-QUORUM-ERROR key=%s rev=%d %s", string(key), uint64(rev), err.Error())
-            return
-        }
-    } else {
-        // Set the local data.
-        rev, err = c.Data.DataSet(key, rev, value)
-        if err != nil {
-            // Same as per above.
-            utils.Print("CLUSTER", "SYNC-LOCAL-ERROR key=%s rev=%d %s", string(key), uint64(rev), err.Error())
-            return
-        }
+    // Set the full cluster.
+    rev, err = c.quorumSet(ring, key, rev, value)
+    if err != nil {
+        // It's possible that the cluster has changed again by the time this
+        // set has actually had a chance to run. That's okay, at some point
+        // the most recent quorumSet will work (setting the most recent ring).
+        utils.Print("CLUSTER", "SYNC-QUORUM-ERROR key=%s rev=%d %s", string(key), uint64(rev), err.Error())
+        return
     }
 
     utils.Print("CLUSTER", "SYNC-OKAY key=%s rev=%d", string(key), uint64(rev))
@@ -291,9 +250,6 @@ func (c *Cluster) changeRevision(rev core.Revision, force bool) {
         return
     }
 
-    // Update the revision.
-    c.rev = rev
-
     // Schedule updates for every key.
     for _, key := range items {
 
@@ -301,41 +257,51 @@ func (c *Cluster) changeRevision(rev core.Revision, force bool) {
         new_master := c.ring.IsMaster(key)
         new_slave := c.ring.IsSlave(key, 2 * c.N + 1)
 
-        // We're the new master for this key.
         if !old_master && new_master {
+            // We're the new master for this key.
+            // We unconditionally do a sync for this key
+            // in order to ensure that all the slaves have
+            // the correct data in place.
             if key != RootKey {
                 go c.syncData(c.ring, key, true)
             }
 
+        } else if c.ring.IsFailover(key, c.N + 1) &&
+            !old_ring.IsNode(key, c.ring.MasterFor(key), 2 * c.N + 1) {
             // Ensure that the master is aware of this key.
             // This happens if the new master was not in the
             // ring previously, but is now in the ring.
-        } else if c.ring.IsFailover(key, 2 * c.N + 1) &&
-            !old_ring.IsNode(key, c.ring.MasterFor(key), 2 * c.N + 1) {
             if key != RootKey {
                 go c.syncData(c.ring, key, true)
             }
-
-            // We're a slave for this key, make sure we're
-            // synchronized (this may generate some extra
-            // traffic, but whatever).
-        } else if new_slave {
-            go c.syncData(c.ring, key, false)
         }
 
         // We don't have anything to do with this key.
+        // Scrub it from our local datastore.
+        // NOTE: This is done unconditionally because
+        // for this ring, we aren't expected to have any
+        // data related to this key. If we change rings 
+        // again, the new data will be populated.
         if !new_slave && !new_master {
             c.Data.DataRemove(key, 0)
         }
 
         // We aren't the master for this key.
+        // We ensure that all the synchronization
+        // groups have fired events (and they will
+        // be appropriately redirected to the true
+        // master).
         if !new_master {
             c.Data.EventFire(key, 0)
         }
     }
+
+    // Update the revision.
+    c.rev = rev
+    c.Nodes.Heartbeat(c.Nodes.Self().Id(), c.rev)
 }
 
-func (c *Cluster) Healthcheck() {
+func (c *Cluster) healthcheck() {
     c.Mutex.Lock()
     defer c.Mutex.Unlock()
 
@@ -381,25 +347,17 @@ func (c *Cluster) Healthcheck() {
 }
 
 func (c *Cluster) lockedClusterDataSet(bytes []byte, target_rev core.Revision) (core.Revision, error) {
-    orig_rev := c.rev
-    ring := c.ring
-    c.Mutex.Unlock()
-
     // Update the node configuration and bump our cluster
     // version number. Note that we must first successfully
     // contact a quorum of nodes to ensure that we're in the
     // majority still.
     utils.Print("CLUSTER", "SET-CLUSTER")
-    rev, err := c.quorumSet(ring, RootKey, target_rev, bytes)
+    rev, err := c.quorumSet(c.ring, RootKey, target_rev, bytes)
     if err != nil {
         c.Mutex.Lock()
         return rev, err
     }
 
-    c.Mutex.Lock()
-    if c.rev != orig_rev {
-        return c.rev, nil
-    }
     force, err := c.doDecode(bytes)
     if err != nil {
         utils.Print("CLUSTER", "DECODE-ERROR %s", err.Error())
@@ -410,7 +368,7 @@ func (c *Cluster) lockedClusterDataSet(bytes []byte, target_rev core.Revision) (
 }
 
 func (c *Cluster) timedHealthcheck() {
-    c.Healthcheck()
+    c.healthcheck()
 
     // Restart the healthcheck.
     f := func() { c.timedHealthcheck() }
@@ -420,11 +378,12 @@ func (c *Cluster) timedHealthcheck() {
 func NewCluster(N uint, backend *storage.Backend, addr string, auth string, domain string, ids []string) *Cluster {
     c := new(Cluster)
     c.N = int(N)
+    c.auth = auth
     c.Nodes = core.NewNodes(addr, ids, domain)
     c.Access = core.NewAccess(auth)
     c.Data = core.NewData(backend)
     c.ring = NewRing(c.Nodes)
-    c.auth = auth
+    c.clients = make(map[string]*client.HiberaAPI)
 
     // Read cluster data.
     data, rev, err := c.Data.DataGet(RootKey)
@@ -438,17 +397,6 @@ func NewCluster(N uint, backend *storage.Backend, addr string, auth string, doma
             c.changeRevision(rev, force)
         } else {
             c.Data.DataRemove(RootKey, 0)
-        }
-    }
-
-    // Load a cluster id (only if active).
-    if c.rev != 0 {
-        utils.Print("CLUSTER", "LOADING-ID...")
-        c.id, err = c.Data.LoadClusterId()
-        if err != nil {
-            // Crap.
-            utils.Print("CLUSTER", "ID-LOAD-ERROR %s", err.Error())
-            return nil
         }
     }
 

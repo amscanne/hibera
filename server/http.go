@@ -210,12 +210,10 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
         case "":
             switch r.Method {
             case "GET":
-                var id string
                 var data []byte
                 rev = core.Revision(s.intParam(r, "rev"))
-                id, data, rev, err = s.Cluster.Info(conn, rev)
+                data, rev, err = s.Cluster.Info(conn, rev)
                 if err == nil {
-                    w.Header().Set("X-Cluster-Id", id)
                     _, err = buf.Write(data)
                 }
                 break
@@ -255,17 +253,12 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
         case "nodes":
             switch r.Method {
             case "GET":
-                var nodes map[string]string
-                nodes, rev, err = s.Cluster.NodeList(conn)
+                var nodes []string
+                active := s.boolParam(r, "active")
+                nodes, rev, err = s.Cluster.NodeList(conn, active)
                 if err == nil {
                     err = enc.Encode(nodes)
                 }
-                break
-            case "POST":
-                rev, err = s.Cluster.Activate(conn)
-                break
-            case "DELETE":
-                rev, err = s.Cluster.Deactivate(conn)
                 break
             }
             break

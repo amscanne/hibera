@@ -5,14 +5,9 @@ enum TYPE {
     PONG = 1;
 };
 
-message Gossip {
-    required string id = 1;
-    repeated string dead = 2;
-}
-
 message Message {
     required uint32 type = 1;
     required uint64 version = 2;
-    required uint64 nodes = 3;
-    optional Gossip gossip = 4;
+    required string id = 3;
+    repeated string dead = 4;
 }

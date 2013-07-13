@@ -92,12 +92,12 @@ func (c *Cluster) Authorize(conn Connection, key core.Key, read bool, write bool
     return &PermissionError{string(key)}
 }
 
-func (c *Cluster) Info(conn Connection, rev core.Revision) (string, []byte, core.Revision, error) {
+func (c *Cluster) Info(conn Connection, rev core.Revision) ([]byte, core.Revision, error) {
     utils.Print("CLUSTER", "INFO")
 
     err := c.Authorize(conn, RootKey, true, false, false)
     if err != nil {
-        return "", nil, 0, err
+        return nil, 0, err
     }
 
     // NOTE: We fetch the cluster info from the current node,
@@ -107,7 +107,7 @@ func (c *Cluster) Info(conn Connection, rev core.Revision) (string, []byte, core
     c.Mutex.Lock()
     defer c.Mutex.Unlock()
     bytes, err := c.doEncode(false)
-    return c.id, bytes, c.rev, err
+    return bytes, c.rev, err
 }
 
 func (c *Cluster) Activate(conn Connection) (core.Revision, error) {
@@ -148,7 +148,7 @@ func (c *Cluster) Version() core.Revision {
     return c.rev
 }
 
-func (c *Cluster) NodeList(conn Connection) (map[string]string, core.Revision, error) {
+func (c *Cluster) NodeList(conn Connection, active bool) ([]string, core.Revision, error) {
     utils.Print("CLUSTER", "NODE-LIST")
 
     err := c.Authorize(conn, RootKey, true, false, false)
@@ -163,7 +163,7 @@ func (c *Cluster) NodeList(conn Connection) (map[string]string, core.Revision, e
         return nil, c.rev, err
     }
 
-    nodes, err := c.Nodes.Dump()
+    nodes, err := c.Nodes.List(active)
     return nodes, c.rev, err
 }
 

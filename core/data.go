@@ -104,13 +104,13 @@ type Data struct {
     // the map of all locks. We could easily
     // split this into a more scalable structure
     // if it becomes a clear bottleneck.
-    sync map[Key]*Lock
+    locks map[Key]*Lock
     revs RevisionMap
     *sync.Cond
 
     // In-memory ephemera.
     // (Kept synchronized by other modules).
-    keys map[Key]*EphemeralSet
+    sync map[Key]*EphemeralSet
 
     // Our backend.
     // This is used to store data keys.
@@ -119,10 +119,10 @@ type Data struct {
 
 func (d *Data) lock(key Key) *Lock {
     d.Cond.L.Lock()
-    lock := d.sync[key]
+    lock := d.locks[key]
     if lock == nil {
         lock = NewLock()
-        d.sync[key] = lock
+        d.locks[key] = lock
     }
     d.Cond.L.Unlock()
     lock.lock(key)
@@ -148,7 +148,7 @@ func (d *Data) SyncMembers(key Key, name string, limit uint) (int, []string, Rev
 
     // Lookup the key.
     index := -1
-    revmap := d.keys[key]
+    revmap := d.sync[key]
     if revmap == nil {
         // This is valid, it's an empty key.
         return index, make([]string, 0), d.revs[key], nil
@@ -227,11 +227,11 @@ func (d *Data) SyncJoin(
     var revmap *EphemeralSet
     for {
         // Lookup the key.
-        revmap = d.keys[key]
+        revmap = d.sync[key]
         if revmap == nil {
             newmap := make(EphemeralSet)
             revmap = &newmap
-            d.keys[key] = revmap
+            d.sync[key] = revmap
         }
 
         // Lookup the key and see if we're a member.
@@ -280,7 +280,7 @@ func (d *Data) SyncLeave(id EphemId, key Key, name string) (Revision, error) {
     defer lock.unlock(key)
 
     // Lookup the key and see if we're a member.
-    revmap := d.keys[key]
+    revmap := d.sync[key]
     if revmap == nil {
         return 0, NotFound
     }
@@ -294,7 +294,7 @@ func (d *Data) SyncLeave(id EphemId, key Key, name string) (Revision, error) {
         }
     }
     if len(*revmap) == 0 {
-        delete(d.keys, key)
+        delete(d.sync, key)
     }
 
     utils.Print("DATA", "LEAVE key=%s id=%d", string(key), uint64(id))
@@ -463,7 +463,7 @@ func (d *Data) Purge(id EphemId) {
 
     // Kill off all ephemeral nodes.
     d.Cond.L.Lock()
-    for key, members := range d.keys {
+    for key, members := range d.sync {
         if len((*members)[id]) > 0 {
             paths = append(paths, key)
         }
@@ -477,20 +477,12 @@ func (d *Data) Purge(id EphemId) {
     }
 }
 
-func (d *Data) SaveClusterId(id string) error {
-    return d.store.SetCluster(id)
-}
-
-func (d *Data) LoadClusterId() (string, error) {
-    return d.store.GetCluster()
-}
-
 func NewData(store *storage.Backend) *Data {
     d := new(Data)
     d.Cond = sync.NewCond(new(sync.Mutex))
     d.store = store
-    d.sync = make(map[Key]*Lock)
+    d.locks = make(map[Key]*Lock)
     d.revs = make(RevisionMap)
-    d.keys = make(map[Key]*EphemeralSet)
+    d.sync = make(map[Key]*EphemeralSet)
     return d
 }

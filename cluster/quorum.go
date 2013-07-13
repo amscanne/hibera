@@ -9,10 +9,21 @@ import (
 )
 
 type QuorumResult struct {
-    node  *core.Node
-    rev   core.Revision
+    node *core.Node
+    rev core.Revision
     value []byte
-    err   error
+    err error
+}
+
+func (c *Cluster) getClient(url string) *client.HiberaAPI {
+    cl, ok := c.clients[url]
+    if !ok {
+        urls := make([]string, 1, 1)
+        urls[0] = url
+        cl = client.NewHiberaAPI(urls, c.auth, c.Id(), 0)
+        c.clients[url] = cl
+    }
+    return cl
 }
 
 func (c *Cluster) doSet(node *core.Node, key core.Key, rev core.Revision, value []byte) (core.Revision, error) {
@@ -22,9 +33,7 @@ func (c *Cluster) doSet(node *core.Node, key core.Key, rev core.Revision, value 
     }
 
     utils.Print("QUORUM", "    SET-REMOTE key=%s rev=%d", string(key), uint64(rev))
-    urls := make([]string, 1, 1)
-    urls[0] = utils.MakeURL(node.Addr, "", nil)
-    cl := client.NewHiberaAPI(urls, c.auth, c.Id(), 0)
+    cl := c.getClient(utils.MakeURL(node.Addr, "", nil))
     rrev, err := cl.DataSet(string(key), uint64(rev), value)
     return core.Revision(rrev), err
 }
@@ -36,9 +45,7 @@ func (c *Cluster) doGet(node *core.Node, key core.Key) ([]byte, core.Revision, e
     }
 
     utils.Print("QUORUM", "    GET-REMOTE key=%s", string(key))
-    urls := make([]string, 1, 1)
-    urls[0] = utils.MakeURL(node.Addr, "", nil)
-    cl := client.NewHiberaAPI(urls, c.auth, c.Id(), 0)
+    cl := c.getClient(utils.MakeURL(node.Addr, "", nil))
     value, rev, err := cl.DataGet(string(key), 0, 0)
     return value, core.Revision(rev), err
 }
@@ -50,9 +57,7 @@ func (c *Cluster) doRemove(node *core.Node, key core.Key, rev core.Revision) (co
     }
 
     utils.Print("QUORUM", "    REMOVE-REMOTE key=%s rev=%d", string(key), uint64(rev))
-    urls := make([]string, 1, 1)
-    urls[0] = utils.MakeURL(node.Addr, "", nil)
-    cl := client.NewHiberaAPI(urls, c.auth, c.Id(), 0)
+    cl := c.getClient(utils.MakeURL(node.Addr, "", nil))
     rrev, err := cl.DataRemove(string(key), uint64(rev))
     return core.Revision(rrev), err
 }
@@ -251,7 +256,7 @@ func (c *Cluster) quorumRemove(ring *ring, key core.Key, rev core.Revision) (cor
 
 type ListResult struct {
     items []core.Key
-    err   error
+    err error
 }
 
 func (c *Cluster) doList(node *core.Node) ([]core.Key, error) {

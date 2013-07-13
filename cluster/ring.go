@@ -84,7 +84,15 @@ func (r *ring) MasterFor(key core.Key) *core.Node {
 
 func (r *ring) IsFailover(key core.Key, N int) bool {
     slaves := r.SlavesFor(key, N)
-    return slaves != nil && len(slaves) > 0 && slaves[0] == r.Nodes.Self()
+    if slaves == nil {
+        return false
+    }
+    for _, node := range slaves {
+        if node == r.Nodes.Self() {
+            return true
+        }
+    }
+    return false
 }
 
 func (r *ring) IsSlave(key core.Key, N int) bool {

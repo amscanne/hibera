@@ -46,12 +46,12 @@ func GenerateURLs(addrs string, defaultHost string, defaultPort uint) []string {
     return urls
 }
 
-func AsURLs(a *net.UDPAddr) []string {
-    res := make([]string, 1, 1)
+func AsURL(a *net.UDPAddr) string {
+    var res string
     if a.IP.To4() != nil {
-        res[0] = fmt.Sprintf("http://%s:%d", a.IP.To4().String(), a.Port)
+        res = fmt.Sprintf("http://%s:%d", a.IP.To4().String(), a.Port)
     } else {
-        res[0] = fmt.Sprintf("http://[%s]:%d", a.IP.String(), a.Port)
+        res = fmt.Sprintf("http://[%s]:%d", a.IP.String(), a.Port)
     }
     return res
 }

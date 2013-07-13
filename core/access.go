@@ -5,56 +5,36 @@ import (
     "sync"
 )
 
-type Perms struct {
-    // Permissions.
-    Read    bool
-    Write   bool
-    Execute bool
-
-    // Cached regular expression.
-    re  *regexp.Regexp
-}
-
 type Access struct {
     // The map of all access.
     all AccessInfo
+    allLock sync.RWMutex
 
-    // Proposed tokens.
+    // Proposals for tokens.
     proposed AccessInfo
+    proposedLock sync.RWMutex
 
     // The default admin authorization.
     auth string
-
-    sync.Mutex
 }
 
-func (access *Access) Check(ns Namespace, id string, path string, read bool, write bool, execute bool) bool {
+func (access *Access) Check(ns Namespace, auth string, path string, read bool, write bool, execute bool) bool {
+    access.allLock.RLock()
+    defer access.allLock.RUnlock()
+
     // If no namespace permissions are defined,
     // check this authentication token against the
     // global token. This allows the global token
     // to manipulate unconfigured namespaces.
-    if _, ok := access.all[ns]; !ok {
-        return id == access.auth
-    }
-
-    // Lookup the token.
-    token, ok := access.all[ns][id]
+    token, ok := access.all[ns][auth]
     if !ok {
-        return id == access.auth
+        return auth == access.auth
     }
 
     // Check the paths against the current.
-    for tokpath, perms := range token {
-        // (Lazily) build the regular expression.
-        if perms.re == nil {
-            var err error
-            perms.re, err = regexp.Compile(tokpath)
-            if err != nil {
-                continue
-            }
-        }
+    for _, perms := range token {
         // Check the specific operations.
-        if perms.re.Match([]byte(path)) {
+        if perms.re != nil && perms.re.Match([]byte(path)) {
             if (!read || perms.Read) && (!write || perms.Write) || (!execute || perms.Execute) {
                 return true
             }
@@ -66,6 +46,9 @@ func (access *Access) Check(ns Namespace, id string, path string, read bool, wri
 }
 
 func (access *Access) List(ns Namespace) []string {
+    access.allLock.RLock()
+    defer access.allLock.RUnlock()
+
     // Namespace does not exist.
     if _, ok := access.all[ns]; !ok {
         return make([]string, 0, 0)
@@ -74,54 +57,65 @@ func (access *Access) List(ns Namespace) []string {
     // List all available tokens.
     res := make([]string, len(access.all[ns]), len(access.all[ns]))
     i := 0
-    for id, _ := range access.all[ns] {
-        res[i] = id
+    for auth, _ := range access.all[ns] {
+        res[i] = auth
         i += 1
     }
     return res
 }
 
-func (access *Access) Get(ns Namespace, id string) (*Token, error) {
+func (access *Access) Get(ns Namespace, auth string) (*Token, error) {
+    access.allLock.RLock()
+    defer access.allLock.RUnlock()
+
     // Namespace does not exist.
     if _, ok := access.all[ns]; !ok {
         return nil, nil
     }
 
     // Get associated paths.
-    token, ok := access.all[ns][id]
+    token, ok := access.all[ns][auth]
     if !ok {
         return nil, nil
     }
     return &token, nil
 }
 
-func (access *Access) Update(ns Namespace, id string, path string, read bool, write bool, execute bool) error {
+func (access *Access) Update(ns Namespace, auth string, path string, read bool, write bool, execute bool) error {
+    access.proposedLock.Lock()
+    defer access.proposedLock.Unlock()
+
     // Ensure the namespace exists.
     if _, ok := access.proposed[ns]; !ok {
         access.proposed[ns] = make(NamespaceAccess)
     }
 
     // Add the proposal.
-    if _, ok := access.proposed[ns][id]; !ok {
-        access.proposed[ns][id] = make(Token)
+    if _, ok := access.proposed[ns][auth]; !ok {
+        access.proposed[ns][auth] = make(Token)
     }
-    access.proposed[ns][id][path] = Perms{read, write, execute, nil}
+    access.proposed[ns][auth][path] = Perms{read, write, execute, nil}
     return nil
 }
 
-func (access *Access) Remove(ns Namespace, id string) {
+func (access *Access) Remove(ns Namespace, auth string) {
+    access.proposedLock.Lock()
+    defer access.proposedLock.Unlock()
+
     // Ensure the namespace exists.
     if _, ok := access.proposed[ns]; !ok {
         access.proposed[ns] = make(NamespaceAccess)
     }
 
     // Add the proposal.
-    access.proposed[ns][id] = nil
+    access.proposed[ns][auth] = nil
 }
 
 func (access *Access) Encode(next bool, info AccessInfo) (bool, error) {
-    access.Mutex.Lock()
-    defer access.Mutex.Unlock()
+    access.allLock.RLock()
+    access.proposedLock.RLock()
+    defer access.allLock.RUnlock()
+    defer access.proposedLock.RUnlock()
 
     changed := false
 
@@ -131,8 +125,8 @@ func (access *Access) Encode(next bool, info AccessInfo) (bool, error) {
 
     for ns, na := range access.all {
         info[ns] = make(NamespaceAccess)
-        for id, token := range na {
-            info[ns][id] = token
+        for auth, token := range na {
+            info[ns][auth] = token
         }
     }
 
@@ -141,8 +135,8 @@ func (access *Access) Encode(next bool, info AccessInfo) (bool, error) {
             if _, ok := info[ns]; !ok {
                 info[ns] = make(NamespaceAccess)
             }
-            for id, token := range na {
-                info[ns][id] = token
+            for auth, token := range na {
+                info[ns][auth] = token
                 changed = true
             }
         }
@@ -152,36 +146,43 @@ func (access *Access) Encode(next bool, info AccessInfo) (bool, error) {
 }
 
 func (access *Access) Decode(info AccessInfo) error {
-    access.Mutex.Lock()
-    defer access.Mutex.Unlock()
+    access.allLock.Lock()
+    access.proposedLock.Lock()
+    defer access.allLock.Unlock()
+    defer access.proposedLock.Unlock()
 
     // Update all access tokens.
     for ns, na := range info {
-        for id, token := range na {
+        for auth, token := range na {
 
-            // Process a delete request.
             if len(token) == 0 {
+                // Process a delete request.
                 if _, ok := access.all[ns]; ok {
-                    delete(access.all[ns], id)
+                    delete(access.all[ns], auth)
                 }
 
-                // Process a normal request.
             } else {
+                // Process a normal request.
                 if _, ok := access.all[ns]; !ok {
                     access.all[ns] = make(NamespaceAccess)
                 }
-                if _, ok := access.all[ns][id]; !ok {
-                    access.all[ns][id] = make(Token)
+                if _, ok := access.all[ns][auth]; !ok {
+                    access.all[ns][auth] = make(Token)
                 }
                 for tokpath, perms := range token {
                     if !perms.Read && !perms.Write && !perms.Execute {
-                        delete(access.all[ns][id], tokpath)
+                        delete(access.all[ns][auth], tokpath)
                     } else {
-                        access.all[ns][id][tokpath] = perms
+                        var err error
+                        perms.re, err = regexp.Compile(tokpath)
+                        if err != nil {
+                            continue
+                        }
+                        access.all[ns][auth][tokpath] = perms
                     }
                 }
-                if len(access.all[ns][id]) == 0 {
-                    delete(access.all[ns], id)
+                if len(access.all[ns][auth]) == 0 {
+                    delete(access.all[ns], auth)
                 }
             }
 
@@ -192,7 +193,7 @@ func (access *Access) Decode(info AccessInfo) error {
 
             // Clear out the relevant proposed bits.
             if _, ok := access.proposed[ns]; ok {
-                delete(access.proposed[ns], id)
+                delete(access.proposed[ns], auth)
                 if len(access.proposed[ns]) == 0 {
                     delete(access.proposed, ns)
                 }
@@ -204,8 +205,10 @@ func (access *Access) Decode(info AccessInfo) error {
 }
 
 func (access *Access) Reset() {
-    access.Mutex.Lock()
-    defer access.Mutex.Unlock()
+    access.allLock.Lock()
+    access.proposedLock.Lock()
+    defer access.allLock.Unlock()
+    defer access.proposedLock.Unlock()
 
     // Setup the basic maps.
     access.all = make(AccessInfo)

@@ -37,13 +37,11 @@ type Backend struct {
     path string
 
     accepted map[string]Val
-    promised map[string]uint64
 
-    cluster *os.File
-    data    *os.File
-    log1    *os.File
-    log2    *os.File
-    cs      chan *Update
+    data *os.File
+    log1 *os.File
+    log2 *os.File
+    cs chan *Update
 }
 
 func OpenLocked(filename string) (*os.File, error) {
@@ -85,14 +83,8 @@ func NewBackend(p string) *Backend {
 
 func (b *Backend) init() error {
     b.accepted = make(map[string]Val)
-    b.promised = make(map[string]uint64)
 
     // Open our files.
-    cluster, err := OpenLocked(path.Join(b.path, "cluster"))
-    if err != nil {
-        log.Print("Error initializing cluster file: ", err)
-        return err
-    }
     data, err := OpenLocked(path.Join(b.path, "data"))
     if err != nil {
         log.Print("Error initializing data file: ", err)
@@ -130,7 +122,6 @@ func (b *Backend) init() error {
     }
 
     // Save our files.
-    b.cluster = cluster
     b.data = data
     b.log1 = log1
     b.log2 = log2
@@ -142,29 +133,8 @@ func (b *Backend) init() error {
     return nil
 }
 
-func (b *Backend) SetCluster(id string) error {
-    err := b.cluster.Truncate(0)
-    if err != nil {
-        return err
-    }
-    _, err = b.cluster.WriteAt([]byte(id), 0)
-    if err != nil {
-        return err
-    }
-    return nil
-}
-
-func (b *Backend) GetCluster() (string, error) {
-    idbytes := make([]byte, 256, 256)
-    n, err := b.cluster.ReadAt(idbytes, 0)
-    if err != nil && err != io.EOF {
-        return "", err
-    }
-    idbytes = idbytes[0:n]
-    return string(idbytes[0:n]), nil
-}
-
 func serialize(output *os.File, entry *Entry) error {
+
     // Do the encoding.
     encoded := bytes.NewBuffer(make([]byte, 0))
     enc := gob.NewEncoder(encoded)
@@ -189,6 +159,7 @@ func serialize(output *os.File, entry *Entry) error {
 }
 
 func deserialize(input *os.File, entry *Entry) error {
+
     // Read the header.
     length := uint32(0)
     err := binary.Read(input, binary.LittleEndian, &length)

@@ -2,7 +2,6 @@ package main
 
 import (
     "bytes"
-    "encoding/json"
     "flag"
     "fmt"
     "hibera/client"
@@ -44,6 +43,7 @@ options for all commands:
 
 cluster commands:
 
+    nodes                        --- List all nodes.
     active                       --- List all active nodes.
     info <id>                    --- Show node info.
     activate                     --- Activate the API target.
@@ -132,28 +132,44 @@ func cli_deactivate(c *client.HiberaAPI) error {
     return c.Deactivate()
 }
 
-func cli_active(c *client.HiberaAPI) error {
-    nodes, _, err := c.Nodes()
+func cli_nodes(c *client.HiberaAPI) error {
+    nodes, _, err := c.NodeList(false)
     if err != nil {
         return err
     }
-    for id, addr := range nodes {
-        fmt.Printf("%s %s\n", id, addr)
+    for _, id := range nodes {
+        fmt.Printf("%s\n", id)
+    }
+    return nil
+}
+
+func cli_active(c *client.HiberaAPI) error {
+    nodes, _, err := c.NodeList(true)
+    if err != nil {
+        return err
+    }
+    for _, id := range nodes {
+        fmt.Printf("%s\n", id)
     }
     return nil
 }
 
 func cli_info(c *client.HiberaAPI, id string) error {
-    value, _, err := c.NodeGet(id)
+    node, _, err := c.NodeGet(id)
     if err != nil {
         return err
     }
-    formatted := bytes.NewBuffer(nil)
-    err = json.Indent(formatted, value, "", "  ")
-    if err != nil {
-        return err
+
+    fmt.Printf("addr: %s\n", node.Addr)
+    fmt.Printf("domain: %s\n", node.Domain)
+    fmt.Printf("active: %t\n", node.Active)
+    fmt.Printf("modified: %d\n", node.Modified)
+    fmt.Printf("current: %d\n", node.Current)
+    fmt.Printf("dropped: %d\n", node.Dropped)
+    fmt.Printf("keys:\n")
+    for _, key := range node.Keys {
+        fmt.Printf("- %s\n", key)
     }
-    os.Stderr.Write(formatted.Bytes())
     return nil
 }
 
@@ -169,16 +185,24 @@ func cli_tokens(c *client.HiberaAPI) error {
 }
 
 func cli_permissions(c *client.HiberaAPI, id string) error {
-    value, _, err := c.AccessGet(id)
+    val, _, err := c.AccessGet(id)
     if err != nil {
         return err
     }
-    formatted := bytes.NewBuffer(nil)
-    err = json.Indent(formatted, value, "", "  ")
-    if err != nil {
-        return err
+
+    for path, perms := range *val {
+        asstr := func(val bool, t string) string {
+            if val {
+                return t
+            } else {
+                return "-"
+            }
+        }
+        rs := asstr(perms.Read, "r")
+        ws := asstr(perms.Write, "w")
+        xs := asstr(perms.Execute, "x")
+        fmt.Printf("%s%s%s %s\n", rs, ws, xs, path)
     }
-    os.Stderr.Write(formatted.Bytes())
     return nil
 }
 
@@ -520,7 +544,8 @@ func main() {
     os.Args = os.Args[1:]
 
     key := ""
-    if command == "active" ||
+    if command == "nodes" ||
+        command == "active" ||
         command == "tokens" ||
         command == "activate" ||
         command == "deactivate" ||
@@ -545,6 +570,9 @@ func main() {
         break
     case "deactivate":
         err = cli_deactivate(client())
+        break
+    case "nodes":
+        err = cli_nodes(client())
         break
     case "active":
         err = cli_active(client())

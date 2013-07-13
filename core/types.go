@@ -1,5 +1,9 @@
 package core
 
+import (
+    "regexp"
+)
+
 // A given namespace.
 type Namespace string
 
@@ -14,6 +18,16 @@ type EphemId uint64
 
 // Map of all nodes in the cluster.
 type NodeInfo map[string]*Node
+
+// Permissions.
+type Perms struct {
+    Read bool
+    Write bool
+    Execute bool
+
+    // Cached regular expression.
+    re *regexp.Regexp
+}
 
 // Individual access token (set of paths and permsissions).
 type Token map[string]Perms

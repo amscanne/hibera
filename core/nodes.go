@@ -67,8 +67,8 @@ func NewNode(addr string, keys []string, domain string) *Node {
     node.Keys = keys
     node.Domain = domain
     node.Active = false
-    node.Dropped = 0
-    node.Current = 0
+    node.Dropped = DropLimit
+    node.Current = Revision(0)
     return node
 }
 
@@ -93,9 +93,7 @@ func (nodes *Nodes) Heartbeat(id string, rev Revision) bool {
         // will be removed and replaced by other nodes,
         // but we allow that to happen organically.
         node.RstDropped()
-        if rev > node.Current {
-            node.Current = rev
-        }
+        node.Current = rev
         return true
     }
 
@@ -127,22 +125,23 @@ func (nodes *Nodes) Activate(id string, rev Revision) bool {
     if !node.Active {
         node.Active = true
         node.Modified = rev
-        node.Current = 0
+        node.Current = rev
+        node.RstDropped()
     }
-    node.RstDropped()
 
     return true
 }
 
-func (nodes *Nodes) Dump() (map[string]string, error) {
+func (nodes *Nodes) List(active bool) ([]string, error) {
     nodes.Mutex.Lock()
     defer nodes.Mutex.Unlock()
 
-    all := make(map[string]string)
+    all := make([]string, 0, 0)
+    i := 0
     for id, node := range nodes.all {
-        if node.Active {
-            // Generate a generally useful string to describe the node.
-            all[fmt.Sprintf("%s:%s@%d", node.Domain, id, node.Current)] = node.Addr
+        if !active || node.Active {
+            all = append(all, id)
+            i += 1
         }
     }
 
@@ -189,7 +188,7 @@ func (nodes *Nodes) Others() []*Node {
 
 func (nodes *Nodes) Suspicious(rev Revision) []*Node {
     return nodes.filter(func(node *Node) bool {
-        return node.Active && (node.Dropped > 0 || node.Current < rev)
+        return node.Active && node != nodes.self && (node.Dropped > 0 || node.Current < rev)
     })
 }
 
@@ -201,32 +200,26 @@ func (nodes *Nodes) Self() *Node {
     return nodes.self
 }
 
-func (nodes *Nodes) Count() int {
-    return len(nodes.all)
-}
-
 func (nodes *Nodes) Encode(rev Revision, next bool, na NodeInfo, N int) (bool, error) {
     nodes.Mutex.Lock()
     defer nodes.Mutex.Unlock()
 
     // Create a list of nodes modified after rev.
     changed := false
+    addokay := true
     domains := make(map[string]bool)
 
-    // We're always up-to-date.
-    nodes.Self().Current = rev
-
-    // Check that we are allowed to fail nodes.
+    // Check that we are allowed to add nodes.
     // If there are nodes that are not currently marked as
     // dead, and those nodes are not yet up to the latest 
-    // revision -- then we can't fail others. We will either
+    // revision -- then we can't add others. We will either
     // need to fail those nodes, or we will need to wait until
     // they are up to date. Note that they should become up to
     // date pretty quickly, as they are currently suspicious.
     if next {
         for _, node := range nodes.all {
             if node.Active && node.Alive() && node.Current < rev {
-                next = false
+                addokay = false
                 break
             }
         }
@@ -234,7 +227,7 @@ func (nodes *Nodes) Encode(rev Revision, next bool, na NodeInfo, N int) (bool, e
 
     for id, node := range nodes.all {
 
-        if next && !node.Active && node.Alive() {
+        if next && addokay && !node.Active && node.Alive() {
             // Check if we can't add this domain.
             // We limit ourselves to adding & removing nodes
             // from a single domain at a time. This is done
@@ -277,6 +270,7 @@ func (nodes *Nodes) Decode(na NodeInfo) (bool, error) {
     // Update all nodes with revs > Modified.
     for id, node := range na {
         orig_active := (nodes.all[id] != nil && nodes.all[id].Active)
+
         if nodes.all[id] == nil ||
             nodes.all[id].Modified < node.Modified {
             if id == nodes.self.Id() {
