@@ -211,8 +211,7 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
             switch r.Method {
             case "GET":
                 var data []byte
-                rev = core.Revision(s.intParam(r, "rev"))
-                data, rev, err = s.Cluster.Info(conn, rev)
+                data, rev, err = s.Cluster.Info(conn)
                 if err == nil {
                     _, err = buf.Write(data)
                 }
@@ -438,8 +437,8 @@ func NewHTTPServer(cluster *cluster.Cluster, addr string, port uint, active uint
         server.process(w, r)
     }
     server.Server = &http.Server{
-        Handler:      http.HandlerFunc(handler),
-        ReadTimeout:  0,
+        Handler: http.HandlerFunc(handler),
+        ReadTimeout: 0,
         WriteTimeout: 0,
     }
 

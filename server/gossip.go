@@ -29,7 +29,7 @@ type GossipServer struct {
 var DefaultSeeds = "255.255.255.255"
 
 // The frequency (in ms) of heartbeats.
-var MinHeartbeat = 10
+var MinHeartbeat = 100
 var MaxHeartbeat = 1000
 
 // The number of dead servers to encode in a heartbeat.
@@ -64,11 +64,12 @@ func (s *GossipServer) sendPingPong(addr *net.UDPAddr, pong bool) {
     // Build our ping message.
     t := uint32(TYPE_PING)
     version := uint64(s.Cluster.Version())
-    id := s.Cluster.Id()
+    id := s.Cluster.Nodes.Self().Id()
     if pong {
         t = uint32(TYPE_PONG)
     }
     m := &Message{&t, &version, &id, gossip, nil}
+    utils.Print("GOSSIP", "SEND addr=%s type=%d", addr, t)
     s.send(addr, m)
 }
 
@@ -79,7 +80,10 @@ func (s *GossipServer) heartbeat() {
     // there are currently some) and seeds. The reason to mix
     // the seeds is to ensure that at cluster creation time, we
     // don't end up with two split clusters.
-    nodes := s.Cluster.Suspicious(s.Cluster.Version())
+    var nodes []*core.Node
+    if s.Cluster.Nodes.Self().Active {
+        nodes = s.Cluster.Suspicious(s.Cluster.Version())
+    }
     if nodes == nil || len(nodes) == 0 {
         nodes = s.Cluster.Others()
     }
@@ -149,6 +153,7 @@ func (s *GossipServer) process(addr *net.UDPAddr, m *Message) {
     }
 
     // Update the cluster status based on gossip.
+    utils.Print("GOSSIP", "RECV addr=%s type=%d", addr, m.GetType())
     s.Cluster.GossipUpdate(addr, m.GetId(),
         core.Revision(m.GetVersion()), m.GetDead())
 

@@ -343,10 +343,6 @@ func (b *Backend) Read(key string) ([]byte, uint64, error) {
     return val.Value, val.Rev, nil
 }
 
-func (b *Backend) Promise(key string, rev uint64) error {
-    return b.Write(key, nil, rev)
-}
-
 func (b *Backend) Delete(key string) error {
     return b.Write(key, nil, 0)
 }

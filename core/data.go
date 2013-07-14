@@ -25,13 +25,10 @@ type Lock struct {
 }
 
 func (l *Lock) lock(key Key) {
-    utils.Print("DATA", "key=%s acquiring", string(key))
     <-l.sem
-    utils.Print("DATA", "key=%s acquired", string(key))
 }
 
 func (l *Lock) unlock(key Key) {
-    utils.Print("DATA", "key=%s released", string(key))
     l.sem <- true
 }
 
@@ -55,7 +52,6 @@ func (l *Lock) wait(key Key, timeout bool, duration time.Duration, notifier <-ch
     // to the list of waiters, so when a notification
     // happens we are guaranteed that we will get
     // a notification.
-    utils.Print("DATA", "key=%s waiting", string(key))
     l.waiters = append(l.waiters, wakeupchan)
     l.sem <- true
 
@@ -79,8 +75,6 @@ func (l *Lock) wait(key Key, timeout bool, duration time.Duration, notifier <-ch
 }
 
 func (l *Lock) notify(key Key) {
-    utils.Print("DATA", "key=%s notifying", string(key))
-
     // Send all application notifications.
     for _, wakechan := range l.waiters {
         wakechan <- true
@@ -356,12 +350,6 @@ func (d *Data) DataModify(key Key, rev Revision, mod func(Revision) error) (Revi
 func (d *Data) DataSet(key Key, rev Revision, value []byte) (Revision, error) {
     return d.DataModify(key, rev, func(rev Revision) error {
         return d.store.Write(string(key), value, uint64(rev))
-    })
-}
-
-func (d *Data) DataPromise(key Key, rev Revision) (Revision, error) {
-    return d.DataModify(key, rev, func(rev Revision) error {
-        return d.store.Promise(string(key), uint64(rev))
     })
 }
 

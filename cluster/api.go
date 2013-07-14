@@ -51,7 +51,7 @@ type Connection interface {
 
 func (c *Cluster) doRedirect(conn Connection, key core.Key) (bool, error) {
     // Check that the cluster is activated.
-    if c.Id() == "" {
+    if !c.Active() {
         return false, &PermissionError{string(key)}
     }
 
@@ -92,7 +92,7 @@ func (c *Cluster) Authorize(conn Connection, key core.Key, read bool, write bool
     return &PermissionError{string(key)}
 }
 
-func (c *Cluster) Info(conn Connection, rev core.Revision) ([]byte, core.Revision, error) {
+func (c *Cluster) Info(conn Connection) ([]byte, core.Revision, error) {
     utils.Print("CLUSTER", "INFO")
 
     err := c.Authorize(conn, RootKey, true, false, false)
@@ -106,7 +106,7 @@ func (c *Cluster) Info(conn Connection, rev core.Revision) ([]byte, core.Revisio
     // the client anyways, it makes sense to handle this here.
     c.Mutex.Lock()
     defer c.Mutex.Unlock()
-    bytes, err := c.doEncode(false)
+    bytes, err := c.lockedEncode(false)
     return bytes, c.rev, err
 }
 
@@ -122,7 +122,7 @@ func (c *Cluster) Activate(conn Connection) (core.Revision, error) {
     // we do not redirect to the master node in this case.
     c.Mutex.Lock()
     defer c.Mutex.Unlock()
-    return c.rev, c.doActivate()
+    return c.rev, c.lockedActivate()
 }
 
 func (c *Cluster) Deactivate(conn Connection) (core.Revision, error) {
@@ -137,11 +137,7 @@ func (c *Cluster) Deactivate(conn Connection) (core.Revision, error) {
     // we do not redirect to the master node in this case.
     c.Mutex.Lock()
     defer c.Mutex.Unlock()
-    return c.rev, c.doDeactivate()
-}
-
-func (c *Cluster) Id() string {
-    return c.Nodes.Self().Id()
+    return c.rev, c.lockedDeactivate()
 }
 
 func (c *Cluster) Version() core.Revision {
@@ -156,8 +152,6 @@ func (c *Cluster) NodeList(conn Connection, active bool) ([]string, core.Revisio
         return nil, c.rev, err
     }
 
-    c.Mutex.Lock()
-    defer c.Mutex.Unlock()
     server, err := c.doRedirect(conn, RootKey)
     if err != nil || server {
         return nil, c.rev, err
@@ -175,8 +169,6 @@ func (c *Cluster) NodeGet(conn Connection, id string) (*core.Node, core.Revision
         return nil, c.rev, err
     }
 
-    c.Mutex.Lock()
-    defer c.Mutex.Unlock()
     server, err := c.doRedirect(conn, RootKey)
     if err != nil || server {
         return nil, c.rev, err
@@ -248,24 +240,6 @@ func (c *Cluster) DataSet(conn Connection, key core.Key, rev core.Revision, valu
         return core.Revision(0), &PermissionError{string(key)}
     }
     return c.quorumSet(c.ring, key, rev, value)
-}
-
-func (c *Cluster) DataPromise(conn Connection, key core.Key, rev core.Revision) (core.Revision, error) {
-    utils.Print("CLUSTER", "DATA-PROMISE key=%s rev=%d", string(key), uint64(rev))
-
-    err := c.Authorize(conn, key, false, true, false)
-    if err != nil {
-        return core.Revision(0), err
-    }
-
-    server, err := c.doRedirect(conn, key)
-    if err != nil {
-        return core.Revision(0), err
-    }
-    if !server {
-        return core.Revision(0), &PermissionError{string(key)}
-    }
-    return c.Data.DataPromise(key, rev)
 }
 
 func (c *Cluster) DataRemove(conn Connection, key core.Key, rev core.Revision) (core.Revision, error) {
@@ -382,8 +356,6 @@ func (c *Cluster) AccessList(conn Connection) ([]string, core.Revision, error) {
         return nil, c.rev, err
     }
 
-    c.Mutex.Lock()
-    defer c.Mutex.Unlock()
     server, err := c.doRedirect(conn, RootKey)
     if err != nil || server {
         return nil, c.rev, err
@@ -401,8 +373,6 @@ func (c *Cluster) AccessGet(conn Connection, key string) (*core.Token, core.Revi
         return nil, c.rev, err
     }
 
-    c.Mutex.Lock()
-    defer c.Mutex.Unlock()
     server, err := c.doRedirect(conn, RootKey)
     if err != nil || server {
         return nil, c.rev, err
@@ -420,8 +390,6 @@ func (c *Cluster) AccessGrant(conn Connection, key string, path string, read boo
         return c.rev, err
     }
 
-    c.Mutex.Lock()
-    defer c.Mutex.Unlock()
     server, err := c.doRedirect(conn, RootKey)
     if err != nil || server {
         return c.rev, err
@@ -439,8 +407,6 @@ func (c *Cluster) AccessRevoke(conn Connection, key string) (core.Revision, erro
         return c.rev, err
     }
 
-    c.Mutex.Lock()
-    defer c.Mutex.Unlock()
     server, err := c.doRedirect(conn, RootKey)
     if err != nil || server {
         return c.rev, err

@@ -16,11 +16,14 @@ type QuorumResult struct {
 }
 
 func (c *Cluster) getClient(url string) *client.HiberaAPI {
+    c.clientsLock.Lock()
+    defer c.clientsLock.Unlock()
+
     cl, ok := c.clients[url]
     if !ok {
         urls := make([]string, 1, 1)
         urls[0] = url
-        cl = client.NewHiberaAPI(urls, c.auth, c.Id(), 0)
+        cl = client.NewHiberaAPI(urls, c.auth, c.Nodes.Self().Id(), 0, false)
         c.clients[url] = cl
     }
     return cl
@@ -74,14 +77,14 @@ func NewQuorumError(revcounts map[core.Revision]int) error {
 }
 
 func (c *Cluster) quorum(ring *ring, key core.Key, fn func(*core.Node, chan<- *QuorumResult)) (*QuorumResult, error) {
-    nodes := ring.NodesFor(key, 2 * c.N + 1)
+    nodes := ring.NodesFor(key)
     real_self := c.Nodes.Self()
     var self *core.Node
     res := make(chan *QuorumResult)
     var err error
     maxrev := core.Revision(0)
 
-    utils.Print("QUORUM", "START %s (%d)", string(key), len(nodes))
+    utils.Print("QUORUM", "START %s (%d/%d)", string(key), len(nodes), ring.Size())
 
     // Setup all the requests.
     for _, node := range nodes {
@@ -266,9 +269,7 @@ func (c *Cluster) doList(node *core.Node) ([]core.Key, error) {
     }
 
     utils.Print("QUORUM", "    LIST-REMOTE")
-    urls := make([]string, 1, 1)
-    urls[0] = utils.MakeURL(node.Addr, "", nil)
-    cl := client.NewHiberaAPI(urls, c.auth, c.Id(), 0)
+    cl := c.getClient(utils.MakeURL(node.Addr, "", nil))
     items, err := cl.DataList()
     if items == nil || err != nil {
         return nil, err

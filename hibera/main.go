@@ -52,7 +52,7 @@ cluster commands:
 access commands:
 
     tokens                       --- Show access tokens.
-    permissions <token>          --- Show the given token.
+    access <token>               --- Show the given token.
     grant <token>                --- Grant given permissions.
         [-path <path>]
         [-perms <perms>]
@@ -184,7 +184,7 @@ func cli_tokens(c *client.HiberaAPI) error {
     return nil
 }
 
-func cli_permissions(c *client.HiberaAPI, id string) error {
+func cli_access(c *client.HiberaAPI, id string) error {
     val, _, err := c.AccessGet(id)
     if err != nil {
         return err
@@ -583,8 +583,8 @@ func main() {
     case "tokens":
         err = cli_tokens(client())
         break
-    case "permissions":
-        err = cli_permissions(client(), key)
+    case "access":
+        err = cli_access(client(), key)
         break
     case "grant":
         err = cli_grant(client(), key, *path, *perms)

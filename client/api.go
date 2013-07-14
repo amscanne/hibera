@@ -26,6 +26,7 @@ type HiberaAPI struct {
     auth string
     clientid string
     delay uint
+    useRedirects bool
     cache map[string]string
     *http.Client
 }
@@ -65,7 +66,7 @@ func boolToStr(val bool) string {
     return "false"
 }
 
-func NewHiberaAPI(urls []string, auth string, clientid string, delay uint) *HiberaAPI {
+func NewHiberaAPI(urls []string, auth string, clientid string, delay uint, useRedirects bool) *HiberaAPI {
     // Check the clientId.
     if clientid == "" {
         return nil
@@ -77,6 +78,7 @@ func NewHiberaAPI(urls []string, auth string, clientid string, delay uint) *Hibe
     api.auth = auth
     api.clientid = clientid
     api.delay = delay
+    api.useRedirects = useRedirects
     api.cache = make(map[string]string)
 
     for _, url := range urls {
@@ -88,6 +90,7 @@ func NewHiberaAPI(urls []string, auth string, clientid string, delay uint) *Hibe
     // to tune parameters for idling connections, etc.
     tr := &http.Transport{
         TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+        DisableKeepAlives: true,
     }
     api.Client = &http.Client{Transport: tr, CheckRedirect: noRedirect}
 
@@ -112,7 +115,7 @@ func NewHiberaClient(addrs string, auth string, delay uint) *HiberaAPI {
     }
     urls := utils.GenerateURLs(addrs, DefaultHost, DefaultPort)
     clientid := generateClientId()
-    return NewHiberaAPI(urls, auth, clientid, delay)
+    return NewHiberaAPI(urls, auth, clientid, delay, true)
 }
 
 // This object is used to serialize
@@ -187,23 +190,44 @@ func (h *HiberaAPI) makeRequest(method string, args HttpArgs, hint string) (*htt
     return req, nil
 }
 
-func (h *HiberaAPI) doRequest(method string, args HttpArgs, hint string) (*http.Response, error) {
+func (h *HiberaAPI) doRequest(method string, args HttpArgs, hint string) ([]byte, uint64, error) {
     for {
         // Try the actual request.
-        var resp *http.Response
         req, err := h.makeRequest(method, args, hint)
 
-        for err == nil {
+        for {
+            var resp *http.Response
+            var content []byte
 
             utils.Print("CLIENT", "%s %s", method, req.URL.String())
             resp, err = h.Client.Do(req)
+            if resp != nil {
+                utils.Print("CLIENT", "%s", resp.Status)
+            }
+
             if err != nil {
                 urlerr, ok := err.(*url.Error)
-                if !ok || urlerr.Err != skipRedirect {
+                if resp != nil && ok && urlerr.Err == skipRedirect {
+                    if !h.useRedirects {
+                        return nil, 0, err
+                    } else {
+                        // All is okay -- we process the redirect below.
+                        // NOTE: In this case, the body has already been
+                        // read and closed so we don't close the body in
+                        // the case of a redirect as per below.
+                    }
+                } else {
+                    // Not okay, delay.
                     break
                 }
+            } else {
+                content, err = h.getContent(resp)
+                resp.Body.Close()
+                if err != nil {
+                    rev, _ := h.getRev(resp)
+                    return nil, rev, err
+                }
             }
-            utils.Print("CLIENT", "%s", resp.Status)
 
             // Check for a permission problem (don't retry).
             if resp.StatusCode == http.StatusForbidden {
@@ -215,12 +239,18 @@ func (h *HiberaAPI) doRequest(method string, args HttpArgs, hint string) (*http.
                 break
             }
 
-            // Check for a redirect.
-            if resp.StatusCode == http.StatusMovedPermanently ||
+            if resp.StatusCode == http.StatusOK {
+
+                // Everything okay.
+                rev, err := h.getRev(resp)
+                return content, rev, err
+
+            } else if resp.StatusCode == http.StatusMovedPermanently ||
                 resp.StatusCode == http.StatusFound ||
                 resp.StatusCode == http.StatusSeeOther ||
                 resp.StatusCode == http.StatusTemporaryRedirect {
-                // Read the next location.
+
+                // Handle a redirect.
                 location := resp.Header.Get("Location")
                 utils.Print("CLIENT", "Redirecting to %s...", location)
                 var u *url.URL
@@ -236,12 +266,17 @@ func (h *HiberaAPI) doRequest(method string, args HttpArgs, hint string) (*http.
 
                 // Save the new cached value.
                 h.cache[hint] = u.Host
+
             } else {
-                return resp, err
+
+                // Return the given HTTP error.
+                rev, _ := h.getRev(resp)
+                return nil, rev, errors.New(resp.Status)
             }
         }
+
         if h.delay == 0 {
-            return resp, err
+            return nil, 0, err
         }
 
         // Clear any cache hint on an error.
@@ -252,98 +287,67 @@ func (h *HiberaAPI) doRequest(method string, args HttpArgs, hint string) (*http.
         utils.Print("CLIENT", "ERROR %s (delaying %d milliseconds)", err, random_delay)
         time.Sleep(time.Duration(random_delay) * time.Millisecond)
     }
-    return nil, nil
+
+    return nil, 0, nil
 }
 
-func (h *HiberaAPI) Info(rev uint64) ([]byte, uint64, error) {
+func (h *HiberaAPI) Info() ([]byte, uint64, error) {
     args := h.makeArgs("/")
-    args.params["rev"] = strconv.FormatUint(rev, 10)
-    resp, err := h.doRequest("GET", args, "")
-    if err != nil {
-        return nil, 0, err
-    }
-    content, err := h.getContent(resp)
-    if err != nil {
-        rev, _ = h.getRev(resp)
-        return nil, rev, err
-    }
-    rev, err = h.getRev(resp)
-    return content, rev, err
+    return h.doRequest("GET", args, "")
 }
 
 func (h *HiberaAPI) Activate() error {
     args := h.makeArgs("/")
-    _, err := h.doRequest("POST", args, "")
+    _, _, err := h.doRequest("POST", args, "")
     return err
 }
 
 func (h *HiberaAPI) Deactivate() error {
     args := h.makeArgs("/")
-    _, err := h.doRequest("DELETE", args, "")
+    _, _, err := h.doRequest("DELETE", args, "")
     return err
 }
 
 func (h *HiberaAPI) NodeList(active bool) ([]string, uint64, error) {
     args := h.makeArgs("/nodes")
     args.params["active"] = boolToStr(active)
-    resp, err := h.doRequest("GET", args, "")
+    content, rev, err := h.doRequest("GET", args, "")
     if err != nil {
-        return nil, 0, err
-    }
-    content, err := h.getContent(resp)
-    if err != nil {
-        rev, _ := h.getRev(resp)
         return nil, rev, err
     }
     var nodes []string
     err = json.Unmarshal(content, &nodes)
     if err != nil {
-        rev, _ := h.getRev(resp)
         return nil, rev, err
     }
-    rev, err := h.getRev(resp)
     return nodes, rev, err
 }
 
 func (h *HiberaAPI) NodeGet(id string) (*core.Node, uint64, error) {
     args := h.makeArgs(fmt.Sprintf("/nodes/%s", id))
-    resp, err := h.doRequest("GET", args, id)
+    content, rev, err := h.doRequest("GET", args, id)
     if err != nil {
         return nil, 0, err
-    }
-    content, err := h.getContent(resp)
-    if err != nil {
-        rev, _ := h.getRev(resp)
-        return nil, rev, err
     }
     var node core.Node
     err = json.Unmarshal(content, &node)
     if err != nil {
-        rev, _ := h.getRev(resp)
         return nil, rev, err
     }
-    rev, err := h.getRev(resp)
     return &node, rev, err
 }
 
 func (h *HiberaAPI) AccessList() ([]string, uint64, error) {
     args := h.makeArgs("/access")
-    resp, err := h.doRequest("GET", args, "")
+    content, rev, err := h.doRequest("GET", args, "")
     if err != nil {
         return nil, 0, err
-    }
-    content, err := h.getContent(resp)
-    if err != nil {
-        rev, _ := h.getRev(resp)
-        return nil, rev, err
     }
     var tokens []string
     err = json.Unmarshal(content, &tokens)
     if err != nil {
-        rev, _ := h.getRev(resp)
         return nil, rev, err
     }
-    rev, err := h.getRev(resp)
     return tokens, rev, err
 }
 
@@ -353,42 +357,30 @@ func (h *HiberaAPI) AccessGrant(token string, path string, read bool, write bool
     args.params["read"] = boolToStr(read)
     args.params["write"] = boolToStr(write)
     args.params["execute"] = boolToStr(execute)
-    resp, err := h.doRequest("POST", args, "")
+    _, rev, err := h.doRequest("POST", args, "")
     if err != nil {
         return 0, err
     }
-    rev, err := h.getRev(resp)
     return rev, err
 }
 
 func (h *HiberaAPI) AccessGet(token string) (*core.Token, uint64, error) {
     args := h.makeArgs(fmt.Sprintf("/access/%s", token))
-    resp, err := h.doRequest("GET", args, "")
+    content, rev, err := h.doRequest("GET", args, "")
     if err != nil {
         return nil, 0, err
-    }
-    content, err := h.getContent(resp)
-    if err != nil {
-        rev, _ := h.getRev(resp)
-        return nil, rev, err
     }
     var val core.Token
     err = json.Unmarshal(content, &val)
     if err != nil {
-        rev, _ := h.getRev(resp)
         return nil, rev, err
     }
-    rev, err := h.getRev(resp)
     return &val, rev, err
 }
 
 func (h *HiberaAPI) AccessRevoke(token string) (uint64, error) {
     args := h.makeArgs(fmt.Sprintf("/access/%s", token))
-    resp, err := h.doRequest("DELETE", args, "")
-    if err != nil {
-        return 0, err
-    }
-    rev, err := h.getRev(resp)
+    _, rev, err := h.doRequest("DELETE", args, "")
     return rev, err
 }
 
@@ -397,41 +389,22 @@ func (h *HiberaAPI) SyncJoin(key string, name string, limit uint, timeout uint) 
     args.params["name"] = name
     args.params["limit"] = strconv.FormatUint(uint64(limit), 10)
     args.params["timeout"] = strconv.FormatUint(uint64(timeout), 10)
-    resp, err := h.doRequest("POST", args, key)
+    content, rev, err := h.doRequest("POST", args, key)
     if err != nil {
         return -1, 0, err
-    }
-    if resp.StatusCode != 200 {
-        rev, _ := h.getRev(resp)
-        return -1, rev, errors.New(resp.Status)
-    }
-    content, err := h.getContent(resp)
-    if err != nil {
-        rev, _ := h.getRev(resp)
-        return -1, rev, err
     }
     var index int
     err = json.Unmarshal(content, &index)
     if err != nil {
-        rev, _ := h.getRev(resp)
         return -1, rev, err
     }
-    rev, err := h.getRev(resp)
     return index, rev, err
 }
 
 func (h *HiberaAPI) SyncLeave(key string, name string) (uint64, error) {
     args := h.makeArgs(fmt.Sprintf("/sync/%s", key))
     args.params["name"] = name
-    resp, err := h.doRequest("DELETE", args, key)
-    if err != nil {
-        return 0, err
-    }
-    if resp.StatusCode != 200 {
-        rev, _ := h.getRev(resp)
-        return rev, errors.New(resp.Status)
-    }
-    rev, err := h.getRev(resp)
+    _, rev, err := h.doRequest("DELETE", args, key)
     return rev, err
 }
 
@@ -439,41 +412,22 @@ func (h *HiberaAPI) SyncMembers(key string, name string, limit uint) (int, []str
     args := h.makeArgs(fmt.Sprintf("/sync/%s", key))
     args.params["name"] = name
     args.params["limit"] = strconv.FormatUint(uint64(limit), 10)
-    resp, err := h.doRequest("GET", args, key)
+    content, rev, err := h.doRequest("GET", args, key)
     if err != nil {
         return -1, nil, 0, err
-    }
-    if resp.StatusCode != 200 {
-        rev, _ := h.getRev(resp)
-        return -1, nil, rev, errors.New(resp.Status)
-    }
-    content, err := h.getContent(resp)
-    if err != nil {
-        rev, _ := h.getRev(resp)
-        return -1, nil, rev, err
     }
     var info syncInfo
     err = json.Unmarshal(content, &info)
     if err != nil {
-        rev, _ := h.getRev(resp)
         return -1, nil, rev, err
     }
-    rev, err := h.getRev(resp)
     return info.Index, info.Members, rev, err
 }
 
 func (h *HiberaAPI) EventFire(key string, rev uint64) (uint64, error) {
     args := h.makeArgs(fmt.Sprintf("/event/%s", key))
     args.params["rev"] = strconv.FormatUint(rev, 10)
-    resp, err := h.doRequest("POST", args, key)
-    if err != nil {
-        return 0, err
-    }
-    if resp.StatusCode != 200 {
-        rev, _ = h.getRev(resp)
-        return rev, errors.New(resp.Status)
-    }
-    rev, err = h.getRev(resp)
+    _, rev, err := h.doRequest("POST", args, key)
     return rev, err
 }
 
@@ -481,15 +435,7 @@ func (h *HiberaAPI) EventWait(key string, rev uint64, timeout uint) (uint64, err
     args := h.makeArgs(fmt.Sprintf("/event/%s", key))
     args.params["rev"] = strconv.FormatUint(rev, 10)
     args.params["timeout"] = strconv.FormatUint(uint64(timeout), 10)
-    resp, err := h.doRequest("GET", args, key)
-    if err != nil {
-        return 0, err
-    }
-    if resp.StatusCode != 200 {
-        rev, _ = h.getRev(resp)
-        return rev, errors.New(resp.Status)
-    }
-    rev, err = h.getRev(resp)
+    _, rev, err := h.doRequest("GET", args, key)
     return rev, err
 }
 
@@ -497,35 +443,12 @@ func (h *HiberaAPI) DataGet(key string, rev uint64, timeout uint) ([]byte, uint6
     args := h.makeArgs(fmt.Sprintf("/data/%s", key))
     args.params["rev"] = strconv.FormatUint(rev, 10)
     args.params["timeout"] = strconv.FormatUint(uint64(timeout), 10)
-    resp, err := h.doRequest("GET", args, key)
-    if err != nil {
-        return nil, 0, err
-    }
-    if resp.StatusCode != 200 {
-        rev, _ := h.getRev(resp)
-        return nil, rev, errors.New(resp.Status)
-    }
-    content, err := h.getContent(resp)
-    if err != nil {
-        return nil, 0, err
-    }
-    rev, err = h.getRev(resp)
-    return content, rev, err
+    return  h.doRequest("GET", args, key)
 }
 
 func (h *HiberaAPI) DataList() ([]string, error) {
     args := h.makeArgs("/data")
-    resp, err := h.doRequest("GET", args, "")
-    if err != nil {
-        return nil, err
-    }
-    if resp.StatusCode != 200 {
-        return nil, errors.New(resp.Status)
-    }
-    content, err := h.getContent(resp)
-    if err != nil {
-        return nil, err
-    }
+    content, _, err := h.doRequest("GET", args, "")
     var items []string
     err = json.Unmarshal(content, &items)
     if err != nil {
@@ -538,29 +461,13 @@ func (h *HiberaAPI) DataSet(key string, rev uint64, value []byte) (uint64, error
     args := h.makeArgs(fmt.Sprintf("/data/%s", key))
     args.params["rev"] = strconv.FormatUint(rev, 10)
     args.body = value
-    resp, err := h.doRequest("POST", args, key)
-    if err != nil {
-        return 0, err
-    }
-    if resp.StatusCode != 200 {
-        rev, _ = h.getRev(resp)
-        return rev, errors.New(resp.Status)
-    }
-    rev, err = h.getRev(resp)
+    _, rev, err := h.doRequest("POST", args, key)
     return rev, err
 }
 
 func (h *HiberaAPI) DataRemove(key string, rev uint64) (uint64, error) {
     args := h.makeArgs(fmt.Sprintf("/data/%s", key))
     args.params["rev"] = strconv.FormatUint(rev, 10)
-    resp, err := h.doRequest("DELETE", args, key)
-    if err != nil {
-        return 0, err
-    }
-    if resp.StatusCode != 200 {
-        rev, _ = h.getRev(resp)
-        return rev, errors.New(resp.Status)
-    }
-    rev, err = h.getRev(resp)
+    _, rev, err := h.doRequest("DELETE", args, key)
     return rev, err
 }

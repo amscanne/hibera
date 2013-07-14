@@ -67,8 +67,9 @@ func NewNode(addr string, keys []string, domain string) *Node {
     node.Keys = keys
     node.Domain = domain
     node.Active = false
-    node.Dropped = DropLimit
+    node.Dropped = 0
     node.Current = Revision(0)
+    node.Modified = Revision(0)
     return node
 }
 
@@ -79,12 +80,12 @@ type Nodes struct {
     // Our own node (also in all).
     self *Node
 
-    sync.Mutex
+    sync.RWMutex
 }
 
 func (nodes *Nodes) Heartbeat(id string, rev Revision) bool {
-    nodes.Mutex.Lock()
-    defer nodes.Mutex.Unlock()
+    nodes.RWMutex.RLock()
+    defer nodes.RWMutex.RUnlock()
 
     node := nodes.all[id]
     if node != nil && node.Id() == id {
@@ -101,8 +102,8 @@ func (nodes *Nodes) Heartbeat(id string, rev Revision) bool {
 }
 
 func (nodes *Nodes) NoHeartbeat(id string) {
-    nodes.Mutex.Lock()
-    defer nodes.Mutex.Unlock()
+    nodes.RWMutex.RLock()
+    defer nodes.RWMutex.RUnlock()
 
     node := nodes.all[id]
     if node != nil && node != nodes.self && node.Id() == id {
@@ -113,8 +114,8 @@ func (nodes *Nodes) NoHeartbeat(id string) {
 }
 
 func (nodes *Nodes) Activate(id string, rev Revision) bool {
-    nodes.Mutex.Lock()
-    defer nodes.Mutex.Unlock()
+    nodes.RWMutex.RLock()
+    defer nodes.RWMutex.RUnlock()
 
     node := nodes.all[id]
     if node == nil {
@@ -133,8 +134,8 @@ func (nodes *Nodes) Activate(id string, rev Revision) bool {
 }
 
 func (nodes *Nodes) List(active bool) ([]string, error) {
-    nodes.Mutex.Lock()
-    defer nodes.Mutex.Unlock()
+    nodes.RWMutex.RLock()
+    defer nodes.RWMutex.RUnlock()
 
     all := make([]string, 0, 0)
     i := 0
@@ -149,14 +150,15 @@ func (nodes *Nodes) List(active bool) ([]string, error) {
 }
 
 func (nodes *Nodes) Get(id string) (*Node, error) {
-    nodes.Mutex.Lock()
-    defer nodes.Mutex.Unlock()
+    nodes.RWMutex.RLock()
+    defer nodes.RWMutex.RUnlock()
+
     return nodes.all[id], nil
 }
 
 func (nodes *Nodes) filter(fn func(node *Node) bool) []*Node {
-    nodes.Mutex.Lock()
-    defer nodes.Mutex.Unlock()
+    nodes.RWMutex.RLock()
+    defer nodes.RWMutex.RUnlock()
 
     filtered := make([]*Node, 0, 0)
     for _, node := range nodes.all {
@@ -200,9 +202,9 @@ func (nodes *Nodes) Self() *Node {
     return nodes.self
 }
 
-func (nodes *Nodes) Encode(rev Revision, next bool, na NodeInfo, N int) (bool, error) {
-    nodes.Mutex.Lock()
-    defer nodes.Mutex.Unlock()
+func (nodes *Nodes) Encode(next bool, na NodeInfo, N int) (bool, error) {
+    nodes.RWMutex.Lock()
+    defer nodes.RWMutex.Unlock()
 
     // Create a list of nodes modified after rev.
     changed := false
@@ -218,7 +220,7 @@ func (nodes *Nodes) Encode(rev Revision, next bool, na NodeInfo, N int) (bool, e
     // date pretty quickly, as they are currently suspicious.
     if next {
         for _, node := range nodes.all {
-            if node.Active && node.Alive() && node.Current < rev {
+            if node.Active && node.Alive() && node.Current < nodes.self.Current {
                 addokay = false
                 break
             }
@@ -238,7 +240,7 @@ func (nodes *Nodes) Encode(rev Revision, next bool, na NodeInfo, N int) (bool, e
                 domains[node.Domain] = true
                 na[id] = NewNode(node.Addr, node.Keys, node.Domain)
                 na[id].Active = node.Alive()
-                na[id].Modified = rev+1
+                na[id].Modified = nodes.self.Current+1
                 changed = true
             }
 
@@ -249,12 +251,17 @@ func (nodes *Nodes) Encode(rev Revision, next bool, na NodeInfo, N int) (bool, e
                 domains[node.Domain] = true
                 na[id] = NewNode(node.Addr, node.Keys, node.Domain)
                 na[id].Active = false
-                na[id].Modified = rev+1
+                na[id].Dropped = DropLimit
+                na[id].Current = node.Current
+                na[id].Modified = nodes.self.Current+1
                 changed = true
             }
 
-        } else if node == nodes.self || node.Modified >= rev {
-            na[id] = node
+        } else {
+            na[id] = NewNode(node.Addr, node.Keys, node.Domain)
+            na[id].Active = node.Active
+            na[id].Current = node.Current
+            na[id].Modified = node.Modified
         }
     }
 
@@ -262,8 +269,8 @@ func (nodes *Nodes) Encode(rev Revision, next bool, na NodeInfo, N int) (bool, e
 }
 
 func (nodes *Nodes) Decode(na NodeInfo) (bool, error) {
-    nodes.Mutex.Lock()
-    defer nodes.Mutex.Unlock()
+    nodes.RWMutex.Lock()
+    defer nodes.RWMutex.Unlock()
 
     changed := false
 
@@ -288,11 +295,21 @@ func (nodes *Nodes) Decode(na NodeInfo) (bool, error) {
 }
 
 func (nodes *Nodes) Reset() {
+    nodes.RWMutex.Lock()
+    defer nodes.RWMutex.Unlock()
+
     for id, node := range nodes.all {
         if node != nodes.self {
             delete(nodes.all, id)
         }
     }
+}
+
+func (nodes *Nodes) Count() int {
+    nodes.RWMutex.RLock()
+    defer nodes.RWMutex.RUnlock()
+
+    return len(nodes.all)
 }
 
 func NewNodes(addr string, keys []string, domain string) *Nodes {

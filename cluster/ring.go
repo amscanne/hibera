@@ -19,6 +19,9 @@ func defaultDomain() string {
 var DefaultDomain = defaultDomain()
 
 type ring struct {
+    // The count of slaves per key.
+    slaves int
+
     // Our key map.
     // This is a simple map of all node core.Keys to the appropriate node.
     keymap map[string]*core.Node
@@ -38,11 +41,16 @@ type ring struct {
     sync.Mutex
 }
 
-func NewRing(nodes *core.Nodes) *ring {
+func NewRing(slaves int, nodes *core.Nodes) *ring {
     r := new(ring)
+    r.slaves = slaves
     r.Nodes = nodes
     r.Recompute()
     return r
+}
+
+func (r *ring) Size() int {
+    return r.Nodes.Count()
 }
 
 func (r *ring) Recompute() {
@@ -75,15 +83,34 @@ func (r *ring) IsMaster(key core.Key) bool {
 }
 
 func (r *ring) MasterFor(key core.Key) *core.Node {
-    nodes := r.NodesFor(key, 1)
+    nodes := r.NodesFor(key)
     if nodes == nil || len(nodes) < 1 {
         return nil
     }
     return nodes[0]
 }
 
-func (r *ring) IsFailover(key core.Key, N int) bool {
-    slaves := r.SlavesFor(key, N)
+func (r *ring) IsFailover(key core.Key) bool {
+    slaves := r.SlavesFor(key)
+    if slaves == nil {
+        return false
+    }
+    for _, node := range slaves {
+        if node == r.Nodes.Self() {
+            return true
+        }
+        if node.Alive() {
+            // There is a failover node available
+            // before us. They are responsible for
+            // failing over.
+            return false
+        }
+    }
+    return false
+}
+
+func (r *ring) IsSlave(key core.Key) bool {
+    slaves := r.SlavesFor(key)
     if slaves == nil {
         return false
     }
@@ -95,29 +122,16 @@ func (r *ring) IsFailover(key core.Key, N int) bool {
     return false
 }
 
-func (r *ring) IsSlave(key core.Key, N int) bool {
-    slaves := r.SlavesFor(key, N)
-    if slaves == nil {
-        return false
-    }
-    for _, node := range slaves {
-        if node == r.Nodes.Self() {
-            return true
-        }
-    }
-    return false
-}
-
-func (r *ring) SlavesFor(key core.Key, N int) []*core.Node {
-    nodes := r.NodesFor(key, N)
+func (r *ring) SlavesFor(key core.Key) []*core.Node {
+    nodes := r.NodesFor(key)
     if nodes == nil || len(nodes) < 2 {
         return nil
     }
     return nodes[1:len(nodes)]
 }
 
-func (r *ring) IsNode(key core.Key, check *core.Node, N int) bool {
-    nodes := r.NodesFor(key, N)
+func (r *ring) IsNode(key core.Key, check *core.Node) bool {
+    nodes := r.NodesFor(key)
     if nodes == nil {
         return false
     }
@@ -129,7 +143,7 @@ func (r *ring) IsNode(key core.Key, check *core.Node, N int) bool {
     return false
 }
 
-func (r *ring) lookup(h string, N int) []*core.Node {
+func (r *ring) lookup(h string) []*core.Node {
     if len(r.sorted) == 0 {
         return nil
     }
@@ -142,20 +156,28 @@ func (r *ring) lookup(h string, N int) []*core.Node {
         start = 0
     }
     perdomain := make(map[string]bool)
-    pernode := make(map[string]bool)
+    peraddr := make(map[string]bool)
     current := start
 
     for {
         // Check if node satisfies our failure domain.
         node := r.keymap[r.sorted[current]]
 
-        if !pernode[node.Addr] {
-            // Check if it satisfies a domain.
-            if len(nodes) < N && !perdomain[node.Domain] {
-                perdomain[node.Domain] = true
-                pernode[node.Addr] = true
-                nodes = append(nodes, node)
-            }
+        // Check if this satisfies our count.
+        // We *always* take the first N nodes.
+        // And we always take the first N nodes
+        // that will satisfy our domain requirements.
+        if !peraddr[node.Addr] &&
+            (len(nodes) < r.slaves ||
+            (!perdomain[node.Domain] && len(perdomain) < r.slaves)) {
+            peraddr[node.Addr] = true
+            perdomain[node.Domain] = true
+            nodes = append(nodes, node)
+        }
+
+        // Check if we've satisfied all of our requirements.
+        if len(nodes) >= r.slaves && len(perdomain) >= r.slaves {
+            break
         }
 
         // Move to the next key.
@@ -168,7 +190,7 @@ func (r *ring) lookup(h string, N int) []*core.Node {
     return nodes
 }
 
-func (r *ring) NodesFor(key core.Key, N int) []*core.Node {
+func (r *ring) NodesFor(key core.Key) []*core.Node {
     r.Mutex.Lock()
     defer r.Mutex.Unlock()
 
@@ -177,7 +199,7 @@ func (r *ring) NodesFor(key core.Key, N int) []*core.Node {
     cached := r.cache[h]
     if cached == nil {
         // Do a manual lookup.
-        nodes := r.lookup(h, N)
+        nodes := r.lookup(h)
 
         // Cache the value.
         r.cache[h] = nodes
