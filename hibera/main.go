@@ -194,9 +194,8 @@ func cli_access(c *client.HiberaAPI, id string) error {
         asstr := func(val bool, t string) string {
             if val {
                 return t
-            } else {
-                return "-"
             }
+            return "-"
         }
         rs := asstr(perms.Read, "r")
         ws := asstr(perms.Write, "w")

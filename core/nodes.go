@@ -262,6 +262,7 @@ func (nodes *Nodes) Encode(next bool, na NodeInfo, N int) (bool, error) {
             na[id].Active = node.Active
             na[id].Current = node.Current
             na[id].Modified = node.Modified
+            na[id].Dropped = node.Dropped
         }
     }
 

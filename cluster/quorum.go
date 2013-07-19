@@ -49,7 +49,9 @@ func (c *Cluster) doGet(node *core.Node, key core.Key) ([]byte, core.Revision, e
 
     utils.Print("QUORUM", "    GET-REMOTE key=%s", string(key))
     cl := c.getClient(utils.MakeURL(node.Addr, "", nil))
-    value, rev, err := cl.DataGet(string(key), 0, 0)
+    // NOTE: We specify a revision here that is not possible.
+    // This ensures that the Get call will return immediately.
+    value, rev, err := cl.DataGet(string(key), uint64(0xffffffff), 0)
     return value, core.Revision(rev), err
 }
 

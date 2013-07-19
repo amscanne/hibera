@@ -382,10 +382,14 @@ func (c *Cluster) healthcheck() {
 
             // Try to do the data set.
             target_rev, err = c.lockedClusterDataSet(bytes, target_rev)
+            c.Mutex.Unlock()
+
             if err == nil {
                 // Updated successfully.
-                c.Mutex.Unlock()
                 break
+            } else {
+                // No success, try again.
+                continue
             }
 
         } else {
