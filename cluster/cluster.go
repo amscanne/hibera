@@ -381,16 +381,20 @@ func (c *Cluster) healthcheck() {
             }
 
             // Try to do the data set.
-            target_rev, err = c.lockedClusterDataSet(bytes, target_rev)
+            new_target_rev, _ := c.lockedClusterDataSet(bytes, target_rev)
             c.Mutex.Unlock()
 
-            if err == nil {
-                // Updated successfully.
+            // Whether there was an error or not,
+            // we give up at this point if the target_rev
+            // hasn't changed. Otherwise, we simply end
+            // up in a spinny loop chewing CPU waiting
+            // for the situation to change.
+            if new_target_rev == target_rev {
                 break
-            } else {
-                // No success, try again.
-                continue
             }
+
+            target_rev = new_target_rev
+            continue
 
         } else {
             // We're not the master.
