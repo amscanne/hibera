@@ -15,6 +15,7 @@ import (
     "strings"
     "syscall"
     "time"
+    "bufio"
 )
 
 var api = flag.String("api", "", "API address (comma-separated list).")
@@ -29,6 +30,7 @@ var delay = flag.Uint("delay", 1000, "Delay and retry failed requests.")
 var data = flag.Bool("data", false, "Use the synchronization group data mapping.")
 var path = flag.String("path", ".*", "The path for a given token.")
 var perms = flag.String("perms", "rwx", "Permissions (combination of r,w,x).")
+var debug = flag.Bool("debug", false, "Enable all debugging.")
 
 var mainmsg = `usage: hibera <command> ... [options]
 
@@ -100,8 +102,13 @@ synchronization commands:
 data commands:
 
     list                         --- List all keys.
+
     get <key>                    --- Get the contents of the key.
     set <key> [value]            --- Set the contents of the key.
+
+    push <key>                   --- Stream up contents of the key.
+    pull <key>                   --- Stream down contents of the key.
+
     remove <key>                 --- Remove the given key.
     sync <key>                   --- Synchronize a key, either as
          [-output <file>]            stdin to a named script to
@@ -426,6 +433,49 @@ func cli_get(c *client.HiberaAPI, key string) error {
     return nil
 }
 
+func cli_push(c *client.HiberaAPI, key string) error {
+    stdin := bufio.NewReader(os.Stdin)
+    rev := uint64(0)
+
+    for {
+        // Read the next line.
+        line, err := stdin.ReadSlice('\n')
+        if err == io.EOF {
+            return nil
+        } else if err != nil {
+            return err
+        }
+
+        // Post the update.
+        rev, err = c.DataSet(key, rev+1, line)
+        if err != nil {
+            return err
+        }
+    }
+}
+
+func cli_pull(c *client.HiberaAPI, key string) error {
+    rev := uint64(0)
+
+    for {
+        // Read the next entry.
+        var err error
+        var value []byte
+        value, rev, err = c.DataGet(key, rev, 0)
+        if err != nil {
+            return err
+        }
+
+        // Write the data.
+        _, err = os.Stdout.Write(value)
+        if err == io.EOF {
+            return nil
+        } else if err != nil {
+            return err
+        }
+    }
+}
+
 func cli_set(c *client.HiberaAPI, key string, value *string) error {
     var err error
     if value == nil {
@@ -557,6 +607,9 @@ func main() {
         os.Args = os.Args[1:]
     }
     flag.Parse()
+    if *debug {
+        utils.EnableDebugging()
+    }
 
     client := func() *client.HiberaAPI {
         // Create our client.
@@ -621,6 +674,12 @@ func main() {
         break
     case "get":
         err = cli_get(client(), key)
+        break
+    case "push":
+        err = cli_push(client(), key)
+        break
+    case "pull":
+        err = cli_pull(client(), key)
         break
     case "set":
         if flag.NArg() > 0 {

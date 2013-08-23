@@ -7,6 +7,7 @@ import (
     "hibera/cluster"
     "hibera/server"
     "hibera/storage"
+    "hibera/utils"
     "log"
     "math/rand"
     "net"
@@ -27,6 +28,7 @@ var keys = flag.Uint("keys", cluster.DefaultKeys, "The number of keys for this n
 var seeds = flag.String("seeds", server.DefaultSeeds, "Seeds for joining the cluster.")
 var active = flag.Uint("active", server.DefaultActive, "Maximum active simutaneous clients.")
 var profile = flag.String("profile", "", "Enabling profiling and write to file.")
+var debug = flag.Bool("debug", false, "Enable all debugging.")
 
 func discoverAddress() string {
     addrs, _ := net.InterfaceAddrs()
@@ -49,6 +51,9 @@ func main() {
 
     // Parse all flags
     flag.Parse()
+    if *debug {
+        utils.EnableDebugging()
+    }
 
     // Sanity check addresses, ports, etc.
     var addr string
