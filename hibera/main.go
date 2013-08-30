@@ -115,6 +115,8 @@ data commands:
          [-timeout <timeout>]        directly to the named file.
          [<run-script> ...]
 
+    bench <key>                  --- Run a benchmark.
+
 event commands:
 
     watch <key>                  --- Wait for an update of the key.
@@ -548,6 +550,58 @@ func cli_fire(c *client.HiberaAPI, key string) error {
     return err
 }
 
+func do_worker(c *client.HiberaAPI, key string, data_size int, count int, err_chan chan error) {
+    data := make([]byte, data_size, data_size);
+    for i := 0; i < count; i += 1 {
+        _, err := c.DataSet(key, 0, data)
+        if err != nil {
+            err_chan <- err
+        }
+    }
+    err_chan <- nil
+}
+
+func do_bench(c *client.HiberaAPI, key string, data_size int, workers int) error {
+    err_chan := make(chan error, workers)
+    count := 512 / workers
+
+    start := time.Now()
+    for i := 0; i < workers; i += 1 {
+        go do_worker(c, fmt.Sprintf("key.%d", i), data_size, count, err_chan)
+    }
+    for i := 0; i < workers; i += 1 {
+        err := <-err_chan
+        if err != nil {
+            return err
+        }
+    }
+    duration := time.Since(start)
+
+    fmt.Printf(
+        "workers=%d, data_size=%d, ops=%.2f/s, rate=%.2fMb/s\n",
+        workers,
+        data_size,
+        float64(count*workers)/duration.Seconds(),
+        float64(count*data_size*workers/1024)/duration.Seconds())
+    return nil;
+}
+
+func cli_bench(c *client.HiberaAPI, key string) error {
+    data_sizes := []int{128, 1024, 4096, 8192}
+    n_workers := []int{1, 4, 16, 64, 256, 512}
+
+    for _, data_size := range data_sizes {
+        for _, n_worker := range n_workers {
+            err := do_bench(c, key, data_size, n_worker)
+            if err != nil {
+                return err
+            }
+        }
+    }
+
+    return nil;
+}
+
 func usage(msg string) {
     fmt.Printf("%s\n", msg)
     os.Exit(1)
@@ -704,6 +758,9 @@ func main() {
         break
     case "fire":
         err = cli_fire(client(), key)
+        break
+    case "bench":
+        err = cli_bench(client(), key)
         break
     default:
         usage(mainmsg)
