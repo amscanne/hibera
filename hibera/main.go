@@ -1,10 +1,12 @@
 package main
 
 import (
+    "bufio"
     "bytes"
     "flag"
     "fmt"
     "hibera/client"
+    "hibera/core"
     "hibera/utils"
     "io"
     "io/ioutil"
@@ -15,11 +17,11 @@ import (
     "strings"
     "syscall"
     "time"
-    "bufio"
 )
 
 var api = flag.String("api", "", "API address (comma-separated list).")
 var auth = flag.String("auth", "", "Authorization token.")
+var host = flag.String("host", "", "Override for the host header (namespace).")
 var timeout = flag.Uint("timeout", 0, "Timeout (in ms) for acquiring a lock.")
 var name = flag.String("name", "", "Name to use (other than machine address).")
 var start = flag.String("start", "", "Script to start the given service.")
@@ -41,6 +43,8 @@ options for all commands:
 
     [-auth <authorization-key>]  --- The authorization key.
 
+    [-host <namespace>]          --- The namespace to use.
+
     [-delay <delay>]             --- Delay in milliseconds to
 
 cluster commands:
@@ -55,10 +59,9 @@ access commands:
 
     tokens                       --- Show access tokens.
     access <token>               --- Show the given token.
-    grant <token>                --- Grant given permissions.
+    permissions <token>          --- Grant given permissions.
         [-path <path>]
         [-perms <perms>]
-    revoke <token>               --- Remove the given key.
 
 synchronization commands:
 
@@ -163,8 +166,8 @@ func cli_active(c *client.HiberaAPI) error {
     return nil
 }
 
-func cli_info(c *client.HiberaAPI, id string) error {
-    node, _, err := c.NodeGet(id)
+func cli_info(c *client.HiberaAPI, key core.Key) error {
+    node, _, err := c.NodeGet(key.Key)
     if err != nil {
         return err
     }
@@ -183,7 +186,7 @@ func cli_info(c *client.HiberaAPI, id string) error {
 }
 
 func cli_tokens(c *client.HiberaAPI) error {
-    tokens, _, err := c.AccessList()
+    tokens, _, err := c.AccessList(core.Namespace(*host))
     if err != nil {
         return err
     }
@@ -193,8 +196,8 @@ func cli_tokens(c *client.HiberaAPI) error {
     return nil
 }
 
-func cli_access(c *client.HiberaAPI, id string) error {
-    val, _, err := c.AccessGet(id)
+func cli_access(c *client.HiberaAPI, auth core.Key) error {
+    val, _, err := c.AccessGet(auth)
     if err != nil {
         return err
     }
@@ -214,20 +217,24 @@ func cli_access(c *client.HiberaAPI, id string) error {
     return nil
 }
 
-func cli_grant(c *client.HiberaAPI, id string, path string, perms string) error {
+func cli_permissions(c *client.HiberaAPI, auth core.Key, path string, perms string) error {
     read := strings.Index(perms, "r") >= 0
     write := strings.Index(perms, "w") >= 0
     execute := strings.Index(perms, "x") >= 0
-    _, err := c.AccessGrant(id, path, read, write, execute)
+    _, err := c.AccessUpdate(auth, path, read, write, execute)
     return err
 }
 
-func cli_revoke(c *client.HiberaAPI, id string) error {
-    _, err := c.AccessRevoke(id)
-    return err
-}
-
-func cli_run(c *client.HiberaAPI, key string, name string, limit uint, timeout uint, start []string, stop []string, cmd []string, dodata bool) error {
+func cli_run(
+    c *client.HiberaAPI,
+    key core.Key,
+    name string,
+    limit uint,
+    timeout uint,
+    start []string,
+    stop []string,
+    cmd []string,
+    dodata bool) error {
 
     var value []byte
     var proc *exec.Cmd
@@ -235,8 +242,8 @@ func cli_run(c *client.HiberaAPI, key string, name string, limit uint, timeout u
     watchchan := make(chan error)
 
     oldindex := -1
-    oldrev := uint64(0)
-    olddatarev := uint64(0)
+    oldrev := core.ZeroRevision
+    olddatarev := core.ZeroRevision
 
     defer c.SyncLeave(key, name)
 
@@ -246,14 +253,14 @@ func cli_run(c *client.HiberaAPI, key string, name string, limit uint, timeout u
         // may have fired due to an underlying node change. This
         // means that the new node may have lost all ephemeral
         // information and membership may be completely new.
-        utils.Print("CLIENT", "JOINING key=%s name=%s", string(key), name)
+        utils.Print("CLIENT", "JOINING key=%s name=%s", key.String(), name)
         newindex, newrev, err := c.SyncJoin(key, name, limit, 1)
         if err != nil {
             return err
         }
         utils.Print("CLIENT", "INDEX=%d REV=%d", newindex, newrev)
 
-        if newindex != oldindex || newrev != oldrev {
+        if newindex != oldindex || (*newrev).Cmp(oldrev) != 0 {
 
             datachanged := false
 
@@ -262,10 +269,15 @@ func cli_run(c *client.HiberaAPI, key string, name string, limit uint, timeout u
 
                 // Opportunistic read of the data.
                 // If there's nothing, we provide an empty set.
-                var datarev uint64
-                value, datarev, err = c.DataGet(fmt.Sprintf("%s.%d", key, newindex), 0, 0)
+                var datarev core.Revision
+                value, datarev, err = c.DataGet(
+                    core.Key{
+                        core.Namespace(*host),
+                        fmt.Sprintf("%s.%d", key.Key, newindex)},
+                    core.ZeroRevision, 0)
+
                 if err != nil {
-                    datarev = uint64(0)
+                    datarev = core.ZeroRevision
                 }
                 if value == nil {
                     value = make([]byte, 0, 0)
@@ -377,7 +389,7 @@ func cli_run(c *client.HiberaAPI, key string, name string, limit uint, timeout u
     return nil
 }
 
-func cli_members(c *client.HiberaAPI, key string, name string, limit uint) error {
+func cli_members(c *client.HiberaAPI, key core.Key, name string, limit uint) error {
     index, members, _, err := c.SyncMembers(key, name, limit)
     if err != nil {
         return err
@@ -389,13 +401,15 @@ func cli_members(c *client.HiberaAPI, key string, name string, limit uint) error
     return nil
 }
 
-func cli_in(c *client.HiberaAPI, key string, name string, limit uint) (bool, error) {
+func cli_in(c *client.HiberaAPI, key core.Key, name string, limit uint) (bool, error) {
     index, _, _, err := c.SyncMembers(key, name, limit)
     if err != nil {
         return false, err
     }
     if index >= 0 {
-        value, _, err := c.DataGet(fmt.Sprintf("%s.%d", key, index), 0, 0)
+        value, _, err := c.DataGet(
+            core.Key{key.Namespace, fmt.Sprintf("%s.%d", key.Key, index)},
+            core.ZeroRevision, 0)
         if err == nil {
             os.Stdout.Write(value)
         }
@@ -404,7 +418,7 @@ func cli_in(c *client.HiberaAPI, key string, name string, limit uint) (bool, err
     return false, nil
 }
 
-func cli_out(c *client.HiberaAPI, key string, value *string, name string, limit uint) (bool, error) {
+func cli_out(c *client.HiberaAPI, key core.Key, value *string, name string, limit uint) (bool, error) {
     index, _, _, err := c.SyncMembers(key, name, limit)
     if err != nil {
         return false, err
@@ -415,18 +429,22 @@ func cli_out(c *client.HiberaAPI, key string, value *string, name string, limit 
             // Fully read input.
             buf := new(bytes.Buffer)
             io.Copy(buf, os.Stdin)
-            _, err = c.DataSet(fmt.Sprintf("%s.%d", key, index), 0, buf.Bytes())
+            _, err = c.DataSet(
+                core.Key{key.Namespace, fmt.Sprintf("%s.%d", key.Key, index)},
+                core.ZeroRevision, buf.Bytes())
         } else {
             // Use the given string.
-            _, err = c.DataSet(fmt.Sprintf("%s.%d", key, index), 0, []byte(*value))
+            _, err = c.DataSet(
+                core.Key{key.Namespace, fmt.Sprintf("%s.%d", key, index)},
+                core.ZeroRevision, []byte(*value))
         }
         return true, err
     }
     return false, err
 }
 
-func cli_get(c *client.HiberaAPI, key string) error {
-    value, _, err := c.DataGet(key, 0, 0)
+func cli_get(c *client.HiberaAPI, key core.Key) error {
+    value, _, err := c.DataGet(key, core.ZeroRevision, 0)
     if err != nil {
         return err
     }
@@ -435,9 +453,9 @@ func cli_get(c *client.HiberaAPI, key string) error {
     return nil
 }
 
-func cli_push(c *client.HiberaAPI, key string) error {
+func cli_push(c *client.HiberaAPI, key core.Key) error {
     stdin := bufio.NewReader(os.Stdin)
-    rev := uint64(0)
+    rev := core.ZeroRevision
 
     for {
         // Read the next line.
@@ -449,15 +467,15 @@ func cli_push(c *client.HiberaAPI, key string) error {
         }
 
         // Post the update.
-        rev, err = c.DataSet(key, rev+1, line)
+        rev, err = c.DataSet(key, core.IncRevision(rev), line)
         if err != nil {
             return err
         }
     }
 }
 
-func cli_pull(c *client.HiberaAPI, key string) error {
-    rev := uint64(0)
+func cli_pull(c *client.HiberaAPI, key core.Key) error {
+    rev := core.ZeroRevision
 
     for {
         // Read the next entry.
@@ -478,27 +496,27 @@ func cli_pull(c *client.HiberaAPI, key string) error {
     }
 }
 
-func cli_set(c *client.HiberaAPI, key string, value *string) error {
+func cli_set(c *client.HiberaAPI, key core.Key, value *string) error {
     var err error
     if value == nil {
         // Fully read input.
         buf := new(bytes.Buffer)
         io.Copy(buf, os.Stdin)
-        _, err = c.DataSet(key, 0, buf.Bytes())
+        _, err = c.DataSet(key, core.ZeroRevision, buf.Bytes())
     } else {
         // Use the given string.
-        _, err = c.DataSet(key, 0, []byte(*value))
+        _, err = c.DataSet(key, core.ZeroRevision, []byte(*value))
     }
     return err
 }
 
-func cli_remove(c *client.HiberaAPI, key string) error {
-    _, err := c.DataRemove(key, 0)
+func cli_remove(c *client.HiberaAPI, key core.Key) error {
+    _, err := c.DataRemove(key, core.ZeroRevision)
     return err
 }
 
-func cli_list(c *client.HiberaAPI) error {
-    items, err := c.DataList()
+func cli_list(c *client.HiberaAPI, namespace string) error {
+    items, err := c.DataList(core.Namespace(namespace))
     if err != nil {
         return err
     }
@@ -508,9 +526,9 @@ func cli_list(c *client.HiberaAPI) error {
     return nil
 }
 
-func cli_sync(c *client.HiberaAPI, key string, output string, cmd []string, timeout uint) error {
+func cli_sync(c *client.HiberaAPI, key core.Key, output string, cmd []string, timeout uint) error {
 
-    rev := uint64(0)
+    rev := core.ZeroRevision
     var value []byte
     var err error
 
@@ -540,20 +558,20 @@ func cli_sync(c *client.HiberaAPI, key string, output string, cmd []string, time
     return nil
 }
 
-func cli_watch(c *client.HiberaAPI, key string, timeout uint) error {
-    _, err := c.EventWait(key, 0, timeout)
+func cli_watch(c *client.HiberaAPI, key core.Key, timeout uint) error {
+    _, err := c.EventWait(key, core.ZeroRevision, timeout)
     return err
 }
 
-func cli_fire(c *client.HiberaAPI, key string) error {
-    _, err := c.EventFire(key, 0)
+func cli_fire(c *client.HiberaAPI, key core.Key) error {
+    _, err := c.EventFire(key, core.ZeroRevision)
     return err
 }
 
-func do_worker(c *client.HiberaAPI, key string, data_size int, count int, err_chan chan error) {
-    data := make([]byte, data_size, data_size);
+func do_worker(c *client.HiberaAPI, key core.Key, data_size int, count int, err_chan chan error) {
+    data := make([]byte, data_size, data_size)
     for i := 0; i < count; i += 1 {
-        _, err := c.DataSet(key, 0, data)
+        _, err := c.DataSet(key, core.ZeroRevision, data)
         if err != nil {
             err_chan <- err
         }
@@ -561,13 +579,16 @@ func do_worker(c *client.HiberaAPI, key string, data_size int, count int, err_ch
     err_chan <- nil
 }
 
-func do_bench(c *client.HiberaAPI, key string, data_size int, workers int) error {
+func do_bench(c *client.HiberaAPI, key core.Key, data_size int, workers int) error {
     err_chan := make(chan error, workers)
     count := 512 / workers
 
     start := time.Now()
     for i := 0; i < workers; i += 1 {
-        go do_worker(c, fmt.Sprintf("key.%d", i), data_size, count, err_chan)
+        go do_worker(
+            c,
+            core.Key{key.Namespace, fmt.Sprintf("%s.%d", key.Key, i)},
+            data_size, count, err_chan)
     }
     for i := 0; i < workers; i += 1 {
         err := <-err_chan
@@ -583,10 +604,10 @@ func do_bench(c *client.HiberaAPI, key string, data_size int, workers int) error
         data_size,
         float64(count*workers)/duration.Seconds(),
         float64(count*data_size*workers/1024)/duration.Seconds())
-    return nil;
+    return nil
 }
 
-func cli_bench(c *client.HiberaAPI, key string) error {
+func cli_bench(c *client.HiberaAPI, key core.Key) error {
     data_sizes := []int{128, 1024, 4096, 8192}
     n_workers := []int{1, 4, 16, 64, 256, 512}
 
@@ -599,7 +620,7 @@ func cli_bench(c *client.HiberaAPI, key string) error {
         }
     }
 
-    return nil;
+    return nil
 }
 
 func usage(msg string) {
@@ -646,7 +667,7 @@ func main() {
     command := os.Args[1]
     os.Args = os.Args[1:]
 
-    key := ""
+    key := core.Key{core.Namespace(*host), ""}
     if command == "nodes" ||
         command == "active" ||
         command == "tokens" ||
@@ -657,7 +678,7 @@ func main() {
         if len(os.Args) < 2 {
             usage(mainmsg)
         }
-        key = os.Args[1]
+        key = core.Key{core.Namespace(*host), os.Args[1]}
         os.Args = os.Args[1:]
     }
     flag.Parse()
@@ -692,11 +713,8 @@ func main() {
     case "access":
         err = cli_access(client(), key)
         break
-    case "grant":
-        err = cli_grant(client(), key, *path, *perms)
-        break
-    case "revoke":
-        err = cli_revoke(client(), key)
+    case "permissions":
+        err = cli_permissions(client(), key, *path, *perms)
         break
     case "run":
         cmd := make_command(flag.Args()...)
@@ -747,7 +765,7 @@ func main() {
         err = cli_remove(client(), key)
         break
     case "list":
-        err = cli_list(client())
+        err = cli_list(client(), *host)
         break
     case "sync":
         cmd := make_command(flag.Args()...)

@@ -1,44 +1,44 @@
 package core
 
 import (
+    "fmt"
     "hibera/utils"
     "sort"
     "sync"
     "sync/atomic"
-    "fmt"
 )
 
 var DropLimit = uint32(10)
 
 type Node struct {
     // The node address (host:port).
-    Addr string
+    Addr string `json:"address"`
 
     // The node Id (computed and cached).
     id  string
 
     // The node domain.
-    Domain string
+    Domain string `json:"domain"`
 
     // The node keys.
-    Keys []string
+    Keys []string `json:"keys"`
 
     // Active is whether or not the node has
     // failed liveness tests recently. If it has,
     // then the node will not be available.
-    Active bool
+    Active bool `json:"active"`
 
     // The last revision modified.
-    Modified Revision
+    Modified Revision `json:"modified"`
 
     // The last reported revision.
-    Current Revision
+    Current Revision `json:"current"`
 
     // The number of messages sent without
     // us hearing a peep back from the node.
     // When this reaches a maximum, we consider
     // the node no longer alive.
-    Dropped uint32
+    Dropped uint32 `json:"dropped"`
 }
 
 func (n *Node) IncDropped() {
@@ -68,8 +68,8 @@ func NewNode(addr string, keys []string, domain string) *Node {
     node.Domain = domain
     node.Active = false
     node.Dropped = 0
-    node.Current = Revision(0)
-    node.Modified = Revision(0)
+    node.Current = ZeroRevision
+    node.Modified = ZeroRevision
     return node
 }
 
@@ -190,7 +190,7 @@ func (nodes *Nodes) Others() []*Node {
 
 func (nodes *Nodes) Suspicious(rev Revision) []*Node {
     return nodes.filter(func(node *Node) bool {
-        return node.Active && node != nodes.self && (node.Dropped > 0 || node.Current < rev)
+        return node.Active && node != nodes.self && (node.Dropped > 0 || (*node.Current).Cmp(rev) < 0)
     })
 }
 
@@ -213,14 +213,14 @@ func (nodes *Nodes) Encode(next bool, na NodeInfo, N int) (bool, error) {
 
     // Check that we are allowed to add nodes.
     // If there are nodes that are not currently marked as
-    // dead, and those nodes are not yet up to the latest 
+    // dead, and those nodes are not yet up to the latest
     // revision -- then we can't add others. We will either
     // need to fail those nodes, or we will need to wait until
     // they are up to date. Note that they should become up to
     // date pretty quickly, as they are currently suspicious.
     if next {
         for _, node := range nodes.all {
-            if node.Active && node.Alive() && node.Current < nodes.self.Current {
+            if node.Active && node.Alive() && (*node.Current).Cmp(nodes.self.Current) < 0 {
                 addokay = false
                 break
             }
@@ -240,7 +240,7 @@ func (nodes *Nodes) Encode(next bool, na NodeInfo, N int) (bool, error) {
                 domains[node.Domain] = true
                 na[id] = NewNode(node.Addr, node.Keys, node.Domain)
                 na[id].Active = node.Alive()
-                na[id].Modified = nodes.self.Current+1
+                na[id].Modified = IncRevision(nodes.self.Current)
                 changed = true
             }
 
@@ -253,7 +253,7 @@ func (nodes *Nodes) Encode(next bool, na NodeInfo, N int) (bool, error) {
                 na[id].Active = false
                 na[id].Dropped = DropLimit
                 na[id].Current = node.Current
-                na[id].Modified = nodes.self.Current+1
+                na[id].Modified = IncRevision(nodes.self.Current)
                 changed = true
             }
 
@@ -280,7 +280,7 @@ func (nodes *Nodes) Decode(na NodeInfo) (bool, error) {
         orig_active := (nodes.all[id] != nil && nodes.all[id].Active)
 
         if nodes.all[id] == nil ||
-            nodes.all[id].Modified < node.Modified {
+            (*nodes.all[id].Modified).Cmp(node.Modified) < 0 {
             if id == nodes.self.Id() {
                 nodes.self = node
             }

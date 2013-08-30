@@ -7,7 +7,7 @@ enum TYPE {
 
 message Message {
     required uint32 type = 1;
-    required uint64 version = 2;
+    required string version = 2;
     required string id = 3;
     repeated string dead = 4;
 }

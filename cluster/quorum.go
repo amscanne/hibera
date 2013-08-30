@@ -9,10 +9,10 @@ import (
 )
 
 type QuorumResult struct {
-    node *core.Node
-    rev core.Revision
+    node  *core.Node
+    rev   core.Revision
     value []byte
-    err error
+    err   error
 }
 
 func (c *Cluster) getClient(url string) *client.HiberaAPI {
@@ -31,39 +31,37 @@ func (c *Cluster) getClient(url string) *client.HiberaAPI {
 
 func (c *Cluster) doSet(node *core.Node, key core.Key, rev core.Revision, value []byte) (core.Revision, error) {
     if node == c.Nodes.Self() {
-        utils.Print("QUORUM", "    SET-LOCAL key=%s rev=%d", string(key), uint64(rev))
+        utils.Print("QUORUM", "    SET-LOCAL key=%s rev=%s", key.String(), (*rev).String())
         return c.Data.DataSet(key, rev, value)
     }
 
-    utils.Print("QUORUM", "    SET-REMOTE key=%s rev=%d", string(key), uint64(rev))
+    utils.Print("QUORUM", "    SET-REMOTE key=%s rev=%s", key.String(), (*rev).String())
     cl := c.getClient(utils.MakeURL(node.Addr, "", nil))
-    rrev, err := cl.DataSet(string(key), uint64(rev), value)
+    rrev, err := cl.DataSet(key, rev, value)
     return core.Revision(rrev), err
 }
 
 func (c *Cluster) doGet(node *core.Node, key core.Key) ([]byte, core.Revision, error) {
     if node == c.Nodes.Self() {
-        utils.Print("QUORUM", "    GET-LOCAL key=%s", string(key))
+        utils.Print("QUORUM", "    GET-LOCAL key=%s", key.String())
         return c.Data.DataGet(key)
     }
 
-    utils.Print("QUORUM", "    GET-REMOTE key=%s", string(key))
+    utils.Print("QUORUM", "    GET-REMOTE key=%s", key.String())
     cl := c.getClient(utils.MakeURL(node.Addr, "", nil))
-    // NOTE: We specify a revision here that is not possible.
-    // This ensures that the Get call will return immediately.
-    value, rev, err := cl.DataGet(string(key), uint64(0xffffffff), 0)
+    value, rev, err := cl.DataGet(key, core.ZeroRevision, 1)
     return value, core.Revision(rev), err
 }
 
 func (c *Cluster) doRemove(node *core.Node, key core.Key, rev core.Revision) (core.Revision, error) {
     if node == c.Nodes.Self() {
-        utils.Print("QUORUM", "    REMOVE-LOCAL key=%s rev=%d", string(key), uint64(rev))
+        utils.Print("QUORUM", "    REMOVE-LOCAL key=%s rev=%s", key.String(), (*rev).String())
         return c.Data.DataRemove(key, rev)
     }
 
-    utils.Print("QUORUM", "    REMOVE-REMOTE key=%s rev=%d", string(key), uint64(rev))
+    utils.Print("QUORUM", "    REMOVE-REMOTE key=%s rev=%s", key.String(), (*rev).String())
     cl := c.getClient(utils.MakeURL(node.Addr, "", nil))
-    rrev, err := cl.DataRemove(string(key), uint64(rev))
+    rrev, err := cl.DataRemove(key, rev)
     return core.Revision(rrev), err
 }
 
@@ -73,7 +71,7 @@ func NewQuorumError(revcounts map[core.Revision]int) error {
         if len(s) > 0 {
             s += ","
         }
-        s += fmt.Sprintf("rev=%d->%d", uint(rev), count)
+        s += fmt.Sprintf("rev=%s->%d", (*rev).String(), count)
     }
     return errors.New(fmt.Sprintf("QuorumError %s", s))
 }
@@ -84,9 +82,9 @@ func (c *Cluster) quorum(ring *ring, key core.Key, fn func(*core.Node, chan<- *Q
     var self *core.Node
     res := make(chan *QuorumResult)
     var err error
-    maxrev := core.Revision(0)
+    maxrev := core.ZeroRevision
 
-    utils.Print("QUORUM", "START %s (%d/%d)", string(key), len(nodes), ring.Size())
+    utils.Print("QUORUM", "START %s (%d/%d)", key.String(), len(nodes), ring.Size())
 
     // Setup all the requests.
     for _, node := range nodes {
@@ -105,8 +103,8 @@ func (c *Cluster) quorum(ring *ring, key core.Key, fn func(*core.Node, chan<- *Q
             if qrs.err != nil {
                 errstr = fmt.Sprintf("true (%s)", qrs.err.Error())
             }
-            utils.Print("QUORUM", "  NODE id=%s rev=%d err=%s",
-                qrs.node.Id(), uint(qrs.rev), errstr)
+            utils.Print("QUORUM", "  NODE id=%s rev=%s err=%s",
+                qrs.node.Id(), (*qrs.rev).String(), errstr)
         }
     }
 
@@ -134,7 +132,7 @@ func (c *Cluster) quorum(ring *ring, key core.Key, fn func(*core.Node, chan<- *Q
         if qrs[i] != nil && qrs[i].err != nil {
             err = qrs[i].err
         }
-        if qrs[i] != nil && qrs[i].rev > maxrev {
+        if qrs[i] != nil && (*qrs[i].rev).Cmp(maxrev) > 0 {
             maxrev = qrs[i].rev
         }
     }
@@ -158,7 +156,7 @@ func (c *Cluster) quorum(ring *ring, key core.Key, fn func(*core.Node, chan<- *Q
             // ourself, then it is included in the result.
             do_self()
 
-            utils.Print("QUORUM", "SUCCESS rev=%d", uint(rev))
+            utils.Print("QUORUM", "SUCCESS rev=%s", (*rev).String())
             return revrefs[rev], nil
 
             // If the local node is one of the quorum.
@@ -174,7 +172,7 @@ func (c *Cluster) quorum(ring *ring, key core.Key, fn func(*core.Node, chan<- *Q
 
             // If it matches, we have quorum.
             if self_qr != nil && self_qr.err == nil && self_qr.rev == rev {
-                utils.Print("QUORUM", "SUCCESS rev=%d", uint(rev))
+                utils.Print("QUORUM", "SUCCESS rev=%s", (*rev).String())
                 return self_qr, nil
             }
             if self_qr != nil && self_qr.err != nil {
@@ -184,7 +182,7 @@ func (c *Cluster) quorum(ring *ring, key core.Key, fn func(*core.Node, chan<- *Q
 
             // The local node did not match...
             // We stop at this point and remember the maxrev.
-            if self_qr != nil && self_qr.rev > maxrev {
+            if self_qr != nil && (*self_qr.rev).Cmp(maxrev) > 0 {
                 maxrev = self_qr.rev
             }
         }
@@ -202,7 +200,7 @@ func (c *Cluster) quorum(ring *ring, key core.Key, fn func(*core.Node, chan<- *Q
     if self_qr != nil {
         revcounts[self_qr.rev] += 1
         revrefs[self_qr.rev] = self_qr
-        if self_qr.rev > maxrev {
+        if (*self_qr.rev).Cmp(maxrev) > 0 {
             maxrev = self_qr.rev
         }
     }
@@ -217,7 +215,7 @@ func (c *Cluster) quorum(ring *ring, key core.Key, fn func(*core.Node, chan<- *Q
 
 func (c *Cluster) quorumGet(ring *ring, key core.Key) ([]byte, core.Revision, error) {
     fn := func(node *core.Node, res chan<- *QuorumResult) {
-        utils.Print("QUORUM", "  GET key=%s", string(key))
+        utils.Print("QUORUM", "  GET key=%s", key.String())
         value, rev, err := c.doGet(node, key)
         res <- &QuorumResult{node, rev, value, err}
     }
@@ -233,8 +231,8 @@ func (c *Cluster) quorumGet(ring *ring, key core.Key) ([]byte, core.Revision, er
 
 func (c *Cluster) quorumSet(ring *ring, key core.Key, rev core.Revision, value []byte) (core.Revision, error) {
     fn := func(node *core.Node, res chan<- *QuorumResult) {
-        utils.Print("QUORUM", "  SET key=%s rev=%d len=%d",
-            string(key), uint64(rev), len(value))
+        utils.Print("QUORUM", "  SET key=%s rev=%s len=%d",
+            key.String(), (*rev).String(), len(value))
         rev, err := c.doSet(node, key, rev, value)
         res <- &QuorumResult{node, rev, value, err}
     }
@@ -247,8 +245,8 @@ func (c *Cluster) quorumSet(ring *ring, key core.Key, rev core.Revision, value [
 
 func (c *Cluster) quorumRemove(ring *ring, key core.Key, rev core.Revision) (core.Revision, error) {
     fn := func(node *core.Node, res chan<- *QuorumResult) {
-        utils.Print("QUORUM", "  REMOVE key=%s rev=%d",
-            string(key), uint64(rev))
+        utils.Print("QUORUM", "  REMOVE key=%s rev=%s",
+            key.String(), (*rev).String())
         rev, err := c.doRemove(node, key, rev)
         res <- &QuorumResult{node, rev, nil, err}
     }
@@ -261,29 +259,29 @@ func (c *Cluster) quorumRemove(ring *ring, key core.Key, rev core.Revision) (cor
 
 type ListResult struct {
     items []core.Key
-    err error
+    err   error
 }
 
-func (c *Cluster) doList(node *core.Node) ([]core.Key, error) {
+func (c *Cluster) doList(node *core.Node, namespace core.Namespace) ([]core.Key, error) {
     if node == c.Nodes.Self() {
         utils.Print("QUORUM", "    LIST-LOCAL")
-        return c.Data.DataList()
+        return c.Data.DataList(namespace)
     }
 
     utils.Print("QUORUM", "    LIST-REMOTE")
     cl := c.getClient(utils.MakeURL(node.Addr, "", nil))
-    items, err := cl.DataList()
+    items, err := cl.DataList(namespace)
     if items == nil || err != nil {
         return nil, err
     }
     keys := make([]core.Key, len(items), len(items))
     for i, item := range items {
-        keys[i] = core.Key(item)
+        keys[i] = core.Key{namespace, item}
     }
     return keys, nil
 }
 
-func (c *Cluster) allList() ([]core.Key, error) {
+func (c *Cluster) allList(namespace core.Namespace) ([]core.Key, error) {
     nodes := c.Nodes.Inuse()
     items := make(map[core.Key]bool)
 
@@ -291,7 +289,7 @@ func (c *Cluster) allList() ([]core.Key, error) {
 
     // Setup all the requests.
     fn := func(node *core.Node, res chan<- *ListResult) {
-        items, err := c.doList(node)
+        items, err := c.doList(node, namespace)
         res <- &ListResult{items, err}
     }
     reschan := make(chan *ListResult)
@@ -308,7 +306,7 @@ func (c *Cluster) allList() ([]core.Key, error) {
             for _, item := range res.items {
                 // Accept only non-zero length items.
                 // (This excludes the special cluster key).
-                if len(item) > 0 {
+                if len(item.Key) > 0 {
                     items[item] = true
                 }
             }

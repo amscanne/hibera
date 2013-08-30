@@ -169,7 +169,7 @@ func (r *ring) lookup(h string) []*core.Node {
         // that will satisfy our domain requirements.
         if !peraddr[node.Addr] &&
             (len(nodes) < r.slaves ||
-            (!perdomain[node.Domain] && len(perdomain) < r.slaves)) {
+                (!perdomain[node.Domain] && len(perdomain) < r.slaves)) {
             peraddr[node.Addr] = true
             perdomain[node.Domain] = true
             nodes = append(nodes, node)
@@ -195,7 +195,7 @@ func (r *ring) NodesFor(key core.Key) []*core.Node {
     defer r.Mutex.Unlock()
 
     // Check if it's been cached.
-    h := utils.Hash(string(key))
+    h := utils.Hash(key.String())
     cached := r.cache[h]
     if cached == nil {
         // Do a manual lookup.

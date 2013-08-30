@@ -17,6 +17,7 @@ import (
 )
 
 var UnhandledRequest = errors.New("Unhandled request")
+var InvalidRevision = errors.New("Invalid revision")
 var DefaultActive = uint(256)
 
 type Listener struct {
@@ -40,14 +41,6 @@ type HTTPServer struct {
     *Hub
     *Listener
     *http.Server
-}
-
-// This type is used only to serialize
-// the JSON version of this object on the
-// wire. The client has a separate def'n.
-type syncInfo struct {
-    Index   int
-    Members []string
 }
 
 func (l Listener) Accept() (net.Conn, error) {
@@ -114,6 +107,18 @@ func (s *HTTPServer) boolParam(r *http.Request, name string) bool {
     return false
 }
 
+func (s *HTTPServer) revParam(r *http.Request, name string) (core.Revision, error) {
+    values := r.Form[name]
+    if len(values) == 0 {
+        return core.ZeroRevision, nil
+    }
+    rev, ok := core.ParseRevision(values[0])
+    if !ok {
+        return nil, InvalidRevision
+    }
+    return rev, nil
+}
+
 func (s *HTTPServer) strParam(r *http.Request, name string) string {
     values := r.Form[name]
     if len(values) == 0 {
@@ -146,14 +151,27 @@ func (s *HTTPServer) getConnection(r *http.Request, auth string, notifier <-chan
         return nil
     }
 
+    // Our namespace is given by the host header.
+    // If this is given as an IP address, then we use the
+    // default namespace.
+    parts := strings.SplitN(r.Host, ":", 2)
+    var host string
+    if net.ParseIP(parts[0]) == nil {
+        // Use the given host as the namespace.
+        host = parts[0]
+    } else {
+        // Use the default namespace.
+        host = ""
+    }
+
     if len(r.Header["X-Client-Id"]) > 0 {
         // Return a connection with the asssociate conn.
         return s.Hub.FindConnection(ConnectionId(id),
-            UserId(r.Header["X-Client-Id"][0]), r.Host, auth, notifier)
+            UserId(r.Header["X-Client-Id"][0]), host, auth, notifier)
     }
 
     // Return a connection with no associated conn.
-    return s.Hub.FindConnection(ConnectionId(id), "", r.Host, auth, notifier)
+    return s.Hub.FindConnection(ConnectionId(id), "", host, auth, notifier)
 }
 
 func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
@@ -193,7 +211,7 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
     // don't want the parsing code to try to do full extraction
     // of form parameters from the body.
     r.ParseForm()
-    parts := strings.SplitN(r.URL.Path[1:], "/", 2)
+    parts := strings.SplitN(r.URL.Path[1:], "/", 3)
 
     // Prepare our response.
     // If we don't handle the request in the switch below,
@@ -201,164 +219,177 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
     buf := new(bytes.Buffer)
     enc := json.NewEncoder(buf)
     err = UnhandledRequest
-    rev := core.Revision(0)
+    rev := core.ZeroRevision
 
     // Process the request.
-    if len(parts) == 1 {
-        switch parts[0] {
+    if parts[0] == "v1.0" {
+        parts = parts[1:]
 
-        case "":
-            switch r.Method {
-            case "GET":
-                var data []byte
-                data, rev, err = s.Cluster.Info(conn)
-                if err == nil {
-                    _, err = buf.Write(data)
-                }
-                break
-            case "POST":
-                rev, err = s.Cluster.Activate(conn)
-                break
-            case "DELETE":
-                rev, err = s.Cluster.Deactivate(conn)
-                break
-            }
-            break
+        if len(parts) == 1 {
+            switch parts[0] {
 
-        case "data":
-            switch r.Method {
-            case "GET":
-                var items []core.Key
-                items, rev, err = s.Cluster.DataList(conn)
-                if err == nil {
-                    err = enc.Encode(items)
+            case "":
+                switch r.Method {
+                case "GET":
+                    var data []byte
+                    data, rev, err = s.Cluster.Info(conn)
+                    if err == nil {
+                        _, err = buf.Write(data)
+                    }
+                    break
+                case "POST":
+                    rev, err = s.Cluster.Activate(conn)
+                    break
+                case "DELETE":
+                    rev, err = s.Cluster.Deactivate(conn)
+                    break
                 }
                 break
-            }
-            break
 
-        case "access":
-            switch r.Method {
-            case "GET":
-                var tokens []string
-                tokens, rev, err = s.Cluster.AccessList(conn)
-                if err == nil {
-                    err = enc.Encode(tokens)
+            case "data":
+                switch r.Method {
+                case "GET":
+                    var items []core.Key
+                    items, rev, err = s.Cluster.DataList(conn)
+                    if err == nil {
+                        err = enc.Encode(items)
+                    }
+                    break
                 }
                 break
-            }
-            break
 
-        case "nodes":
-            switch r.Method {
-            case "GET":
-                var nodes []string
-                active := s.boolParam(r, "active")
-                nodes, rev, err = s.Cluster.NodeList(conn, active)
-                if err == nil {
-                    err = enc.Encode(nodes)
+            case "access":
+                switch r.Method {
+                case "GET":
+                    var tokens []string
+                    tokens, rev, err = s.Cluster.AccessList(conn)
+                    if err == nil {
+                        err = enc.Encode(tokens)
+                    }
+                    break
                 }
                 break
-            }
-            break
-        }
 
-    } else if len(parts) == 2 {
+            case "nodes":
+                switch r.Method {
+                case "GET":
+                    var nodes []string
+                    active := s.boolParam(r, "active")
+                    nodes, rev, err = s.Cluster.NodeList(conn, active)
+                    if err == nil {
+                        err = enc.Encode(nodes)
+                    }
+                    break
+                }
+                break
+            }
 
-        switch parts[0] {
-        case "sync":
-            switch r.Method {
-            case "GET":
-                name := conn.Name(s.strParam(r, "name"))
-                limit := uint(s.intParam(r, "limit"))
-                info := syncInfo{}
-                info.Index, info.Members, rev, err = s.Cluster.SyncMembers(conn, core.Key(parts[1]), name, limit)
-                if err == nil {
-                    err = enc.Encode(info)
+        } else if len(parts) == 2 {
+
+            key := core.Key{conn.Namespace(), parts[1]}
+
+            switch parts[0] {
+            case "sync":
+                switch r.Method {
+                case "GET":
+                    name := conn.Name(s.strParam(r, "name"))
+                    limit := uint(s.intParam(r, "limit"))
+                    info := core.SyncInfo{}
+                    info.Index, info.Members, rev, err = s.Cluster.SyncMembers(conn, key, name, limit)
+                    if err == nil {
+                        err = enc.Encode(info)
+                    }
+                    break
+                case "POST":
+                    name := conn.Name(s.strParam(r, "name"))
+                    limit := uint(s.intParam(r, "limit"))
+                    timeout := uint(s.intParam(r, "timeout"))
+                    var index int
+                    index, rev, err = s.Cluster.SyncJoin(conn, key, name, limit, timeout)
+                    if err == nil {
+                        err = enc.Encode(index)
+                    }
+                    break
+                case "DELETE":
+                    name := conn.Name(s.strParam(r, "name"))
+                    rev, err = s.Cluster.SyncLeave(conn, key, name)
+                    break
                 }
                 break
-            case "POST":
-                name := conn.Name(s.strParam(r, "name"))
-                limit := uint(s.intParam(r, "limit"))
-                timeout := uint(s.intParam(r, "timeout"))
-                var index int
-                index, rev, err = s.Cluster.SyncJoin(conn, core.Key(parts[1]), name, limit, timeout)
-                if err == nil {
-                    err = enc.Encode(index)
+            case "data":
+                switch r.Method {
+                case "GET":
+                    var value []byte
+                    rev, err = s.revParam(r, "rev")
+                    if err == nil {
+                        timeout := uint(s.intParam(r, "timeout"))
+                        value, rev, err = s.Cluster.DataGet(conn, key, rev, timeout)
+                        if err == nil {
+                            _, err = buf.Write(value)
+                        }
+                    }
+                    break
+                case "POST":
+                    rev, err = s.revParam(r, "rev")
+                    if err == nil {
+                        rev, err = s.Cluster.DataSet(conn, key, rev, content)
+                    }
+                    break
+                case "DELETE":
+                    rev, err = s.revParam(r, "rev")
+                    if err == nil {
+                        rev, err = s.Cluster.DataRemove(conn, key, rev)
+                    }
+                    break
                 }
                 break
-            case "DELETE":
-                name := conn.Name(s.strParam(r, "name"))
-                rev, err = s.Cluster.SyncLeave(conn, core.Key(parts[1]), name)
-                break
-            }
-            break
-        case "data":
-            switch r.Method {
-            case "GET":
-                var value []byte
-                rev = core.Revision(s.intParam(r, "rev"))
-                timeout := uint(s.intParam(r, "timeout"))
-                value, rev, err = s.Cluster.DataGet(conn, core.Key(parts[1]), rev, timeout)
-                if err == nil {
-                    _, err = buf.Write(value)
+            case "access":
+                switch r.Method {
+                case "GET":
+                    var value *core.Token
+                    value, rev, err = s.Cluster.AccessGet(conn, key)
+                    if err == nil {
+                        err = enc.Encode(value)
+                    }
+                    break
+                case "POST":
+                    path := s.strParam(r, "path")
+                    read := s.boolParam(r, "read")
+                    write := s.boolParam(r, "write")
+                    execute := s.boolParam(r, "execute")
+                    rev, err = s.Cluster.AccessUpdate(conn, key, path, read, write, execute)
+                    break
                 }
                 break
-            case "POST":
-                rev = core.Revision(s.intParam(r, "rev"))
-                rev, err = s.Cluster.DataSet(conn, core.Key(parts[1]), rev, content)
-                break
-            case "DELETE":
-                rev = core.Revision(s.intParam(r, "rev"))
-                rev, err = s.Cluster.DataRemove(conn, core.Key(parts[1]), rev)
-                break
-            }
-            break
-        case "access":
-            switch r.Method {
-            case "GET":
-                var value *core.Token
-                value, rev, err = s.Cluster.AccessGet(conn, parts[1])
-                if err == nil {
-                    err = enc.Encode(value)
+            case "nodes":
+                switch r.Method {
+                case "GET":
+                    var value *core.Node
+                    value, rev, err = s.Cluster.NodeGet(conn, parts[1])
+                    if err == nil {
+                        err = enc.Encode(value)
+                    }
+                    break
                 }
                 break
-            case "POST":
-                path := s.strParam(r, "path")
-                read := s.boolParam(r, "read")
-                write := s.boolParam(r, "write")
-                execute := s.boolParam(r, "execute")
-                rev, err = s.Cluster.AccessGrant(conn, parts[1], path, read, write, execute)
-                break
-            case "DELETE":
-                rev, err = s.Cluster.AccessRevoke(conn, parts[1])
-                break
-            }
-            break
-        case "nodes":
-            switch r.Method {
-            case "GET":
-                var value *core.Node
-                value, rev, err = s.Cluster.NodeGet(conn, parts[1])
-                if err == nil {
-                    err = enc.Encode(value)
+            case "event":
+                switch r.Method {
+                case "GET":
+                    rev, err = s.revParam(r, "rev")
+                    if err == nil {
+                        timeout := uint(s.intParam(r, "timeout"))
+                        rev, err = s.Cluster.EventWait(conn, key, rev, timeout)
+                    }
+                    break
+                case "POST":
+                    rev, err = s.revParam(r, "rev")
+                    if err == nil {
+                        rev, err = s.Cluster.EventFire(conn, key, rev)
+                    }
+                    break
                 }
                 break
             }
-            break
-        case "event":
-            switch r.Method {
-            case "GET":
-                rev = core.Revision(s.intParam(r, "rev"))
-                timeout := uint(s.intParam(r, "timeout"))
-                rev, err = s.Cluster.EventWait(conn, core.Key(parts[1]), rev, timeout)
-                break
-            case "POST":
-                rev = core.Revision(s.intParam(r, "rev"))
-                rev, err = s.Cluster.EventFire(conn, core.Key(parts[1]), rev)
-                break
-            }
-            break
         }
     }
 
@@ -368,10 +399,9 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
         // We fully specify the Content-Length that was written
         // and always return a revision (although often it will
         // be 0 because the call didn't have a revision).
-        revstr := strconv.FormatUint(uint64(rev), 10)
-        w.Header().Set("X-Revision", revstr)
+        w.Header().Set("X-Revision", (*rev).String())
         w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
-        utils.Print("HTTP", "200 X-Revision %s", revstr)
+        utils.Print("HTTP", "200 X-Revision %s", (*rev).String())
         io.Copy(w, buf)
         break
 
@@ -405,7 +435,7 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
         // The error could result from a revision conflict,
         // so this is important information and can't just
         // be ignored by the client.
-        w.Header().Set("X-Revision", strconv.FormatUint(uint64(rev), 10))
+        w.Header().Set("X-Revision", (*rev).String())
         utils.Print("HTTP", "501")
         http.Error(w, err.Error(), http.StatusInternalServerError)
         break
@@ -437,8 +467,8 @@ func NewHTTPServer(cluster *cluster.Cluster, addr string, port uint, active uint
         server.process(w, r)
     }
     server.Server = &http.Server{
-        Handler: http.HandlerFunc(handler),
-        ReadTimeout: 0,
+        Handler:      http.HandlerFunc(handler),
+        ReadTimeout:  0,
         WriteTimeout: 0,
     }
 

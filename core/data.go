@@ -4,6 +4,7 @@ import (
     "errors"
     "hibera/storage"
     "hibera/utils"
+    "math/big"
     "sync"
     "time"
 )
@@ -18,6 +19,27 @@ type NameMap map[string]Revision
 type EphemeralSet map[EphemId]NameMap
 
 var NotFound = errors.New("Key not found or inconsistent")
+var ZeroRevision = big.NewInt(0)
+
+func AsRevision(rev_bytes []byte) Revision {
+    rev := big.NewInt(0)
+    rev.SetBytes(rev_bytes)
+    return rev
+}
+
+func FromRevision(rev Revision) []byte {
+    return (*rev).Bytes()
+}
+
+func IncRevision(rev Revision) Revision {
+    inc_rev := big.NewInt(1)
+    return inc_rev.Add(rev, inc_rev)
+}
+
+func ParseRevision(rev_str string) (Revision, bool) {
+    rev := big.NewInt(0)
+    return rev.SetString(rev_str, 0)
+}
 
 type Lock struct {
     sem     chan bool
@@ -99,7 +121,7 @@ type Data struct {
     // split this into a more scalable structure
     // if it becomes a clear bottleneck.
     locks map[Key]*Lock
-    revs RevisionMap
+    revs  RevisionMap
     *sync.Cond
 
     // In-memory ephemera.
@@ -123,14 +145,27 @@ func (d *Data) lock(key Key) *Lock {
     return lock
 }
 
-func (d *Data) DataList() ([]Key, error) {
-    items, err := d.store.List()
+func (d *Data) DataNamespaces() ([]Namespace, error) {
+    items, err := d.store.Namespaces()
+    if err != nil {
+        return nil, err
+    }
+    namespaces := make([]Namespace, len(items), len(items))
+    for i, item := range items {
+        namespaces[i] = Namespace(item)
+    }
+
+    return namespaces, nil
+}
+
+func (d *Data) DataList(namespace Namespace) ([]Key, error) {
+    items, err := d.store.List(string(namespace))
     if err != nil {
         return nil, err
     }
     keys := make([]Key, len(items), len(items))
     for i, item := range items {
-        keys[i] = Key(item)
+        keys[i] = Key{namespace, item}
     }
 
     return keys, nil
@@ -174,7 +209,7 @@ func (d *Data) computeIndex(revmap *EphemeralSet, name string, limit uint) (int,
             current += 1
         } else {
             for i, current := range members {
-                if revjoined <= allmap[current] {
+                if (*revjoined).Cmp(allmap[current]) <= 0 {
                     members[i] = candidate
                     break
                 }
@@ -187,7 +222,7 @@ func (d *Data) computeIndex(revmap *EphemeralSet, name string, limit uint) (int,
     for i, membermin1 := range members {
         for j, membermin2 := range members {
             if i < j &&
-                allmap[membermin2] < allmap[membermin1] {
+                (*allmap[membermin2]).Cmp(allmap[membermin1]) < 0 {
                 // Swap, we're not the right order.
                 members[i] = membermin2
                 members[j] = membermin1
@@ -235,7 +270,7 @@ func (d *Data) SyncJoin(
         }
 
         // Check that we're still not there already.
-        if (*revmap)[id][name] > 0 {
+        if (*(*revmap)[id][name]).Sign() > 0 {
             index, _ := d.computeIndex(revmap, name, limit)
             return index, d.revs[key], nil
         }
@@ -263,9 +298,10 @@ func (d *Data) SyncJoin(
     }
 
     // Join and fire.
-    rev, err := d.doFire(key, 0, lock)
+    rev, err := d.doFire(key, ZeroRevision, lock)
     (*revmap)[id][name] = rev
-    utils.Print("DATA", "JOIN key=%s index=%d id=%d", string(key), index, uint64(id))
+    utils.Print("DATA", "JOIN key=%s index=%d id=%d",
+        key.String(), index, uint64(id))
     return index, rev, err
 }
 
@@ -276,7 +312,7 @@ func (d *Data) SyncLeave(id EphemId, key Key, name string) (Revision, error) {
     // Lookup the key and see if we're a member.
     revmap := d.sync[key]
     if revmap == nil {
-        return 0, NotFound
+        return ZeroRevision, NotFound
     }
 
     // Leave the key.
@@ -291,18 +327,20 @@ func (d *Data) SyncLeave(id EphemId, key Key, name string) (Revision, error) {
         delete(d.sync, key)
     }
 
-    utils.Print("DATA", "LEAVE key=%s id=%d", string(key), uint64(id))
-    return d.doFire(key, 0, lock)
+    utils.Print("DATA", "LEAVE key=%s id=%d",
+        key.String(), uint64(id))
+    return d.doFire(key, ZeroRevision, lock)
 }
 
 func (d *Data) DataGet(key Key) ([]byte, Revision, error) {
     // Read the local value available.
-    value, rev, err := d.store.Read(string(key))
-    return value, Revision(rev), err
+    value, rev_bytes, err := d.store.Read(string(key.Namespace), string(key.Key))
+    return value, AsRevision(rev_bytes), err
 }
 
 func (d *Data) DataWatch(
-    id EphemId, key Key, rev Revision, timeout uint,
+    id EphemId, key Key,
+    rev Revision, timeout uint,
     notifier <-chan bool,
     valid func() bool) ([]byte, Revision, error) {
 
@@ -311,8 +349,8 @@ func (d *Data) DataWatch(
 
     if id > 0 {
         getrev := func() (Revision, error) {
-            _, lrev, err := d.store.Read(string(key))
-            return Revision(lrev), err
+            _, rev_bytes, err := d.store.Read(string(key.Namespace), string(key.Key))
+            return AsRevision(rev_bytes), err
         }
         rev, err := d.doWait(id, key, lock, rev, timeout, getrev, notifier, valid)
         if err != nil {
@@ -324,7 +362,10 @@ func (d *Data) DataWatch(
     return d.DataGet(key)
 }
 
-func (d *Data) DataModify(key Key, rev Revision, mod func(Revision) error) (Revision, error) {
+func (d *Data) DataModify(
+    key Key, rev Revision,
+    mod func(Revision) error) (Revision, error) {
+
     lock := d.lock(key)
     defer func() {
         lock.notify(key)
@@ -332,15 +373,15 @@ func (d *Data) DataModify(key Key, rev Revision, mod func(Revision) error) (Revi
     }()
 
     // Read the existing data.
-    _, orev, err := d.store.Read(string(key))
+    _, rev_bytes, err := d.store.Read(string(key.Namespace), string(key.Key))
     if err != nil {
-        return Revision(orev), err
+        return AsRevision(rev_bytes), err
     }
-    if rev == 0 {
-        rev = Revision(orev) + 1
+    if rev == ZeroRevision {
+        rev = IncRevision(AsRevision(rev_bytes))
     }
-    if rev <= Revision(orev) {
-        return Revision(orev), err
+    if (*rev).Cmp(AsRevision(rev_bytes)) <= 0 {
+        return AsRevision(rev_bytes), err
     }
 
     // Do the operation.
@@ -348,14 +389,20 @@ func (d *Data) DataModify(key Key, rev Revision, mod func(Revision) error) (Revi
 }
 
 func (d *Data) DataSet(key Key, rev Revision, value []byte) (Revision, error) {
+
     return d.DataModify(key, rev, func(rev Revision) error {
-        return d.store.Write(string(key), value, uint64(rev))
+        return d.store.Write(
+            string(key.Namespace),
+            string(key.Key),
+            value,
+            FromRevision(rev))
     })
 }
 
 func (d *Data) DataRemove(key Key, rev Revision) (Revision, error) {
+
     return d.DataModify(key, rev, func(rev Revision) error {
-        err := d.store.Delete(string(key))
+        err := d.store.Delete(string(key.Namespace), string(key.Key))
         if err == nil {
             delete(d.revs, key)
         }
@@ -364,7 +411,8 @@ func (d *Data) DataRemove(key Key, rev Revision) (Revision, error) {
 }
 
 func (d *Data) doWait(
-    id EphemId, key Key, lock *Lock, rev Revision, timeout uint,
+    id EphemId, key Key, lock *Lock,
+    rev Revision, timeout uint,
     getrev func() (Revision, error),
     notifier <-chan bool,
     valid func() bool) (Revision, error) {
@@ -402,8 +450,8 @@ func (d *Data) doWait(
 }
 
 func (d *Data) EventWait(
-    id EphemId, key Key, rev Revision, timeout uint,
-    notifier <-chan bool,
+    id EphemId, key Key, rev Revision,
+    timeout uint, notifier <-chan bool,
     valid func() bool) (Revision, error) {
 
     lock := d.lock(key)
@@ -413,21 +461,22 @@ func (d *Data) EventWait(
         return d.revs[key], nil
     }
     // If the rev is 0, then we start waiting on the current rev.
-    if rev == 0 {
+    if rev == ZeroRevision {
         rev, _ = getrev()
     }
     return d.doWait(id, key, lock, rev, timeout, getrev, notifier, valid)
 }
 
 func (d *Data) doFire(key Key, rev Revision, lock *Lock) (Revision, error) {
+
     // Check our condition.
-    if rev != 0 && rev <= d.revs[key] {
+    if rev != ZeroRevision && (*rev).Cmp(d.revs[key]) <= 0 {
         return d.revs[key], NotFound
     }
 
     // Update our rev.
-    if rev == 0 {
-        rev = d.revs[key] + 1
+    if rev == ZeroRevision {
+        rev = IncRevision(d.revs[key])
     }
     d.revs[key] = rev
 
@@ -461,7 +510,7 @@ func (d *Data) Purge(id EphemId) {
 
     // Fire watches.
     for _, path := range paths {
-        d.EventFire(path, 0)
+        d.EventFire(path, ZeroRevision)
     }
 }
 

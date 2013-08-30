@@ -63,7 +63,7 @@ func (s *GossipServer) sendPingPong(addr *net.UDPAddr, pong bool) {
 
     // Build our ping message.
     t := uint32(TYPE_PING)
-    version := uint64(s.Cluster.Version())
+    version := (*s.Cluster.Version()).String()
     id := s.Cluster.Nodes.Self().Id()
     if pong {
         t = uint32(TYPE_PONG)
@@ -152,12 +152,17 @@ func (s *GossipServer) process(addr *net.UDPAddr, m *Message) {
         return
     }
 
+    rev, ok := core.ParseRevision(m.GetVersion())
+    if !ok {
+        return
+    }
+
     // Update the cluster status based on gossip.
     utils.Print("GOSSIP", "RECV addr=%s type=%d", addr, m.GetType())
-    s.Cluster.GossipUpdate(addr, m.GetId(),
-        core.Revision(m.GetVersion()), m.GetDead())
+    s.Cluster.GossipUpdate(addr, m.GetId(), rev, m.GetDead())
 
-    if m.GetType() == uint32(TYPE_PING) && s.Cluster.Version() > 0 {
+    if m.GetType() == uint32(TYPE_PING) &&
+       (*s.Cluster.Version()).Cmp(core.ZeroRevision) > 0 {
         // Respond to the ping.
         go s.sendPingPong(addr, true)
     }

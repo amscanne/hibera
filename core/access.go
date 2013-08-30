@@ -7,18 +7,18 @@ import (
 
 type Access struct {
     // The map of all access.
-    all AccessInfo
+    all     AccessInfo
     allLock sync.RWMutex
 
     // Proposals for tokens.
-    proposed AccessInfo
+    proposed     AccessInfo
     proposedLock sync.RWMutex
 
     // The default admin authorization.
     auth string
 }
 
-func (access *Access) Check(ns Namespace, auth string, path string, read bool, write bool, execute bool) bool {
+func (access *Access) Check(key Key, auth string, read bool, write bool, execute bool) bool {
     access.allLock.RLock()
     defer access.allLock.RUnlock()
 
@@ -26,7 +26,7 @@ func (access *Access) Check(ns Namespace, auth string, path string, read bool, w
     // check this authentication token against the
     // global token. This allows the global token
     // to manipulate unconfigured namespaces.
-    token, ok := access.all[ns][auth]
+    token, ok := access.all[key.Namespace][auth]
     if !ok {
         return auth == access.auth
     }
@@ -34,7 +34,7 @@ func (access *Access) Check(ns Namespace, auth string, path string, read bool, w
     // Check the paths against the current.
     for _, perms := range token {
         // Check the specific operations.
-        if perms.re != nil && perms.re.Match([]byte(path)) {
+        if perms.re != nil && perms.re.Match([]byte(key.Key)) {
             if (!read || perms.Read) && (!write || perms.Write) || (!execute || perms.Execute) {
                 return true
             }
@@ -64,51 +64,38 @@ func (access *Access) List(ns Namespace) []string {
     return res
 }
 
-func (access *Access) Get(ns Namespace, auth string) (*Token, error) {
+func (access *Access) Get(auth Key) (*Token, error) {
     access.allLock.RLock()
     defer access.allLock.RUnlock()
 
     // Namespace does not exist.
-    if _, ok := access.all[ns]; !ok {
+    if _, ok := access.all[auth.Namespace]; !ok {
         return nil, nil
     }
 
     // Get associated paths.
-    token, ok := access.all[ns][auth]
+    token, ok := access.all[auth.Namespace][auth.Key]
     if !ok {
         return nil, nil
     }
     return &token, nil
 }
 
-func (access *Access) Update(ns Namespace, auth string, path string, read bool, write bool, execute bool) error {
+func (access *Access) Update(auth Key, path string, read bool, write bool, execute bool) error {
     access.proposedLock.Lock()
     defer access.proposedLock.Unlock()
 
     // Ensure the namespace exists.
-    if _, ok := access.proposed[ns]; !ok {
-        access.proposed[ns] = make(NamespaceAccess)
+    if _, ok := access.proposed[auth.Namespace]; !ok {
+        access.proposed[auth.Namespace] = make(NamespaceAccess)
     }
 
     // Add the proposal.
-    if _, ok := access.proposed[ns][auth]; !ok {
-        access.proposed[ns][auth] = make(Token)
+    if _, ok := access.proposed[auth.Namespace][auth.Key]; !ok {
+        access.proposed[auth.Namespace][auth.Key] = make(Token)
     }
-    access.proposed[ns][auth][path] = Perms{read, write, execute, nil}
+    access.proposed[auth.Namespace][auth.Key][path] = Perms{read, write, execute, nil}
     return nil
-}
-
-func (access *Access) Remove(ns Namespace, auth string) {
-    access.proposedLock.Lock()
-    defer access.proposedLock.Unlock()
-
-    // Ensure the namespace exists.
-    if _, ok := access.proposed[ns]; !ok {
-        access.proposed[ns] = make(NamespaceAccess)
-    }
-
-    // Add the proposal.
-    access.proposed[ns][auth] = nil
 }
 
 func (access *Access) Encode(next bool, info AccessInfo) (bool, error) {

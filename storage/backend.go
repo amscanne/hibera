@@ -19,12 +19,17 @@ var MaximumLogBatch = 256
 var MaximumLogSize = int64(1024 * 1024)
 
 type Val struct {
-    Rev   uint64
+    Rev   []byte
     Value []byte
 }
 
+type Index struct {
+    Namespace string
+    Key       string
+}
+
 type Entry struct {
-    Key string
+    Index
     Val
 }
 
@@ -36,12 +41,12 @@ type Update struct {
 type Backend struct {
     path string
 
-    accepted map[string]Val
+    accepted map[Index]Val
 
     data *os.File
     log1 *os.File
     log2 *os.File
-    cs chan *Update
+    cs   chan *Update
 }
 
 func OpenLocked(filename string) (*os.File, error) {
@@ -82,7 +87,7 @@ func NewBackend(p string) *Backend {
 }
 
 func (b *Backend) init() error {
-    b.accepted = make(map[string]Val)
+    b.accepted = make(map[Index]Val)
 
     // Open our files.
     data, err := OpenLocked(path.Join(b.path, "data"))
@@ -217,8 +222,8 @@ func (b *Backend) pivotLogs() error {
     if err != nil {
         return err
     }
-    for key, val := range b.accepted {
-        err = serialize(data, &Entry{key, val})
+    for index, val := range b.accepted {
+        err = serialize(data, &Entry{index, val})
         if err != nil {
             return err
         }
@@ -251,9 +256,9 @@ func (b *Backend) loadFile(file *os.File) error {
 
         // Atomic set on our map.
         if entry.Val.Value == nil {
-            delete(b.accepted, entry.Key)
+            delete(b.accepted, entry.Index)
         } else {
-            b.accepted[entry.Key] = entry.Val
+            b.accepted[entry.Index] = entry.Val
         }
     }
 
@@ -284,11 +289,11 @@ func (b *Backend) logWriter() {
     process := func(update *Update) {
         if update.Entry.Val.Value == nil {
             // It's a promise, try to set.
-            delete(b.accepted, update.Entry.Key)
+            delete(b.accepted, update.Entry.Index)
         } else {
             // Update the in-memory database.
             // NOTE: This should be atomic.
-            b.accepted[update.Entry.Key] = update.Entry.Val
+            b.accepted[update.Entry.Index] = update.Entry.Val
         }
 
         // Serialize the entry to the log.
@@ -330,27 +335,43 @@ func (b *Backend) logWriter() {
     }
 }
 
-func (b *Backend) Write(key string, value []byte, rev uint64) error {
-    val := Val{rev, value}
-    entry := Entry{key, val}
+func (b *Backend) Write(namespace string, key string, value []byte, rev_bytes []byte) error {
+    index := Index{namespace, key}
+    val := Val{rev_bytes, value}
+    entry := Entry{index, val}
     update := &Update{entry, make(chan error, 1)}
     b.cs <- update
     return <-update.result
 }
 
-func (b *Backend) Read(key string) ([]byte, uint64, error) {
-    val := b.accepted[key]
+func (b *Backend) Read(namespace string, key string) ([]byte, []byte, error) {
+    index := Index{namespace, key}
+    val := b.accepted[index]
     return val.Value, val.Rev, nil
 }
 
-func (b *Backend) Delete(key string) error {
-    return b.Write(key, nil, 0)
+func (b *Backend) Delete(namespace string, key string) error {
+    return b.Write(namespace, key, nil, make([]byte, 0, 0))
 }
 
-func (b *Backend) List() ([]string, error) {
-    keys := make([]string, 0, len(b.accepted))
-    for k, _ := range b.accepted {
-        keys = append(keys, k)
+func (b *Backend) Namespaces() ([]string, error) {
+    ns_map := make(map[string]bool)
+    for index, _ := range b.accepted {
+        ns_map[index.Namespace] = true
+    }
+    namespaces := make([]string, 0, 0)
+    for ns, _ := range ns_map {
+        namespaces = append(namespaces, ns)
+    }
+    return namespaces, nil
+}
+
+func (b *Backend) List(namespace string) ([]string, error) {
+    keys := make([]string, 0, 0)
+    for index, _ := range b.accepted {
+        if index.Namespace == namespace {
+            keys = append(keys, index.Key)
+        }
     }
     return keys, nil
 }
