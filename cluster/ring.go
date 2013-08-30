@@ -3,24 +3,13 @@ package cluster
 import (
     "hibera/core"
     "hibera/utils"
-    "os"
     "sort"
     "sync"
 )
 
-func defaultDomain() string {
-    hostname, err := os.Hostname()
-    if err != nil {
-        return ""
-    }
-    return hostname
-}
-
-var DefaultDomain = defaultDomain()
-
 type ring struct {
     // The count of slaves per key.
-    slaves int
+    slaves uint
 
     // Our key map.
     // This is a simple map of all node core.Keys to the appropriate node.
@@ -41,7 +30,7 @@ type ring struct {
     sync.Mutex
 }
 
-func NewRing(slaves int, nodes *core.Nodes) *ring {
+func NewRing(slaves uint, nodes *core.Nodes) *ring {
     r := new(ring)
     r.slaves = slaves
     r.Nodes = nodes
@@ -168,15 +157,15 @@ func (r *ring) lookup(h string) []*core.Node {
         // And we always take the first N nodes
         // that will satisfy our domain requirements.
         if !peraddr[node.Addr] &&
-            (len(nodes) < r.slaves ||
-                (!perdomain[node.Domain] && len(perdomain) < r.slaves)) {
+            (len(nodes) < int(r.slaves) ||
+                (!perdomain[node.Domain] && len(perdomain) < int(r.slaves))) {
             peraddr[node.Addr] = true
             perdomain[node.Domain] = true
             nodes = append(nodes, node)
         }
 
         // Check if we've satisfied all of our requirements.
-        if len(nodes) >= r.slaves && len(perdomain) >= r.slaves {
+        if len(nodes) >= int(r.slaves) && len(perdomain) >= int(r.slaves) {
             break
         }
 

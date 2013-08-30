@@ -110,7 +110,7 @@ func (c *Cluster) Info(conn Connection) ([]byte, core.Revision, error) {
     return bytes, c.rev, err
 }
 
-func (c *Cluster) Activate(conn Connection) (core.Revision, error) {
+func (c *Cluster) Activate(conn Connection, N uint) (core.Revision, error) {
     utils.Print("CLUSTER", "ACTIVATE")
 
     err := c.Authorize(HiberaKey, conn.Auth(), true, true, false)
@@ -118,11 +118,20 @@ func (c *Cluster) Activate(conn Connection) (core.Revision, error) {
         return c.rev, err
     }
 
-    // NOTE: The activate call is sent to a specific node,
-    // we do not redirect to the master node in this case.
+    if c.Active() {
+        // If we're already activated, then this call
+        // can be used just to change the replication
+        // factor used across the cluster. Simply send
+        // the client to the current master node.
+        _, err = c.doRedirect(conn, HiberaKey)
+        if err != nil {
+            return c.rev, err
+        }
+    }
+
     c.Mutex.Lock()
     defer c.Mutex.Unlock()
-    return c.rev, c.lockedActivate()
+    return c.rev, c.lockedActivate(N)
 }
 
 func (c *Cluster) Deactivate(conn Connection) (core.Revision, error) {
@@ -264,17 +273,17 @@ func (c *Cluster) DataRemove(conn Connection, key core.Key, rev core.Revision) (
     return c.quorumRemove(c.ring, key, rev)
 }
 
-func (c *Cluster) SyncMembers(conn Connection, key core.Key, name string, limit uint) (int, []string, core.Revision, error) {
+func (c *Cluster) SyncMembers(conn Connection, key core.Key, name string, limit uint) (core.SyncInfo, core.Revision, error) {
     utils.Print("CLUSTER", "SYNC-MEMBERS key=%s name=%s limit=%d", key.String(), name, limit)
 
     err := c.Authorize(key, conn.Auth(), true, false, true)
     if err != nil {
-        return -1, nil, core.ZeroRevision, err
+        return core.NoSyncInfo, core.ZeroRevision, err
     }
 
     server, err := c.doRedirect(conn, key)
     if err != nil || server {
-        return -1, nil, core.ZeroRevision, err
+        return core.NoSyncInfo, core.ZeroRevision, err
     }
 
     return c.Data.SyncMembers(key, name, limit)

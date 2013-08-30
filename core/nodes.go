@@ -202,7 +202,7 @@ func (nodes *Nodes) Self() *Node {
     return nodes.self
 }
 
-func (nodes *Nodes) Encode(next bool, na NodeInfo, N int) (bool, error) {
+func (nodes *Nodes) Encode(next bool, na NodeInfo, N uint) (bool, error) {
     nodes.RWMutex.Lock()
     defer nodes.RWMutex.Unlock()
 
@@ -235,7 +235,7 @@ func (nodes *Nodes) Encode(next bool, na NodeInfo, N int) (bool, error) {
             // from a single domain at a time. This is done
             // to ensure that the cluster can reach a consistent
             // state after each transition.
-            if domains[node.Domain] || len(domains) < N {
+            if domains[node.Domain] || len(domains) < int(N) {
                 // Propose this as an active node.
                 domains[node.Domain] = true
                 na[id] = NewNode(node.Addr, node.Keys, node.Domain)
@@ -246,7 +246,7 @@ func (nodes *Nodes) Encode(next bool, na NodeInfo, N int) (bool, error) {
 
         } else if next && node.Active && node != nodes.self && !node.Alive() {
             // Check if we can't remove this domain.
-            if domains[node.Domain] || len(domains) < N {
+            if domains[node.Domain] || len(domains) < int(N) {
                 // Propose this as a removed node.
                 domains[node.Domain] = true
                 na[id] = NewNode(node.Addr, node.Keys, node.Domain)

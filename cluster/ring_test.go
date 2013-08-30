@@ -6,7 +6,7 @@ import (
     "testing"
 )
 
-var DefaultSize = uint(128)
+var TestSize = uint(128)
 
 func Setup(size uint, keys uint) *ring {
     nodes := core.NewTestNodes(size+1, keys+1)
@@ -23,22 +23,22 @@ func TestHash(t *testing.T) {
 }
 
 func BenchmarkRecomputeBySize(b *testing.B) {
-    Setup(uint(b.N), DefaultKeys)
+    Setup(uint(b.N), utils.DefaultKeys)
 }
 
 func BenchmarkRecomputeByKeys(b *testing.B) {
-    Setup(DefaultSize, uint(b.N))
+    Setup(TestSize, uint(b.N))
 }
 
 func BenchmarkCached(b *testing.B) {
-    r := Setup(DefaultSize, DefaultKeys)
+    r := Setup(TestSize, utils.DefaultKeys)
     for i := 0; i < b.N; i += 1 {
         r.NodesFor(core.Key{"", ""})
     }
 }
 
 func BenchmarkUncached(b *testing.B) {
-    r := Setup(DefaultSize, DefaultKeys)
+    r := Setup(TestSize, utils.DefaultKeys)
     for i := 0; i < b.N; i += 1 {
         r.lookup(utils.Hash(""))
     }

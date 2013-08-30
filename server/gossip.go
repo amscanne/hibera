@@ -3,11 +3,9 @@ package server
 import (
     "code.google.com/p/goprotobuf/proto"
     "fmt"
-    "hibera/client"
     "hibera/cluster"
     "hibera/core"
     "hibera/utils"
-    "log"
     "math/rand"
     "net"
     "time"
@@ -24,9 +22,6 @@ type GossipServer struct {
     // no other known nodes are available.
     seeds []string
 }
-
-// The send addresses when not in a cluster.
-var DefaultSeeds = "255.255.255.255"
 
 // The frequency (in ms) of heartbeats.
 var MinHeartbeat = 100
@@ -96,7 +91,7 @@ func (s *GossipServer) heartbeat() {
     index := rand.Int() % (len(nodes) + len(s.seeds))
     if index < len(nodes) {
         node := nodes[index]
-        addr, _ = utils.GenerateUDPAddr(node.Addr, "", client.DefaultPort)
+        addr, _ = utils.GenerateUDPAddr(node.Addr, "", utils.DefaultPort)
         if addr != nil {
             // We're going to send, so assume the packet has dropped
             // and all will be reset when we actually get a response.
@@ -105,7 +100,7 @@ func (s *GossipServer) heartbeat() {
     } else {
         // Pick a seed and send a ping.
         seed := s.seeds[index-len(nodes)]
-        addr, _ = utils.GenerateUDPAddr(seed, "", client.DefaultPort)
+        addr, _ = utils.GenerateUDPAddr(seed, "", utils.DefaultPort)
     }
 
     // Send a packet if we've got an address.
@@ -126,24 +121,22 @@ func (s *GossipServer) Sender() {
     }
 }
 
-func NewGossipServer(c *cluster.Cluster, addr string, port uint, seeds []string) *GossipServer {
+func NewGossipServer(c *cluster.Cluster, addr string, port uint, seeds []string) (*GossipServer, error) {
     udpaddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", addr, port))
     if err != nil {
-        log.Print("Unable to resolve address: ", err)
-        return nil
+        return nil, err
     }
 
     conn, err := net.ListenUDP("udp", udpaddr)
     if err != nil {
-        log.Print("Unable to bind Gossip server: ", err)
-        return nil
+        return nil, err
     }
 
     gs := new(GossipServer)
     gs.Cluster = c
     gs.conn = conn
     gs.seeds = seeds
-    return gs
+    return gs, nil
 }
 
 func (s *GossipServer) process(addr *net.UDPAddr, m *Message) {

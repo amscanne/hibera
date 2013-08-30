@@ -18,8 +18,6 @@ import (
 )
 
 var NoRevision = errors.New("No X-Revision Found")
-var DefaultPort = uint(2033)
-var DefaultHost = "localhost"
 
 type HiberaAPI struct {
     urls         []string
@@ -119,7 +117,7 @@ func NewHiberaClient(addrs string, auth string, delay uint) *HiberaAPI {
     } else {
         os.Setenv("HIBERA_AUTH", auth)
     }
-    urls := utils.GenerateURLs(addrs, DefaultHost, DefaultPort)
+    urls := utils.GenerateURLs(addrs, utils.DefaultHost, utils.DefaultPort)
     clientid := generateClientId()
     return NewHiberaAPI(urls, auth, clientid, delay, true)
 }
@@ -298,8 +296,9 @@ func (h *HiberaAPI) Info() ([]byte, core.Revision, error) {
     return h.doRequest("GET", args, "")
 }
 
-func (h *HiberaAPI) Activate() error {
+func (h *HiberaAPI) Activate(replication uint) error {
     args := h.makeArgs("", "/v1.0/")
+    args.params["replication"] = string(replication)
     _, _, err := h.doRequest("POST", args, "")
     return err
 }

@@ -12,8 +12,6 @@ import (
     "time"
 )
 
-var DefaultKeys = uint(128)
-var DefaultN = uint(1)
 var RootNamespace = core.Namespace("")
 
 func RootKeyFor(namespace core.Namespace) core.Key {
@@ -27,7 +25,10 @@ type Cluster struct {
     auth string
 
     // Our replication factor.
-    N   int
+    N uint
+
+    // The updated replication factor.
+    new_N uint
 
     // The cluster revision.
     // When the cluster has not yet been activated (i.e.
@@ -76,6 +77,14 @@ type Cluster struct {
 func (c *Cluster) lockedEncode(next bool) ([]byte, error) {
     info := core.NewInfo()
 
+    if next {
+        // Encode the new replication factor.
+        info.N = c.new_N
+    } else {
+        // Ensure our current replication factor.
+        info.N = c.N
+    }
+
     // Encode our nodes.
     nodes_changed, err := c.Nodes.Encode(next, info.Nodes, c.N)
     if err != nil {
@@ -91,7 +100,7 @@ func (c *Cluster) lockedEncode(next bool) ([]byte, error) {
     }
 
     // Check if we're encoding anything interesting.
-    if next && !nodes_changed && !access_changed {
+    if next && (info.N == c.N) && !nodes_changed && !access_changed {
         utils.Print("CLUSTER", "NOTHING-DOING")
         return nil, nil
     }
@@ -122,7 +131,18 @@ func (c *Cluster) lockedDecode(data []byte) (bool, error) {
     }
 
     // Do the token decode.
+    // Note: there is no turning back at this point.
+    // We've already successfully decoded node updates,
+    // so even if we have errors decoding the access
+    // updates we will continue to press on.
     err = c.Access.Decode(info.Access)
+
+    // Reset our N value.
+    if c.N != info.N {
+        c.N = info.N
+        force = true
+    }
+
     return force, err
 }
 
@@ -130,10 +150,11 @@ func (c *Cluster) Active() bool {
     return c.rev != core.ZeroRevision
 }
 
-func (c *Cluster) lockedActivate() error {
-    // If we're already activated, ignore.
+func (c *Cluster) lockedActivate(N uint) error {
+    // If we're already activated, we simply
+    // take on the latest replication factor.
     if c.Active() {
-        utils.Print("CLUSTER", "ALREADY-ACTIVATED")
+        c.new_N = N
         return nil
     }
 
@@ -156,6 +177,7 @@ func (c *Cluster) lockedActivate() error {
     }
 
     // Save the revision.
+    c.N = N
     c.lockedChangeRevision(rev_one, true)
     return nil
 }
@@ -465,9 +487,15 @@ func (c *Cluster) timedHealthcheck() {
     time.AfterFunc(time.Duration(1)*time.Second, f)
 }
 
-func NewCluster(N uint, backend *storage.Backend, addr string, auth string, domain string, ids []string) *Cluster {
+func NewCluster(
+    backend *storage.Backend,
+    addr string,
+    auth string,
+    domain string,
+    ids []string) (*Cluster, error) {
+
     c := new(Cluster)
-    c.N = int(N)
+    c.N = uint(0)
     c.rev = core.ZeroRevision
     c.auth = auth
     c.Nodes = core.NewNodes(addr, ids, domain)
@@ -496,5 +524,5 @@ func NewCluster(N uint, backend *storage.Backend, addr string, auth string, doma
     // Start running our healthcheck.
     go c.timedHealthcheck()
 
-    return c
+    return c, nil
 }

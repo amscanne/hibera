@@ -5,25 +5,23 @@ import (
     "hibera/utils"
 )
 
-var DefaultBind = ""
-
 type Server struct {
     *HTTPServer
     *GossipServer
 }
 
-func NewServer(c *cluster.Cluster, addr string, port uint, seeds []string, active uint) *Server {
-    http := NewHTTPServer(c, addr, port, active)
-    if http == nil {
-        return nil
+func NewServer(c *cluster.Cluster, addr string, port uint, seeds []string, active uint) (*Server, error) {
+    http, err := NewHTTPServer(c, addr, port, active)
+    if err != nil {
+        return nil, err
     }
 
-    gossip := NewGossipServer(c, addr, port, seeds)
-    if gossip == nil {
-        return nil
+    gossip, err := NewGossipServer(c, addr, port, seeds)
+    if err != nil {
+        return nil, err
     }
 
-    return &Server{http, gossip}
+    return &Server{http, gossip}, nil
 }
 
 func (s *Server) Run() {

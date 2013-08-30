@@ -8,73 +8,32 @@ import (
     "hibera/client"
     "hibera/core"
     "hibera/utils"
+    "hibera/cli"
     "io"
     "io/ioutil"
-    "log"
-    "math/rand"
     "os"
     "os/exec"
     "strings"
     "syscall"
-    "time"
+    "errors"
 )
 
-var api = flag.String("api", "", "API address (comma-separated list).")
-var auth = flag.String("auth", "", "Authorization token.")
-var host = flag.String("host", "", "Override for the host header (namespace).")
 var timeout = flag.Uint("timeout", 0, "Timeout (in ms) for acquiring a lock.")
 var name = flag.String("name", "", "Name to use (other than machine address).")
 var start = flag.String("start", "", "Script to start the given service.")
 var stop = flag.String("stop", "", "Script to stop the given service.")
 var limit = flag.Uint("limit", 0, "Limit for machines to run or simultanous locks.")
 var output = flag.String("output", "", "Output file for sync.")
-var delay = flag.Uint("delay", 1000, "Delay and retry failed requests.")
 var data = flag.Bool("data", false, "Use the synchronization group data mapping.")
-var path = flag.String("path", ".*", "The path for a given token.")
+var path = flag.String("path", ".*", "The path for a given token (regular expression).")
 var perms = flag.String("perms", "rwx", "Permissions (combination of r,w,x).")
-var debug = flag.Bool("debug", false, "Enable all debugging.")
 
-var mainmsg = `usage: hibera <command> ... [options]
-
-options for all commands:
-
-    [-api <address:port>         --- The API address.
-         [,<address:port>...]]
-
-    [-auth <authorization-key>]  --- The authorization key.
-
-    [-host <namespace>]          --- The namespace to use.
-
-    [-delay <delay>]             --- Delay in milliseconds to
-
-cluster commands:
-
-    nodes                        --- List all nodes.
-    active                       --- List all active nodes.
-    info <id>                    --- Show node info.
-    activate                     --- Activate the API target.
-    deactivate                   --- Deactivate the API target.
-
-access commands:
-
-    tokens                       --- Show access tokens.
-    access <token>               --- Show the given token.
-    permissions <token>          --- Grant given permissions.
-        [-path <path>]
-        [-perms <perms>]
-
-synchronization commands:
-
-    run <key>                    --- Conditionally run up-to <limit>
-        [-name <name>]               process across the cluster.
-        [-limit <limit>]             If you use the run-script element,
-        [-timeout <timeout>]         then the run command will exit when
-        [-start <start-script>]      your command finishes. If the script
-        [-stop <stop-script>]        doesn't exit, then it will be killed
-        [-data]                      when this node loses membership, and
-        [<run-script> ...]           restarted when it gains membership.
-
-       For example, to join a group while a script runs:
+var cliInfo = cli.Cli{
+    "Hibera command line client.",
+    map[string]cli.Command{
+        "run" : cli.Command{
+            "Run up-to <limit> process across the cluster.",
+`      For example, to join a group while a script runs:
         run foo.bar script.sh
 
        To run something exclusively (locked):
@@ -86,46 +45,93 @@ synchronization commands:
        To start N instances of myapp at all times:
         run foo.bar -limit N
                     -start '/etc/init.d/myapp start'
-                    -stop '/etc/init.d/myapp stop'
-
-    members <key>                --- Show current members of the
-            [-name <name>]           given group. The first line will
-            [-limit <number>]        be this connections index in the
-                                     list.
-
-    in <key>                     --- If this process is part of
-         [-name <name>]              the synchronization group named,
-         [-limit <limit>]            fetch the associated data. If
-                                     not in the set, exit with in error.
-
-    out <key>                    --- If this process is part of
-         [-name <name>]              the synchronization group named,
-         [-limit <limit>]            set the associated data.
-
-data commands:
-
-    list                         --- List all keys.
-
-    get <key>                    --- Get the contents of the key.
-    set <key> [value]            --- Set the contents of the key.
-
-    push <key>                   --- Stream up contents of the key.
-    pull <key>                   --- Stream down contents of the key.
-
-    remove <key>                 --- Remove the given key.
-    sync <key>                   --- Synchronize a key, either as
-         [-output <file>]            stdin to a named script to
-         [-timeout <timeout>]        directly to the named file.
-         [<run-script> ...]
-
-    bench <key>                  --- Run a benchmark.
-
-event commands:
-
-    watch <key>                  --- Wait for an update of the key.
-         [-timeout <timeout>]
-    fire <key>                   --- Notify all waiters on the key.
-`
+                    -stop '/etc/init.d/myapp stop'`,
+            []string{"key"},
+            []string{"name", "limit", "timeout", "start", "stop", "data"},
+            true,
+        },
+        "members" : cli.Command{ "Show current members of the given group.",
+            "",
+            []string{"key"},
+            []string{"name", "limit"},
+            false,
+        },
+        "in" : cli.Command{
+            "Show associated data (if joined with given group).",
+            "",
+            []string{"key"},
+            []string{"name", "limit"},
+            false,
+        },
+        "out" : cli.Command{ "Set associated data (if joined with given group).",
+            "",
+            []string{"key"},
+            []string{"name", "limit"},
+            false,
+        },
+        "list" : cli.Command{
+            "List all keys.",
+            "",
+            []string{},
+            []string{},
+            false,
+        },
+        "get" : cli.Command{
+            "Get the contents of the key.",
+            "",
+            []string{"key"},
+            []string{},
+            false,
+        },
+        "set" : cli.Command{ "Set the contents of the key.",
+            "",
+            []string{"key"},
+            []string{},
+            true,
+        },
+        "push" : cli.Command{
+            "Stream up the contents of the key.",
+            "",
+            []string{"key"},
+            []string{},
+            false,
+        },
+        "pull" : cli.Command{ "Stream down the contents of the key.",
+            "",
+            []string{"key"},
+            []string{},
+            false,
+        },
+        "remove" : cli.Command{
+            "Remove the given key.",
+            "",
+            []string{"key"},
+            []string{},
+            false,
+        },
+        "sync" : cli.Command{ "Synchronize a key.",
+            "",
+            []string{"key"},
+            []string{"output", "timeout"},
+            true,
+        },
+        "watch" : cli.Command{
+            "Wait for an update of the key.",
+            "",
+            []string{"key"},
+            []string{"timeout"},
+            false,
+        },
+        "fire" : cli.Command{
+            "Notify all waiters on a key.",
+            "",
+            []string{"key"},
+            []string{},
+            false,
+        },
+    },
+    cli.Options,
+}
 
 func do_exec(command []string, input []byte) error {
     utils.Print("CLIENT", "Executing '%s'...", strings.Join(command, " "))
@@ -136,98 +142,9 @@ func do_exec(command []string, input []byte) error {
     return cmd.Run()
 }
 
-func cli_activate(c *client.HiberaAPI) error {
-    return c.Activate()
-}
-
-func cli_deactivate(c *client.HiberaAPI) error {
-    return c.Deactivate()
-}
-
-func cli_nodes(c *client.HiberaAPI) error {
-    nodes, _, err := c.NodeList(false)
-    if err != nil {
-        return err
-    }
-    for _, id := range nodes {
-        fmt.Printf("%s\n", id)
-    }
-    return nil
-}
-
-func cli_active(c *client.HiberaAPI) error {
-    nodes, _, err := c.NodeList(true)
-    if err != nil {
-        return err
-    }
-    for _, id := range nodes {
-        fmt.Printf("%s\n", id)
-    }
-    return nil
-}
-
-func cli_info(c *client.HiberaAPI, key core.Key) error {
-    node, _, err := c.NodeGet(key.Key)
-    if err != nil {
-        return err
-    }
-
-    fmt.Printf("addr: %s\n", node.Addr)
-    fmt.Printf("domain: %s\n", node.Domain)
-    fmt.Printf("active: %t\n", node.Active)
-    fmt.Printf("modified: %d\n", node.Modified)
-    fmt.Printf("current: %d\n", node.Current)
-    fmt.Printf("dropped: %d\n", node.Dropped)
-    fmt.Printf("keys:\n")
-    for _, key := range node.Keys {
-        fmt.Printf("- %s\n", key)
-    }
-    return nil
-}
-
-func cli_tokens(c *client.HiberaAPI) error {
-    tokens, _, err := c.AccessList(core.Namespace(*host))
-    if err != nil {
-        return err
-    }
-    for _, token := range tokens {
-        fmt.Printf("%s\n", token)
-    }
-    return nil
-}
-
-func cli_access(c *client.HiberaAPI, auth core.Key) error {
-    val, _, err := c.AccessGet(auth)
-    if err != nil {
-        return err
-    }
-
-    for path, perms := range *val {
-        asstr := func(val bool, t string) string {
-            if val {
-                return t
-            }
-            return "-"
-        }
-        rs := asstr(perms.Read, "r")
-        ws := asstr(perms.Write, "w")
-        xs := asstr(perms.Execute, "x")
-        fmt.Printf("%s%s%s %s\n", rs, ws, xs, path)
-    }
-    return nil
-}
-
-func cli_permissions(c *client.HiberaAPI, auth core.Key, path string, perms string) error {
-    read := strings.Index(perms, "r") >= 0
-    write := strings.Index(perms, "w") >= 0
-    execute := strings.Index(perms, "x") >= 0
-    _, err := c.AccessUpdate(auth, path, read, write, execute)
-    return err
-}
-
 func cli_run(
     c *client.HiberaAPI,
-    key core.Key,
+    raw_key string,
     name string,
     limit uint,
     timeout uint,
@@ -238,6 +155,7 @@ func cli_run(
 
     var value []byte
     var proc *exec.Cmd
+    key := cli.Key(raw_key)
     procchan := make(chan error)
     watchchan := make(chan error)
 
@@ -272,7 +190,7 @@ func cli_run(
                 var datarev core.Revision
                 value, datarev, err = c.DataGet(
                     core.Key{
-                        core.Namespace(*host),
+                        cli.Namespace(),
                         fmt.Sprintf("%s.%d", key.Key, newindex)},
                     core.ZeroRevision, 0)
 
@@ -389,7 +307,8 @@ func cli_run(
     return nil
 }
 
-func cli_members(c *client.HiberaAPI, key core.Key, name string, limit uint) error {
+func cli_members(c *client.HiberaAPI, raw_key string, name string, limit uint) error {
+    key := cli.Key(raw_key)
     index, members, _, err := c.SyncMembers(key, name, limit)
     if err != nil {
         return err
@@ -401,14 +320,15 @@ func cli_members(c *client.HiberaAPI, key core.Key, name string, limit uint) err
     return nil
 }
 
-func cli_in(c *client.HiberaAPI, key core.Key, name string, limit uint) (bool, error) {
+func cli_in(c *client.HiberaAPI, raw_key string, name string, limit uint) (bool, error) {
+    key := cli.Key(raw_key)
     index, _, _, err := c.SyncMembers(key, name, limit)
     if err != nil {
         return false, err
     }
     if index >= 0 {
         value, _, err := c.DataGet(
-            core.Key{key.Namespace, fmt.Sprintf("%s.%d", key.Key, index)},
+            cli.Key(fmt.Sprintf("%s.%d", raw_key, index)),
             core.ZeroRevision, 0)
         if err == nil {
             os.Stdout.Write(value)
@@ -418,7 +338,8 @@ func cli_in(c *client.HiberaAPI, key core.Key, name string, limit uint) (bool, e
     return false, nil
 }
 
-func cli_out(c *client.HiberaAPI, key core.Key, value *string, name string, limit uint) (bool, error) {
+func cli_out(c *client.HiberaAPI, raw_key string, value *string, name string, limit uint) (bool, error) {
+    key := cli.Key(raw_key)
     index, _, _, err := c.SyncMembers(key, name, limit)
     if err != nil {
         return false, err
@@ -430,12 +351,12 @@ func cli_out(c *client.HiberaAPI, key core.Key, value *string, name string, limi
             buf := new(bytes.Buffer)
             io.Copy(buf, os.Stdin)
             _, err = c.DataSet(
-                core.Key{key.Namespace, fmt.Sprintf("%s.%d", key.Key, index)},
+                cli.Key(fmt.Sprintf("%s.%d", raw_key, index)),
                 core.ZeroRevision, buf.Bytes())
         } else {
             // Use the given string.
             _, err = c.DataSet(
-                core.Key{key.Namespace, fmt.Sprintf("%s.%d", key, index)},
+                cli.Key(fmt.Sprintf("%s.%d", raw_key, index)),
                 core.ZeroRevision, []byte(*value))
         }
         return true, err
@@ -443,7 +364,8 @@ func cli_out(c *client.HiberaAPI, key core.Key, value *string, name string, limi
     return false, err
 }
 
-func cli_get(c *client.HiberaAPI, key core.Key) error {
+func cli_get(c *client.HiberaAPI, raw_key string) error {
+    key := cli.Key(raw_key)
     value, _, err := c.DataGet(key, core.ZeroRevision, 0)
     if err != nil {
         return err
@@ -453,7 +375,8 @@ func cli_get(c *client.HiberaAPI, key core.Key) error {
     return nil
 }
 
-func cli_push(c *client.HiberaAPI, key core.Key) error {
+func cli_push(c *client.HiberaAPI, raw_key string) error {
+    key := cli.Key(raw_key)
     stdin := bufio.NewReader(os.Stdin)
     rev := core.ZeroRevision
 
@@ -474,7 +397,8 @@ func cli_push(c *client.HiberaAPI, key core.Key) error {
     }
 }
 
-func cli_pull(c *client.HiberaAPI, key core.Key) error {
+func cli_pull(c *client.HiberaAPI, raw_key string) error {
+    key := cli.Key(raw_key)
     rev := core.ZeroRevision
 
     for {
@@ -496,7 +420,8 @@ func cli_pull(c *client.HiberaAPI, key core.Key) error {
     }
 }
 
-func cli_set(c *client.HiberaAPI, key core.Key, value *string) error {
+func cli_set(c *client.HiberaAPI, raw_key string, value *string) error {
+    key := cli.Key(raw_key)
     var err error
     if value == nil {
         // Fully read input.
@@ -510,13 +435,14 @@ func cli_set(c *client.HiberaAPI, key core.Key, value *string) error {
     return err
 }
 
-func cli_remove(c *client.HiberaAPI, key core.Key) error {
+func cli_remove(c *client.HiberaAPI, raw_key string) error {
+    key := cli.Key(raw_key)
     _, err := c.DataRemove(key, core.ZeroRevision)
     return err
 }
 
-func cli_list(c *client.HiberaAPI, namespace string) error {
-    items, err := c.DataList(core.Namespace(namespace))
+func cli_list(c *client.HiberaAPI) error {
+    items, err := c.DataList(cli.Namespace())
     if err != nil {
         return err
     }
@@ -526,8 +452,8 @@ func cli_list(c *client.HiberaAPI, namespace string) error {
     return nil
 }
 
-func cli_sync(c *client.HiberaAPI, key core.Key, output string, cmd []string, timeout uint) error {
-
+func cli_sync(c *client.HiberaAPI, raw_key string, output string, cmd []string, timeout uint) error {
+    key := cli.Key(raw_key)
     rev := core.ZeroRevision
     var value []byte
     var err error
@@ -558,74 +484,16 @@ func cli_sync(c *client.HiberaAPI, key core.Key, output string, cmd []string, ti
     return nil
 }
 
-func cli_watch(c *client.HiberaAPI, key core.Key, timeout uint) error {
+func cli_watch(c *client.HiberaAPI, raw_key string, timeout uint) error {
+    key := cli.Key(raw_key)
     _, err := c.EventWait(key, core.ZeroRevision, timeout)
     return err
 }
 
-func cli_fire(c *client.HiberaAPI, key core.Key) error {
+func cli_fire(c *client.HiberaAPI, raw_key string) error {
+    key := cli.Key(raw_key)
     _, err := c.EventFire(key, core.ZeroRevision)
     return err
-}
-
-func do_worker(c *client.HiberaAPI, key core.Key, data_size int, count int, err_chan chan error) {
-    data := make([]byte, data_size, data_size)
-    for i := 0; i < count; i += 1 {
-        _, err := c.DataSet(key, core.ZeroRevision, data)
-        if err != nil {
-            err_chan <- err
-        }
-    }
-    err_chan <- nil
-}
-
-func do_bench(c *client.HiberaAPI, key core.Key, data_size int, workers int) error {
-    err_chan := make(chan error, workers)
-    count := 512 / workers
-
-    start := time.Now()
-    for i := 0; i < workers; i += 1 {
-        go do_worker(
-            c,
-            core.Key{key.Namespace, fmt.Sprintf("%s.%d", key.Key, i)},
-            data_size, count, err_chan)
-    }
-    for i := 0; i < workers; i += 1 {
-        err := <-err_chan
-        if err != nil {
-            return err
-        }
-    }
-    duration := time.Since(start)
-
-    fmt.Printf(
-        "workers=%d, data_size=%d, ops=%.2f/s, rate=%.2fMb/s\n",
-        workers,
-        data_size,
-        float64(count*workers)/duration.Seconds(),
-        float64(count*data_size*workers/1024)/duration.Seconds())
-    return nil
-}
-
-func cli_bench(c *client.HiberaAPI, key core.Key) error {
-    data_sizes := []int{128, 1024, 4096, 8192}
-    n_workers := []int{1, 4, 16, 64, 256, 512}
-
-    for _, data_size := range data_sizes {
-        for _, n_worker := range n_workers {
-            err := do_bench(c, key, data_size, n_worker)
-            if err != nil {
-                return err
-            }
-        }
-    }
-
-    return nil
-}
-
-func usage(msg string) {
-    fmt.Printf("%s\n", msg)
-    os.Exit(1)
 }
 
 func make_command(args ...string) []string {
@@ -652,139 +520,65 @@ func make_command(args ...string) []string {
     return cmd
 }
 
-func main() {
-    var err error
+func do_cli(command string, args []string) error {
 
-    // NOTE: We need the random number generator,
-    // as it will be seed with 1 by default (and
-    // hence always exhibit the same sequence).
-    rand.Seed(time.Now().UTC().UnixNano())
-
-    // Pull out our arguments.
-    if len(os.Args) < 2 {
-        usage(mainmsg)
-    }
-    command := os.Args[1]
-    os.Args = os.Args[1:]
-
-    key := core.Key{core.Namespace(*host), ""}
-    if command == "nodes" ||
-        command == "active" ||
-        command == "tokens" ||
-        command == "activate" ||
-        command == "deactivate" ||
-        command == "list" {
-    } else {
-        if len(os.Args) < 2 {
-            usage(mainmsg)
-        }
-        key = core.Key{core.Namespace(*host), os.Args[1]}
-        os.Args = os.Args[1:]
-    }
-    flag.Parse()
-    if *debug {
-        utils.EnableDebugging()
-    }
-
-    client := func() *client.HiberaAPI {
-        // Create our client.
-        return client.NewHiberaClient(*api, *auth, *delay)
-    }
+    client := cli.Client()
 
     switch command {
-    case "activate":
-        err = cli_activate(client())
-        break
-    case "deactivate":
-        err = cli_deactivate(client())
-        break
-    case "nodes":
-        err = cli_nodes(client())
-        break
-    case "active":
-        err = cli_active(client())
-        break
-    case "info":
-        err = cli_info(client(), key)
-        break
-    case "tokens":
-        err = cli_tokens(client())
-        break
-    case "access":
-        err = cli_access(client(), key)
-        break
-    case "permissions":
-        err = cli_permissions(client(), key, *path, *perms)
-        break
     case "run":
-        cmd := make_command(flag.Args()...)
+        cmd := make_command(args...)
         start_cmd := make_command(*start)
         stop_cmd := make_command(*stop)
-        err = cli_run(client(), key, *name, *limit, *timeout, start_cmd, stop_cmd, cmd, *data)
-        break
+        return cli_run(client, args[0], *name, *limit, *timeout, start_cmd, stop_cmd, cmd, *data)
     case "members":
-        err = cli_members(client(), key, *name, *limit)
-        break
+        return cli_members(client, args[0], *name, *limit)
     case "in":
-        var in bool
-        in, err = cli_in(client(), key, *name, *limit)
+        in, err := cli_in(client, args[0], *name, *limit)
         if err == nil && !in {
-            os.Exit(1)
+            return errors.New("")
         }
-        break
+        return err
     case "out":
         var in bool
-        if flag.NArg() > 0 {
-            value := strings.Join(flag.Args(), " ")
-            in, err = cli_out(client(), key, &value, *name, *limit)
+        var err error
+        if len(args) > 0 {
+            value := strings.Join(args, " ")
+            in, err = cli_out(client, args[0], &value, *name, *limit)
         } else {
-            in, err = cli_out(client(), key, nil, *name, *limit)
+            in, err = cli_out(client, args[0], nil, *name, *limit)
         }
         if err == nil && !in {
-            os.Exit(1)
+            return errors.New("")
         }
-        break
+        return err
     case "get":
-        err = cli_get(client(), key)
-        break
+        return cli_get(client, args[0])
     case "push":
-        err = cli_push(client(), key)
-        break
+        return cli_push(client, args[0])
     case "pull":
-        err = cli_pull(client(), key)
-        break
+        return cli_pull(client, args[0])
     case "set":
-        if flag.NArg() > 0 {
-            value := strings.Join(flag.Args(), " ")
-            err = cli_set(client(), key, &value)
-        } else {
-            err = cli_set(client(), key, nil)
+        if len(args) > 0 {
+            value := strings.Join(args, " ")
+            return cli_set(client, args[0], &value)
         }
-        break
+        return cli_set(client, args[0], nil)
     case "remove":
-        err = cli_remove(client(), key)
-        break
+        return cli_remove(client, args[0])
     case "list":
-        err = cli_list(client(), *host)
-        break
+        return cli_list(client)
     case "sync":
         cmd := make_command(flag.Args()...)
-        err = cli_sync(client(), key, *output, cmd, *timeout)
-        break
+        return cli_sync(client, args[0], *output, cmd, *timeout)
     case "watch":
-        err = cli_watch(client(), key, *timeout)
-        break
+        return cli_watch(client, args[0], *timeout)
     case "fire":
-        err = cli_fire(client(), key)
-        break
-    case "bench":
-        err = cli_bench(client(), key)
-        break
-    default:
-        usage(mainmsg)
+        return cli_fire(client, args[0])
     }
 
-    if err != nil {
-        log.Fatal("Error: ", err)
-    }
+    return nil
+}
+
+func main() {
+    cli.Main(cliInfo, do_cli)
 }

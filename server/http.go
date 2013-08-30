@@ -9,7 +9,6 @@ import (
     "hibera/core"
     "hibera/utils"
     "io"
-    "log"
     "net"
     "net/http"
     "strconv"
@@ -18,7 +17,6 @@ import (
 
 var UnhandledRequest = errors.New("Unhandled request")
 var InvalidRevision = errors.New("Invalid revision")
-var DefaultActive = uint(256)
 
 type Listener struct {
     net.Listener
@@ -238,7 +236,8 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
                     }
                     break
                 case "POST":
-                    rev, err = s.Cluster.Activate(conn)
+                    replication := uint(s.intParam(r, "replication"))
+                    rev, err = s.Cluster.Activate(conn, replication)
                     break
                 case "DELETE":
                     rev, err = s.Cluster.Deactivate(conn)
@@ -294,8 +293,8 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
                 case "GET":
                     name := conn.Name(s.strParam(r, "name"))
                     limit := uint(s.intParam(r, "limit"))
-                    info := core.SyncInfo{}
-                    info.Index, info.Members, rev, err = s.Cluster.SyncMembers(conn, key, name, limit)
+                    var info core.SyncInfo
+                    info, rev, err = s.Cluster.SyncMembers(conn, key, name, limit)
                     if err == nil {
                         err = enc.Encode(info)
                     }
@@ -442,15 +441,14 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
     }
 }
 
-func NewHTTPServer(cluster *cluster.Cluster, addr string, port uint, active uint) *HTTPServer {
+func NewHTTPServer(cluster *cluster.Cluster, addr string, port uint, active uint) (*HTTPServer, error) {
     // Create our object.
     server := new(HTTPServer)
 
     // Create our hooked listener.
     ln, err := net.Listen("tcp", fmt.Sprintf("%s:%d", addr, port))
     if err != nil {
-        log.Print("Unable to bind HTTP server: ", err)
-        return nil
+        return nil, err
     }
     server.Hub = NewHub(cluster)
     server.Listener = &Listener{ln, make(chan bool, active), server.Hub}
@@ -473,7 +471,7 @@ func NewHTTPServer(cluster *cluster.Cluster, addr string, port uint, active uint
     }
 
     // No error occured.
-    return server
+    return server, nil
 }
 
 func (s *HTTPServer) Run() {

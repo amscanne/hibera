@@ -14,39 +14,36 @@ import (
     "syscall"
 )
 
-var DefaultPath = "/var/lib/hibera"
 var MaximumLogBatch = 256
 var MaximumLogSize = int64(1024 * 1024)
 
-type Val struct {
-    Rev   []byte
-    Value []byte
+type key string
+
+type value struct {
+    data []byte
+    metadata []byte
 }
 
-type Index struct {
-    Namespace string
-    Key       string
+type entry struct {
+    key
+    value
 }
 
-type Entry struct {
-    Index
-    Val
-}
-
-type Update struct {
-    Entry
+type update struct {
+    entry
     result chan error
 }
 
 type Backend struct {
     path string
 
-    accepted map[Index]Val
+    accepted map[key]value
 
     data *os.File
     log1 *os.File
     log2 *os.File
-    cs   chan *Update
+
+    cs chan *update
 }
 
 func OpenLocked(filename string) (*os.File, error) {
@@ -63,31 +60,27 @@ func OpenLocked(filename string) (*os.File, error) {
     return file, nil
 }
 
-func NewBackend(p string) *Backend {
-    if len(p) == 0 {
-        p = DefaultPath
-    }
-
+func NewBackend(p string) (*Backend, error) {
     // Create the directory.
     err := os.MkdirAll(p, 0644)
     if err != nil {
         log.Print("Error initializing storage: ", err)
-        return nil
+        return nil, err
     }
 
     // Create our backend.
     b := new(Backend)
     b.path = p
-    b.cs = make(chan *Update, MaximumLogBatch)
+    b.cs = make(chan *update, MaximumLogBatch)
     err = b.init()
     if err != nil {
-        return nil
+        return nil, err
     }
-    return b
+    return b, nil
 }
 
 func (b *Backend) init() error {
-    b.accepted = make(map[Index]Val)
+    b.accepted = make(map[key]value)
 
     // Open our files.
     data, err := OpenLocked(path.Join(b.path, "data"))
@@ -138,12 +131,12 @@ func (b *Backend) init() error {
     return nil
 }
 
-func serialize(output *os.File, entry *Entry) error {
+func serialize(output *os.File, ent *entry) error {
 
     // Do the encoding.
     encoded := bytes.NewBuffer(make([]byte, 0))
     enc := gob.NewEncoder(encoded)
-    err := enc.Encode(entry)
+    err := enc.Encode(ent)
     if err != nil {
         return err
     }
@@ -163,7 +156,7 @@ func serialize(output *os.File, entry *Entry) error {
     return nil
 }
 
-func deserialize(input *os.File, entry *Entry) error {
+func deserialize(input *os.File, ent *entry) error {
 
     // Read the header.
     length := uint32(0)
@@ -185,7 +178,7 @@ func deserialize(input *os.File, entry *Entry) error {
 
     // Do the decoding.
     dec := gob.NewDecoder(bytes.NewBuffer(encoded))
-    err = dec.Decode(entry)
+    err = dec.Decode(ent)
     if err != nil {
         return err
     }
@@ -222,8 +215,8 @@ func (b *Backend) pivotLogs() error {
     if err != nil {
         return err
     }
-    for index, val := range b.accepted {
-        err = serialize(data, &Entry{index, val})
+    for id, val := range b.accepted {
+        err = serialize(data, &entry{id, val})
         if err != nil {
             return err
         }
@@ -246,8 +239,8 @@ func (b *Backend) loadFile(file *os.File) error {
     file.Seek(0, 0)
 
     for {
-        var entry Entry
-        err := deserialize(file, &entry)
+        var ent entry
+        err := deserialize(file, &ent)
         if err == io.EOF {
             break
         } else if err != nil {
@@ -255,10 +248,10 @@ func (b *Backend) loadFile(file *os.File) error {
         }
 
         // Atomic set on our map.
-        if entry.Val.Value == nil {
-            delete(b.accepted, entry.Index)
+        if ent.value.data == nil && ent.value.metadata == nil {
+            delete(b.accepted, ent.key)
         } else {
-            b.accepted[entry.Index] = entry.Val
+            b.accepted[ent.key] = ent.value
         }
     }
 
@@ -267,15 +260,15 @@ func (b *Backend) loadFile(file *os.File) error {
 
 func (b *Backend) logWriter() {
 
-    finished := make([]*Update, 0, MaximumLogBatch)
+    finished := make([]*update, 0, MaximumLogBatch)
 
     complete := func() {
         // Ensure we're synced.
         b.log2.Sync()
 
         // Notify waiters.
-        for _, update := range finished {
-            update.result <- nil
+        for _, upd := range finished {
+            upd.result <- nil
         }
         finished = finished[0:0]
 
@@ -286,21 +279,21 @@ func (b *Backend) logWriter() {
         }
     }
 
-    process := func(update *Update) {
-        if update.Entry.Val.Value == nil {
+    process := func(upd *update) {
+        if upd.entry.value.data == nil && upd.entry.value.metadata == nil {
             // It's a promise, try to set.
-            delete(b.accepted, update.Entry.Index)
+            delete(b.accepted, upd.entry.key)
         } else {
             // Update the in-memory database.
             // NOTE: This should be atomic.
-            b.accepted[update.Entry.Index] = update.Entry.Val
+            b.accepted[upd.entry.key] = upd.entry.value
         }
 
         // Serialize the entry to the log.
-        serialize(b.log2, &update.Entry)
+        serialize(b.log2, &upd.entry)
 
         // Add it to our list of done.
-        finished = append(finished, update)
+        finished = append(finished, upd)
     }
 
     for {
@@ -308,8 +301,8 @@ func (b *Backend) logWriter() {
             // Nothing in the queue?
             // Block indefinitely.
             select {
-            case update := <-b.cs:
-                process(update)
+            case upd := <-b.cs:
+                process(upd)
                 break
             }
 
@@ -319,8 +312,8 @@ func (b *Backend) logWriter() {
             // find anything right now, then we do
             // a flush log to complete this batch.
             select {
-            case update := <-b.cs:
-                process(update)
+            case upd := <-b.cs:
+                process(upd)
                 break
             default:
                 complete()
@@ -335,43 +328,26 @@ func (b *Backend) logWriter() {
     }
 }
 
-func (b *Backend) Write(namespace string, key string, value []byte, rev_bytes []byte) error {
-    index := Index{namespace, key}
-    val := Val{rev_bytes, value}
-    entry := Entry{index, val}
-    update := &Update{entry, make(chan error, 1)}
-    b.cs <- update
-    return <-update.result
+func (b *Backend) Write(id string, data []byte, metadata []byte) error {
+    ent := entry{key(id), value{data, metadata}}
+    upd := &update{ent, make(chan error, 1)}
+    b.cs <- upd
+    return <-upd.result
 }
 
-func (b *Backend) Read(namespace string, key string) ([]byte, []byte, error) {
-    index := Index{namespace, key}
-    val := b.accepted[index]
-    return val.Value, val.Rev, nil
+func (b *Backend) Read(id string) ([]byte, []byte, error) {
+    ent := b.accepted[key(id)]
+    return ent.data, ent.metadata, nil
 }
 
-func (b *Backend) Delete(namespace string, key string) error {
-    return b.Write(namespace, key, nil, make([]byte, 0, 0))
+func (b *Backend) Delete(id string) error {
+    return b.Write(id, nil, nil)
 }
 
-func (b *Backend) Namespaces() ([]string, error) {
-    ns_map := make(map[string]bool)
-    for index, _ := range b.accepted {
-        ns_map[index.Namespace] = true
-    }
-    namespaces := make([]string, 0, 0)
-    for ns, _ := range ns_map {
-        namespaces = append(namespaces, ns)
-    }
-    return namespaces, nil
-}
-
-func (b *Backend) List(namespace string) ([]string, error) {
+func (b *Backend) List() ([]string, error) {
     keys := make([]string, 0, 0)
-    for index, _ := range b.accepted {
-        if index.Namespace == namespace {
-            keys = append(keys, index.Key)
-        }
+    for id, _ := range b.accepted {
+        keys = append(keys, string(id))
     }
     return keys, nil
 }

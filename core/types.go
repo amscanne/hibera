@@ -1,7 +1,6 @@
 package core
 
 import (
-    "fmt"
     "math/big"
     "regexp"
 )
@@ -13,10 +12,6 @@ type Namespace string
 type Key struct {
     Namespace
     Key string
-}
-
-func (k Key) String() string {
-    return fmt.Sprintf("%s/%s", k.Namespace, k.Key)
 }
 
 // Revision for a given key.
@@ -53,8 +48,11 @@ type SyncInfo struct {
     Members []string `json:"members"`
 }
 
+var NoSyncInfo = SyncInfo{-1, make([]string, 0, 0)}
+
 // Representation of the cluster state.
 type Info struct {
+    N      uint       `json:"replication"`
     Nodes  NodeInfo   `json:"nodes"`
     Access AccessInfo `json:"access"`
 }

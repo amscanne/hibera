@@ -3,32 +3,28 @@ package main
 import (
     "flag"
     "fmt"
-    "hibera/client"
     "hibera/cluster"
     "hibera/server"
     "hibera/storage"
+    "hibera/cli"
     "hibera/utils"
-    "log"
-    "math/rand"
     "net"
     "os"
     "runtime"
     "runtime/pprof"
     "strings"
-    "time"
+    "errors"
 )
 
-var N = flag.Uint("N", cluster.DefaultN, "Replication factor (will be 2N + 1).")
-var auth = flag.String("auth", "", "Authorization key.")
-var bind = flag.String("bind", server.DefaultBind, "Bind address for the server.")
-var port = flag.Uint("port", client.DefaultPort, "Bind port for the server.")
-var path = flag.String("path", storage.DefaultPath, "Backing storage path.")
-var domain = flag.String("domain", cluster.DefaultDomain, "Failure domain for this server.")
-var keys = flag.Uint("keys", cluster.DefaultKeys, "The number of keys for this node (weight).")
-var seeds = flag.String("seeds", server.DefaultSeeds, "Seeds for joining the cluster.")
-var active = flag.Uint("active", server.DefaultActive, "Maximum active simutaneous clients.")
+var auth = flag.String("root", utils.DefaultBind, "The root authorization token.")
+var bind = flag.String("bind", utils.DefaultBind, "Bind address for the server.")
+var port = flag.Uint("port", utils.DefaultPort, "Bind port for the server.")
+var path = flag.String("path", utils.DefaultPath, "Backing storage path.")
+var domain = flag.String("domain", utils.DefaultDomain, "Failure domain for this server.")
+var keys = flag.Uint("keys", utils.DefaultKeys, "The number of keys for this node (weight).")
+var seeds = flag.String("seeds", utils.DefaultSeeds, "Seeds for joining the cluster.")
+var active = flag.Uint("active", utils.DefaultActive, "Maximum active simutaneous clients.")
 var profile = flag.String("profile", "", "Enabling profiling and write to file.")
-var debug = flag.Bool("debug", false, "Enable all debugging.")
 
 func discoverAddress() string {
     addrs, _ := net.InterfaceAddrs()
@@ -43,17 +39,31 @@ func discoverAddress() string {
     return ""
 }
 
-func main() {
-    // NOTE: We need the random number generator,
-    // as it will be seed with 1 by default (and
-    // hence always exhibit the same sequence).
-    rand.Seed(time.Now().UTC().UnixNano())
+var cliInfo = cli.Cli{
+    "Run a Hibera server.",
+    map[string]cli.Command{
+        "run" : cli.Command{
+            "Start a hibera server.",
+            "",
+            []string{},
+            []string{
+                "root",
+                "bind",
+                "port",
+                "path",
+                "domain",
+                "keys",
+                "seeds",
+                "active",
+                "profile"},
+            false,
+        },
+    },
+    []string{},
+}
 
-    // Parse all flags
-    flag.Parse()
-    if *debug {
-        utils.EnableDebugging()
-    }
+
+func cli_run() error {
 
     // Sanity check addresses, ports, etc.
     var addr string
@@ -63,7 +73,7 @@ func main() {
         addr = fmt.Sprintf("%s:%d", *bind, *port)
     }
     if *port == 0 {
-        log.Fatal("Sorry, port can't be 0.")
+        errors.New("Sorry, port can't be 0.")
     }
 
     // Crank up processors.
@@ -73,16 +83,16 @@ func main() {
     if *profile != "" {
         f, err := os.Create(*profile)
         if err != nil {
-            log.Fatal(err)
+            return err
         }
         pprof.StartCPUProfile(f)
         defer pprof.StopCPUProfile()
     }
 
     // Initialize our storage.
-    backend := storage.NewBackend(*path)
-    if backend == nil {
-        return
+    backend, err := storage.NewBackend(*path)
+    if err != nil {
+        return err
     }
     go backend.Run()
 
@@ -90,19 +100,33 @@ func main() {
     // We load our keys from the persistent storage.
     ids, err := backend.LoadIds(*keys)
     if err != nil {
-        log.Fatal("Unable to load keys: ", err)
+        return err
     }
-    c := cluster.NewCluster(*N, backend, addr, *auth, *domain, ids)
-    if c == nil {
-        log.Fatal("Unable to create cluster.")
+    c, err := cluster.NewCluster(backend, addr, *auth, *domain, ids)
+    if err != nil {
+        return err
     }
 
     // Startup our server.
-    s := server.NewServer(c, *bind, *port, strings.Split(*seeds, ","), *active)
-    if s == nil {
-        return
+    s, err := server.NewServer(c, *bind, *port, strings.Split(*seeds, ","), *active)
+    if err != nil {
+        return err
     }
 
     // Run our server.
     s.Run()
+    return nil
+}
+
+func do_cli(command string, args []string) error {
+    switch command {
+        case "run":
+            return cli_run()
+    }
+
+    return nil
+}
+
+func main() {
+    cli.Main(cliInfo, do_cli)
 }

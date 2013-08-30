@@ -7,6 +7,8 @@ import (
     "math/big"
     "sync"
     "time"
+    "fmt"
+    "strings"
 )
 
 // The ephemeral id is used to identify and remove
@@ -21,9 +23,9 @@ type EphemeralSet map[EphemId]NameMap
 var NotFound = errors.New("Key not found or inconsistent")
 var ZeroRevision = big.NewInt(0)
 
-func AsRevision(rev_bytes []byte) Revision {
+func AsRevision(metadata []byte) Revision {
     rev := big.NewInt(0)
-    rev.SetBytes(rev_bytes)
+    rev.SetBytes(metadata)
     return rev
 }
 
@@ -39,6 +41,18 @@ func IncRevision(rev Revision) Revision {
 func ParseRevision(rev_str string) (Revision, bool) {
     rev := big.NewInt(0)
     return rev.SetString(rev_str, 0)
+}
+
+func (k Key) String() string {
+    return fmt.Sprintf("%s/%s", k.Namespace, k.Key)
+}
+
+func AsKey(data string) Key {
+    parts := strings.SplitN(data, "/", 2)
+    if len(parts) == 1 {
+        return Key{Namespace(""), parts[0]}
+    }
+    return Key{Namespace(parts[0]), parts[1]}
 }
 
 type Lock struct {
@@ -146,49 +160,56 @@ func (d *Data) lock(key Key) *Lock {
 }
 
 func (d *Data) DataNamespaces() ([]Namespace, error) {
-    items, err := d.store.Namespaces()
+    items, err := d.store.List()
     if err != nil {
         return nil, err
     }
-    namespaces := make([]Namespace, len(items), len(items))
-    for i, item := range items {
-        namespaces[i] = Namespace(item)
+    namespaces_map := make(map[Namespace]bool)
+    for _, item := range items {
+        namespaces_map[Namespace(item)] = true
+    }
+    namespaces := make([]Namespace, 0, 0)
+    for namespace, _ := range namespaces_map {
+        namespaces = append(namespaces, namespace)
     }
 
     return namespaces, nil
 }
 
 func (d *Data) DataList(namespace Namespace) ([]Key, error) {
-    items, err := d.store.List(string(namespace))
+    items, err := d.store.List()
     if err != nil {
         return nil, err
     }
-    keys := make([]Key, len(items), len(items))
-    for i, item := range items {
-        keys[i] = Key{namespace, item}
+    keys := make([]Key, 0, 0)
+    for _, item := range items {
+        key := AsKey(item)
+        if key.Namespace == namespace {
+            keys = append(keys, key)
+        }
     }
 
     return keys, nil
 }
 
-func (d *Data) SyncMembers(key Key, name string, limit uint) (int, []string, Revision, error) {
+func (d *Data) SyncMembers(key Key, name string, limit uint) (SyncInfo, Revision, error) {
     lock := d.lock(key)
     defer lock.unlock(key)
 
     // Lookup the key.
-    index := -1
     revmap := d.sync[key]
     if revmap == nil {
         // This is valid, it's an empty key.
-        return index, make([]string, 0), d.revs[key], nil
+        return NoSyncInfo, d.revs[key], nil
     }
 
     // Return the members and rev.
-    index, members := d.computeIndex(revmap, name, limit)
-    return index, members, d.revs[key], nil
+    return d.computeIndex(revmap, name, limit), d.revs[key], nil
 }
 
-func (d *Data) computeIndex(revmap *EphemeralSet, name string, limit uint) (int, []string) {
+func (d *Data) computeIndex(revmap *EphemeralSet, name string, limit uint) SyncInfo {
+    var info SyncInfo
+
     // Aggregate all members across clients.
     allmap := make(map[string]Revision, 0)
     for _, set := range *revmap {
@@ -202,15 +223,15 @@ func (d *Data) computeIndex(revmap *EphemeralSet, name string, limit uint) (int,
         limit = uint(len(allmap))
     }
     current := uint(0)
-    members := make([]string, limit, limit)
+    info.Members = make([]string, limit, limit)
     for candidate, revjoined := range allmap {
         if current < limit {
-            members[current] = candidate
+            info.Members[current] = candidate
             current += 1
         } else {
-            for i, current := range members {
+            for i, current := range info.Members {
                 if (*revjoined).Cmp(allmap[current]) <= 0 {
-                    members[i] = candidate
+                    info.Members[i] = candidate
                     break
                 }
             }
@@ -219,26 +240,26 @@ func (d *Data) computeIndex(revmap *EphemeralSet, name string, limit uint) (int,
 
     // Do a simple insertion sort on the set.
     // This is efficient given the small size.
-    for i, membermin1 := range members {
-        for j, membermin2 := range members {
+    for i, membermin1 := range info.Members {
+        for j, membermin2 := range info.Members {
             if i < j &&
                 (*allmap[membermin2]).Cmp(allmap[membermin1]) < 0 {
                 // Swap, we're not the right order.
-                members[i] = membermin2
-                members[j] = membermin1
+                info.Members[i] = membermin2
+                info.Members[j] = membermin1
             }
         }
     }
 
     // Save the index if it's available.
-    index := -1
-    for i, current := range members {
+    info.Index = -1
+    for i, current := range info.Members {
         if current == name {
-            index = i
+            info.Index = i
         }
     }
 
-    return index, members
+    return info
 }
 
 func (d *Data) SyncJoin(
@@ -271,8 +292,8 @@ func (d *Data) SyncJoin(
 
         // Check that we're still not there already.
         if (*(*revmap)[id][name]).Sign() > 0 {
-            index, _ := d.computeIndex(revmap, name, limit)
-            return index, d.revs[key], nil
+            info := d.computeIndex(revmap, name, limit)
+            return info.Index, d.revs[key], nil
         }
 
         // Count the number of holders.
@@ -288,12 +309,12 @@ func (d *Data) SyncJoin(
         // Wait for a change.
         now := time.Now()
         if timeout > 0 && now.After(end) {
-            index, _ := d.computeIndex(revmap, name, limit)
-            return index, d.revs[key], nil
+            info := d.computeIndex(revmap, name, limit)
+            return info.Index, d.revs[key], nil
         }
         if !lock.wait(key, timeout > 0, end.Sub(now), notifier) || !valid() {
-            index, _ := d.computeIndex(revmap, name, limit)
-            return index, d.revs[key], nil
+            info := d.computeIndex(revmap, name, limit)
+            return info.Index, d.revs[key], nil
         }
     }
 
@@ -334,8 +355,11 @@ func (d *Data) SyncLeave(id EphemId, key Key, name string) (Revision, error) {
 
 func (d *Data) DataGet(key Key) ([]byte, Revision, error) {
     // Read the local value available.
-    value, rev_bytes, err := d.store.Read(string(key.Namespace), string(key.Key))
-    return value, AsRevision(rev_bytes), err
+    data, metadata, err := d.store.Read(key.String())
+    if err != nil {
+        return nil, ZeroRevision, err
+    }
+    return data, AsRevision(metadata), err
 }
 
 func (d *Data) DataWatch(
@@ -349,8 +373,8 @@ func (d *Data) DataWatch(
 
     if id > 0 {
         getrev := func() (Revision, error) {
-            _, rev_bytes, err := d.store.Read(string(key.Namespace), string(key.Key))
-            return AsRevision(rev_bytes), err
+            _, metadata, err := d.store.Read(key.String())
+            return AsRevision(metadata), err
         }
         rev, err := d.doWait(id, key, lock, rev, timeout, getrev, notifier, valid)
         if err != nil {
@@ -373,15 +397,15 @@ func (d *Data) DataModify(
     }()
 
     // Read the existing data.
-    _, rev_bytes, err := d.store.Read(string(key.Namespace), string(key.Key))
+    _, metadata, err := d.store.Read(key.String())
     if err != nil {
-        return AsRevision(rev_bytes), err
+        return AsRevision(metadata), err
     }
     if rev == ZeroRevision {
-        rev = IncRevision(AsRevision(rev_bytes))
+        rev = IncRevision(AsRevision(metadata))
     }
-    if (*rev).Cmp(AsRevision(rev_bytes)) <= 0 {
-        return AsRevision(rev_bytes), err
+    if (*rev).Cmp(AsRevision(metadata)) <= 0 {
+        return AsRevision(metadata), err
     }
 
     // Do the operation.
@@ -391,18 +415,14 @@ func (d *Data) DataModify(
 func (d *Data) DataSet(key Key, rev Revision, value []byte) (Revision, error) {
 
     return d.DataModify(key, rev, func(rev Revision) error {
-        return d.store.Write(
-            string(key.Namespace),
-            string(key.Key),
-            value,
-            FromRevision(rev))
+        return d.store.Write(key.String(), value, FromRevision(rev))
     })
 }
 
 func (d *Data) DataRemove(key Key, rev Revision) (Revision, error) {
 
     return d.DataModify(key, rev, func(rev Revision) error {
-        err := d.store.Delete(string(key.Namespace), string(key.Key))
+        err := d.store.Delete(key.String())
         if err == nil {
             delete(d.revs, key)
         }
