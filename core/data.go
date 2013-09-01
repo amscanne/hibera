@@ -2,13 +2,13 @@ package core
 
 import (
     "errors"
+    "fmt"
     "hibera/storage"
     "hibera/utils"
     "math/big"
+    "strings"
     "sync"
     "time"
-    "fmt"
-    "strings"
 )
 
 // The ephemeral id is used to identify and remove

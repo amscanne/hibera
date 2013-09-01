@@ -25,7 +25,7 @@ type Cluster struct {
     auth string
 
     // Our replication factor.
-    N uint
+    N   uint
 
     // The updated replication factor.
     new_N uint

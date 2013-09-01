@@ -4,8 +4,11 @@ import (
     "os"
 )
 
-// The default path for the storage backend.
-var DefaultPath = "/var/lib/hibera"
+// The default path for the storage log.
+var DefaultLogPath = "/var/lib/hibera/log"
+
+// The default path for the storage persistent store.
+var DefaultDataPath = "/var/lib/hibera/data"
 
 // The default replication factor for the cluster.
 // Note that we will use 2*N + 1 as the actual copies.
@@ -22,6 +25,7 @@ var DefaultKeys = uint(128)
 // from the cluster. The default value is guessed
 // as the hostname (assuming host-independent failures).
 var DefaultDomain = defaultDomain()
+
 func defaultDomain() string {
     hostname, err := os.Hostname()
     if err != nil {

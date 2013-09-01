@@ -1,25 +1,26 @@
 package main
 
 import (
+    "errors"
     "flag"
     "fmt"
+    "hibera/cli"
     "hibera/cluster"
     "hibera/server"
     "hibera/storage"
-    "hibera/cli"
     "hibera/utils"
     "net"
     "os"
     "runtime"
     "runtime/pprof"
     "strings"
-    "errors"
 )
 
 var auth = flag.String("root", utils.DefaultBind, "The root authorization token.")
 var bind = flag.String("bind", utils.DefaultBind, "Bind address for the server.")
 var port = flag.Uint("port", utils.DefaultPort, "Bind port for the server.")
-var path = flag.String("path", utils.DefaultPath, "Backing storage path.")
+var logPath = flag.String("log", utils.DefaultLogPath, "Backing storage log path.")
+var dataPath = flag.String("data", utils.DefaultDataPath, "Backing storage data path.")
 var domain = flag.String("domain", utils.DefaultDomain, "Failure domain for this server.")
 var keys = flag.Uint("keys", utils.DefaultKeys, "The number of keys for this node (weight).")
 var seeds = flag.String("seeds", utils.DefaultSeeds, "Seeds for joining the cluster.")
@@ -42,7 +43,7 @@ func discoverAddress() string {
 var cliInfo = cli.Cli{
     "Run a Hibera server.",
     map[string]cli.Command{
-        "run" : cli.Command{
+        "run": cli.Command{
             "Start a hibera server.",
             "",
             []string{},
@@ -50,7 +51,8 @@ var cliInfo = cli.Cli{
                 "root",
                 "bind",
                 "port",
-                "path",
+                "log",
+                "data",
                 "domain",
                 "keys",
                 "seeds",
@@ -61,7 +63,6 @@ var cliInfo = cli.Cli{
     },
     []string{},
 }
-
 
 func cli_run() error {
 
@@ -90,7 +91,7 @@ func cli_run() error {
     }
 
     // Initialize our storage.
-    backend, err := storage.NewBackend(*path)
+    backend, err := storage.NewBackend(*logPath, *dataPath)
     if err != nil {
         return err
     }
@@ -120,8 +121,8 @@ func cli_run() error {
 
 func do_cli(command string, args []string) error {
     switch command {
-        case "run":
-            return cli_run()
+    case "run":
+        return cli_run()
     }
 
     return nil

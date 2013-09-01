@@ -4,29 +4,45 @@ import (
     "bytes"
     "encoding/binary"
     "encoding/gob"
+    "fmt"
     "hibera/utils"
     "io"
     "io/ioutil"
     "log"
     "os"
     "path"
+    "path/filepath"
+    "sort"
+    "strconv"
     "strings"
-    "syscall"
+    "sync"
+    "sync/atomic"
 )
 
-var MaximumLogBatch = 256
+// The number of writes to batch prior to flushing.
+// Note that this batching only happens when there is
+// an active queue of writes. If one write comes along
+// and no others are pending, then we will flush to disk.
+var MaximumLogBatch = 1024
+
+// Allow this maximum simultaneous Sync() calls.
+var MaximumFlushes = 2
+
+// The maximum log size.
+// If this log size is hit (1Mb default) then we will do
+// a full pivot of the logs and synchronize the data file.
 var MaximumLogSize = int64(1024 * 1024)
 
 type key string
 
 type value struct {
-    data []byte
-    metadata []byte
+    Data     []byte
+    Metadata []byte
 }
 
 type entry struct {
-    key
-    value
+    Key   key
+    Value value
 }
 
 type update struct {
@@ -35,44 +51,155 @@ type update struct {
 }
 
 type Backend struct {
-    path string
+    logPath  string
+    dataPath string
 
     accepted map[key]value
 
-    data *os.File
-    log1 *os.File
-    log2 *os.File
+    data         *os.File
+    data_entries uint64
+    log_size     int64
+    log_number   uint64
 
-    cs chan *update
+    pending chan *update
+    handled uint64
+
+    notify chan bool
+
+    sync.Mutex
 }
 
-func OpenLocked(filename string) (*os.File, error) {
-    file, err := os.OpenFile(filename, os.O_RDWR|os.O_CREATE, 0644)
+func (b *Backend) loadLogs() error {
+
+    // Create the log path if it doesn't exist.
+    err := os.MkdirAll(b.logPath, 0644)
     if err != nil {
-        return nil, err
+        log.Print("Error initializing log: ", err)
+        return err
     }
-    fd := file.Fd()
-    err = syscall.Flock(int(fd), syscall.LOCK_EX)
+
+    // List all entries.
+    logfiles, err := filepath.Glob(path.Join(b.logPath, "log.*"))
     if err != nil {
+        log.Print("Error listing logs: ", err)
+        return err
+    }
+
+    lognumbers := make([]int, 0, len(logfiles))
+    for _, logfile := range logfiles {
+        // Extract suffix (after log.).
+        basename := filepath.Base(logfile)[4:]
+
+        // Extract the number.
+        // NOTE: This is currently limited to 32 bits just
+        // to support the IntSlice below. This is somewhat
+        // annoying, but if necessary it could be expanded
+        // without breaking compatibilit.
+        basenum, err := strconv.ParseInt(basename, 10, 32)
+        if err != nil {
+            // Skip unknown files.
+            continue
+        }
+
+        // Save the number.
+        lognumbers = append(lognumbers, int(basenum))
+    }
+
+    // Sort the logs.
+    sort.Sort(sort.IntSlice(lognumbers))
+
+    for _, basenum := range lognumbers {
+        // Open the file.
+        file, err := os.OpenFile(path.Join(b.logPath, fmt.Sprintf("log.%d", basenum)), os.O_RDONLY, 0)
+
+        // Get the filesize.
+        fi, err := os.Stat(file.Name())
+        if err != nil {
+            file.Close()
+            continue
+        }
+
+        // Read all the entries.
+        _, err = b.loadFile(file)
+        if err != nil {
+            file.Close()
+            continue
+        }
+
+        // Save the highest log number.
+        if uint64(basenum) > b.log_number {
+            b.log_number = uint64(basenum)
+        }
+
+        // Keep going.
+        b.log_size += fi.Size()
         file.Close()
-        return nil, err
     }
-    return file, nil
+
+    return nil
 }
 
-func NewBackend(p string) (*Backend, error) {
-    // Create the directory.
-    err := os.MkdirAll(p, 0644)
+func (b *Backend) removeLogs(limit uint64) error {
+
+    // List all log files.
+    logfiles, err := filepath.Glob(path.Join(b.logPath, "log.*"))
     if err != nil {
-        log.Print("Error initializing storage: ", err)
-        return nil, err
+        log.Print("Error listing log files: ", err)
+        return err
     }
 
+    // Delete them all.
+    // Unfortunately a stale logfile can have unintended
+    // consequences so we have to bail. At the higher level,
+    // we ensure that the data is written out before bailling,
+    // because *some* log file may have been erased.
+    for _, logfile := range logfiles {
+        // Extract suffix (after log.).
+        basename := filepath.Base(logfile)[4:]
+
+        // Extract the number.
+        basenum, err := strconv.ParseUint(basename, 10, 64)
+        if err != nil {
+            // Skip unknown files.
+            continue
+        }
+
+        // Don't erase past where we're given.
+        if basenum > limit {
+            continue
+        }
+
+        // Get the filesize.
+        fi, err := os.Stat(logfile)
+        if err != nil {
+            continue
+        }
+
+        // Try the actual remove.
+        err = os.Remove(logfile)
+        if err != nil {
+            log.Print("Error removing log file: ", err)
+            return err
+        }
+
+        // Take off the entries.
+        atomic.AddInt64(&b.log_size, -fi.Size())
+    }
+
+    // Reset the log number if it's still limit.
+    atomic.CompareAndSwapUint64(&b.log_number, limit, 0)
+
+    return nil
+}
+
+func NewBackend(logPath string, dataPath string) (*Backend, error) {
     // Create our backend.
     b := new(Backend)
-    b.path = p
-    b.cs = make(chan *update, MaximumLogBatch)
-    err = b.init()
+    b.logPath = logPath
+    b.dataPath = dataPath
+    b.pending = make(chan *update, MaximumLogBatch)
+    b.notify = make(chan bool)
+    err := b.init()
     if err != nil {
         return nil, err
     }
@@ -80,53 +207,57 @@ func NewBackend(p string) (*Backend, error) {
 }
 
 func (b *Backend) init() error {
+    b.Mutex.Lock()
+    defer b.Mutex.Unlock()
+
+    // Reset in-memory database.
     b.accepted = make(map[key]value)
+    b.handled = uint64(0)
+
+    // Close existing files.
+    if b.data != nil {
+        b.data.Close()
+        b.data = nil
+    }
+
+    // Create the directories.
+    err := os.MkdirAll(b.dataPath, 0644)
+    if err != nil {
+        log.Print("Error initializing data: ", err)
+        return err
+    }
 
     // Open our files.
-    data, err := OpenLocked(path.Join(b.path, "data"))
+    b.data, err = os.OpenFile(path.Join(b.dataPath, "data"), os.O_RDWR|os.O_CREATE, 0644)
     if err != nil {
         log.Print("Error initializing data file: ", err)
         return err
     }
-    err = b.loadFile(data)
+    b.data_entries, err = b.loadFile(b.data)
     if err != nil {
+        b.data.Close()
+        b.data = nil
         log.Print("Error loading data file: ", err)
         return err
     }
-    log1, err := OpenLocked(path.Join(b.path, "log.1"))
+
+    // Load log files.
+    err = b.loadLogs()
     if err != nil {
-        data.Close()
-        log.Print("Error initializing first log file: ", err)
-        return err
-    }
-    err = b.loadFile(log1)
-    if err != nil {
-        data.Close()
-        log.Print("Error loading first log file: ", err)
-        return err
-    }
-    log2, err := OpenLocked(path.Join(b.path, "log.2"))
-    if err != nil {
-        log1.Close()
-        data.Close()
-        log.Print("Error initializing second log file: ", err)
-        return err
-    }
-    err = b.loadFile(log2)
-    if err != nil {
-        data.Close()
-        log.Print("Error loading second log file: ", err)
+        b.data.Close()
+        b.data = nil
+        log.Print("Unable to load initial log files: ", err)
         return err
     }
 
-    // Save our files.
-    b.data = data
-    b.log1 = log1
-    b.log2 = log2
-
-    // After our initial load do a pivot.
-    b.pivotLogs()
-    b.pivotLogs()
+    // Clean old log files.
+    err = b.squashLogs()
+    if err != nil {
+        b.data.Close()
+        b.data = nil
+        log.Print("Unable to clean squash log files: ", err)
+        return err
+    }
 
     return nil
 }
@@ -138,18 +269,21 @@ func serialize(output *os.File, ent *entry) error {
     enc := gob.NewEncoder(encoded)
     err := enc.Encode(ent)
     if err != nil {
+        log.Print("Error encoding an entry: ", err)
         return err
     }
 
     // Finish our header.
     err = binary.Write(output, binary.LittleEndian, uint32(encoded.Len()))
     if err != nil {
+        log.Print("Error writing entry length: ", err)
         return err
     }
 
     // Write the full buffer.
     _, err = output.Write(encoded.Bytes())
     if err != nil {
+        log.Print("Error writing full entry: ", err)
         return err
     }
 
@@ -164,6 +298,9 @@ func deserialize(input *os.File, ent *entry) error {
     if err == io.ErrUnexpectedEOF {
         return io.EOF
     } else if err != nil {
+        if err != io.EOF {
+            log.Print("Error reading entry header: ", err)
+        }
         return err
     }
 
@@ -173,6 +310,7 @@ func deserialize(input *os.File, ent *entry) error {
     if (err == io.EOF || err == io.ErrUnexpectedEOF) && n == int(length) {
         // Perfect. We got exactly this object.
     } else if err != nil {
+        log.Print("Error reading full entry: ", err)
         return err
     }
 
@@ -180,60 +318,65 @@ func deserialize(input *os.File, ent *entry) error {
     dec := gob.NewDecoder(bytes.NewBuffer(encoded))
     err = dec.Decode(ent)
     if err != nil {
+        log.Print("Error decoding an entry: ", err)
         return err
     }
 
     return nil
 }
 
-func (b *Backend) pivotLogs() error {
+func (b *Backend) safeSquash(limit uint64) error {
+    b.Mutex.Lock()
+    defer b.Mutex.Unlock()
 
-    // Remove the first log.
-    err := os.Remove(path.Join(b.path, "log.1"))
-    if err != nil {
-        return err
+    if atomic.LoadInt64(&b.log_size) > MaximumLogSize {
+        return b.squashLogsUntil(limit)
     }
 
-    // Pivot the second one to the first by name.
-    err = os.Rename(path.Join(b.path, "log.2"), path.Join(b.path, "log.1"))
-    if err != nil {
-        return err
-    }
-    orig_log1 := b.log1
-    b.log1 = b.log2
-    orig_log1.Close()
+    return nil
+}
 
-    // Open a new second log.
-    newlog2, err := OpenLocked(path.Join(b.path, "log.2"))
-    if err != nil {
-        return err
-    }
-    b.log2 = newlog2
+func (b *Backend) squashLogsUntil(limit uint64) error {
 
     // Serialize our current database.
-    data, err := OpenLocked(path.Join(b.path, ".data"))
+    data, err := ioutil.TempFile(b.dataPath, "data")
     if err != nil {
+        log.Print("Error opening new data: ", err)
         return err
     }
+    data_entries := uint64(0)
     for id, val := range b.accepted {
         err = serialize(data, &entry{id, val})
         if err != nil {
+            log.Print("Error serializing data: ", err)
             return err
         }
+        data_entries += 1
     }
     data.Sync()
-    err = os.Rename(path.Join(b.path, ".data"), path.Join(b.path, "data"))
+    err = os.Rename(data.Name(), path.Join(b.dataPath, "data"))
     if err != nil {
+        log.Print("Error renaming data: ", err)
         return err
     }
-    orig_data := b.data
+    b.data.Close()
     b.data = data
-    orig_data.Close()
+    b.data_entries = data_entries
 
-    return nil
+    // Remove old log files.
+    return b.removeLogs(limit)
 }
 
-func (b *Backend) loadFile(file *os.File) error {
+func (b *Backend) squashLogs() error {
+    // Grab the current highest log.
+    limit := atomic.LoadUint64(&b.log_number)
+    return b.squashLogsUntil(limit)
+}
+
+func (b *Backend) loadFile(file *os.File) (uint64, error) {
+
+    // Count entries.
+    entries := uint64(0)
 
     // Reset the pointer.
     file.Seek(0, 0)
@@ -244,86 +387,158 @@ func (b *Backend) loadFile(file *os.File) error {
         if err == io.EOF {
             break
         } else if err != nil {
-            return err
+            return entries, err
         }
+
+        entries += 1
 
         // Atomic set on our map.
-        if ent.value.data == nil && ent.value.metadata == nil {
-            delete(b.accepted, ent.key)
+        if ent.Value.Data == nil && ent.Value.Metadata == nil {
+            delete(b.accepted, ent.Key)
         } else {
-            b.accepted[ent.key] = ent.value
+            b.accepted[ent.Key] = ent.Value
         }
     }
 
-    return nil
+    return entries, nil
 }
 
-func (b *Backend) logWriter() {
+func (b *Backend) logWriter() error {
 
-    finished := make([]*update, 0, MaximumLogBatch)
+    var log_number uint64
+    var finished []*update
+    var logfile *os.File
 
-    complete := func() {
-        // Ensure we're synced.
-        b.log2.Sync()
-
-        // Notify waiters.
-        for _, upd := range finished {
-            upd.result <- nil
-        }
-        finished = finished[0:0]
-
-        // Kick off a pivot if we've exceed our size.
-        off, err := b.log2.Seek(0, 1)
-        if err != nil && off > MaximumLogSize {
-            b.pivotLogs()
-        }
+    // Allow a limited number of flushers.
+    flush_chan := make(chan bool, MaximumFlushes)
+    for i := 0; i < MaximumFlushes; i += 1 {
+        flush_chan <- true
     }
 
-    process := func(upd *update) {
-        if upd.entry.value.data == nil && upd.entry.value.metadata == nil {
+    // Allow a single squash at any moment.
+    squash_chan := make(chan error, 1)
+    squash_chan <- nil
+
+    reset := func() error {
+        var err error
+        log_number = atomic.AddUint64(&b.log_number, 1)
+        finished = make([]*update, 0, MaximumLogBatch)
+        logfile, err = os.OpenFile(
+            path.Join(b.logPath, fmt.Sprintf("log.%d", log_number)),
+            os.O_WRONLY|os.O_CREATE, 0644)
+        return err
+    }
+
+    complete := func() {
+
+        flush := func(log_number uint64, logfile *os.File, finished []*update) {
+            // Ensure we're synced.
+            logfile.Sync()
+            logfile.Close()
+
+            // Allow other flushes.
+            flush_chan <- true
+
+            // Notify waiters.
+            for _, upd := range finished {
+                upd.result <- nil
+            }
+
+            // Kick off a pivot if we've exceed our size.
+            fi, err := os.Stat(logfile.Name())
+            if err == nil {
+                atomic.AddInt64(&b.log_size, fi.Size())
+            }
+
+            // Allow only one squash at a time.
+            last_err := <-squash_chan
+            if last_err == nil {
+                squash_chan<- b.safeSquash(log_number)
+            } else {
+                squash_chan<- last_err
+            }
+        }
+
+        // Send this batch to be flushed.
+        go flush(log_number, logfile, finished)
+
+        // Reset our buffers.
+        logfile = nil
+        finished = nil
+    }
+
+    process := func(upd *update) bool {
+        // Check for terminal.
+        if upd == nil {
+            return true
+        }
+
+        if upd.entry.Value.Data == nil && upd.entry.Value.Metadata == nil {
             // It's a promise, try to set.
-            delete(b.accepted, upd.entry.key)
+            delete(b.accepted, upd.entry.Key)
         } else {
             // Update the in-memory database.
             // NOTE: This should be atomic.
-            b.accepted[upd.entry.key] = upd.entry.value
+            b.accepted[upd.entry.Key] = upd.entry.Value
         }
 
         // Serialize the entry to the log.
-        serialize(b.log2, &upd.entry)
+        serialize(logfile, &upd.entry)
 
         // Add it to our list of done.
         finished = append(finished, upd)
+
+        // Keep going.
+        atomic.AddUint64(&b.handled, 1)
+        return false
     }
 
     for {
-        if len(finished) == 0 {
+
+        if finished == nil {
+
             // Nothing in the queue?
             // Block indefinitely.
             select {
-            case upd := <-b.cs:
-                process(upd)
-                break
-            }
+            case upd := <-b.pending:
 
-        } else if len(finished) < MaximumLogBatch {
-            // Something in the queue?
-            // Do a non-blocking call. If we don't
-            // find anything right now, then we do
-            // a flush log to complete this batch.
-            select {
-            case upd := <-b.cs:
-                process(upd)
-                break
-            default:
-                complete()
+                // Initialize the log.
+                err := reset()
+                if err != nil {
+                    log.Print("Error opening log: ", err)
+                }
+
+                // Process normally.
+                if process(upd) {
+                    return <-squash_chan
+                }
                 break
             }
 
         } else {
-            // We're at a full batch.
-            // We have to do a flush of the log.
-            complete()
+
+            if len(finished) < MaximumLogBatch {
+                // Something in the queue?
+                // Do a non-blocking call. If we don't
+                // find anything right now, then we do
+                // a flush log to complete this batch.
+                select {
+                case upd := <-b.pending:
+                    if process(upd) {
+                        return <-squash_chan
+                    }
+                    break
+                case <-flush_chan:
+                    complete()
+                    break
+                }
+
+            } else {
+                // We're at a full batch.
+                // We have to do a flush of the log.
+                <-flush_chan
+                complete()
+            }
         }
     }
 }
@@ -331,13 +546,13 @@ func (b *Backend) logWriter() {
 func (b *Backend) Write(id string, data []byte, metadata []byte) error {
     ent := entry{key(id), value{data, metadata}}
     upd := &update{ent, make(chan error, 1)}
-    b.cs <- upd
+    b.pending <- upd
     return <-upd.result
 }
 
 func (b *Backend) Read(id string) ([]byte, []byte, error) {
     ent := b.accepted[key(id)]
-    return ent.data, ent.metadata, nil
+    return ent.Data, ent.Metadata, nil
 }
 
 func (b *Backend) Delete(id string) error {
@@ -354,9 +569,10 @@ func (b *Backend) List() ([]string, error) {
 
 func (b *Backend) Clear() error {
     // Remove all files.
-    os.Remove(path.Join(b.path, "log.2"))
-    os.Remove(path.Join(b.path, "log.1"))
-    os.Remove(path.Join(b.path, "data"))
+    os.Remove(path.Join(b.logPath, "log.2"))
+    os.Remove(path.Join(b.logPath, "log.1"))
+    os.Remove(path.Join(b.dataPath, "data"))
+    os.Remove(path.Join(b.dataPath, "id"))
     return b.init()
 }
 
@@ -364,7 +580,7 @@ func (b *Backend) LoadIds(number uint) ([]string, error) {
     ids := make([]string, 0)
 
     // Read our current set of ids.
-    iddata, err := ioutil.ReadFile(path.Join(b.path, "id"))
+    iddata, err := ioutil.ReadFile(path.Join(b.dataPath, "id"))
     if err != nil &&
         iddata != nil ||
         len(iddata) > 0 {
@@ -389,7 +605,7 @@ func (b *Backend) LoadIds(number uint) ([]string, error) {
         buf.WriteString(id)
         buf.WriteString("\n")
     }
-    err = ioutil.WriteFile(path.Join(b.path, "id"), buf.Bytes(), 0644)
+    err = ioutil.WriteFile(path.Join(b.dataPath, "id"), buf.Bytes(), 0644)
     if err != nil {
         return nil, err
     }
@@ -398,6 +614,13 @@ func (b *Backend) LoadIds(number uint) ([]string, error) {
     return ids[0:number], nil
 }
 
-func (b *Backend) Run() {
-    b.logWriter()
+func (b *Backend) Run() error {
+    err := b.logWriter()
+    b.notify <- true
+    return err
+}
+
+func (b *Backend) Stop() {
+    b.pending <- nil
+    <-b.notify
 }

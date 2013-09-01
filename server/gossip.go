@@ -155,7 +155,7 @@ func (s *GossipServer) process(addr *net.UDPAddr, m *Message) {
     s.Cluster.GossipUpdate(addr, m.GetId(), rev, m.GetDead())
 
     if m.GetType() == uint32(TYPE_PING) &&
-       (*s.Cluster.Version()).Cmp(core.ZeroRevision) > 0 {
+        (*s.Cluster.Version()).Cmp(core.ZeroRevision) > 0 {
         // Respond to the ping.
         go s.sendPingPong(addr, true)
     }

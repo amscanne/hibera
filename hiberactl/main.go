@@ -1,10 +1,10 @@
 package main
 
 import (
-    "fmt"
     "flag"
-    "hibera/client"
+    "fmt"
     "hibera/cli"
+    "hibera/client"
     "hibera/utils"
 )
 
@@ -13,35 +13,35 @@ var replication = flag.Uint("replication", utils.DefaultN, "The replication fact
 var cliInfo = cli.Cli{
     "Hibera cluster control tool.",
     map[string]cli.Command{
-        "nodes" : cli.Command{
+        "nodes": cli.Command{
             "List all nodes.",
             "",
             []string{},
             []string{},
             false,
         },
-        "active" : cli.Command{
+        "active": cli.Command{
             "List all active nodes.",
             "",
             []string{},
             []string{},
             false,
         },
-        "info" : cli.Command{
+        "info": cli.Command{
             "Show node info.",
             "",
             []string{"id"},
             []string{},
             false,
         },
-        "activate" : cli.Command{
+        "activate": cli.Command{
             "Activate the API target.",
             "",
             []string{},
             []string{"replication"},
             false,
         },
-        "deactivate" : cli.Command{
+        "deactivate": cli.Command{
             "Deactivate the API target.",
             "",
             []string{},

@@ -3,19 +3,19 @@ package main
 import (
     "bufio"
     "bytes"
+    "errors"
     "flag"
     "fmt"
+    "hibera/cli"
     "hibera/client"
     "hibera/core"
     "hibera/utils"
-    "hibera/cli"
     "io"
     "io/ioutil"
     "os"
     "os/exec"
     "strings"
     "syscall"
-    "errors"
 )
 
 var timeout = flag.Uint("timeout", 0, "Timeout (in ms) for acquiring a lock.")
@@ -31,9 +31,9 @@ var perms = flag.String("perms", "rwx", "Permissions (combination of r,w,x).")
 var cliInfo = cli.Cli{
     "Hibera command line client.",
     map[string]cli.Command{
-        "run" : cli.Command{
+        "run": cli.Command{
             "Run up-to <limit> process across the cluster.",
-`      For example, to join a group while a script runs:
+            `      For example, to join a group while a script runs:
         run foo.bar script.sh
 
        To run something exclusively (locked):
@@ -50,79 +50,79 @@ var cliInfo = cli.Cli{
             []string{"name", "limit", "timeout", "start", "stop", "data"},
             true,
         },
-        "members" : cli.Command{ "Show current members of the given group.",
+        "members": cli.Command{"Show current members of the given group.",
             "",
             []string{"key"},
             []string{"name", "limit"},
             false,
         },
-        "in" : cli.Command{
+        "in": cli.Command{
             "Show associated data (if joined with given group).",
             "",
             []string{"key"},
             []string{"name", "limit"},
             false,
         },
-        "out" : cli.Command{ "Set associated data (if joined with given group).",
+        "out": cli.Command{"Set associated data (if joined with given group).",
             "",
             []string{"key"},
             []string{"name", "limit"},
             false,
         },
-        "list" : cli.Command{
+        "list": cli.Command{
             "List all keys.",
             "",
             []string{},
             []string{},
             false,
         },
-        "get" : cli.Command{
+        "get": cli.Command{
             "Get the contents of the key.",
             "",
             []string{"key"},
             []string{},
             false,
         },
-        "set" : cli.Command{ "Set the contents of the key.",
+        "set": cli.Command{"Set the contents of the key.",
             "",
             []string{"key"},
             []string{},
             true,
         },
-        "push" : cli.Command{
+        "push": cli.Command{
             "Stream up the contents of the key.",
             "",
             []string{"key"},
             []string{},
             false,
         },
-        "pull" : cli.Command{ "Stream down the contents of the key.",
+        "pull": cli.Command{"Stream down the contents of the key.",
             "",
             []string{"key"},
             []string{},
             false,
         },
-        "remove" : cli.Command{
+        "remove": cli.Command{
             "Remove the given key.",
             "",
             []string{"key"},
             []string{},
             false,
         },
-        "sync" : cli.Command{ "Synchronize a key.",
+        "sync": cli.Command{"Synchronize a key.",
             "",
             []string{"key"},
             []string{"output", "timeout"},
             true,
         },
-        "watch" : cli.Command{
+        "watch": cli.Command{
             "Wait for an update of the key.",
             "",
             []string{"key"},
             []string{"timeout"},
             false,
         },
-        "fire" : cli.Command{
+        "fire": cli.Command{
             "Notify all waiters on a key.",
             "",
             []string{"key"},

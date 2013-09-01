@@ -3,26 +3,26 @@ package cli
 import (
     "flag"
     "fmt"
-    "os"
+    "hibera/utils"
     "log"
     "math/rand"
-    "time"
-    "hibera/utils"
+    "os"
     "sort"
+    "time"
 )
 
 type Command struct {
-    Help string
+    Help     string
     LongHelp string
-    Args []string
-    Options []string
-    Extra bool
+    Args     []string
+    Options  []string
+    Extra    bool
 }
 
 type Cli struct {
-    Help string
+    Help     string
     Commands map[string]Command
-    Options []string
+    Options  []string
 }
 
 // Universal debug flag.
@@ -115,7 +115,7 @@ func Main(cli Cli, run func(command string, args []string) error) {
 
     // Check the arguments match.
     if len(args) < len(spec.Args) ||
-       (!spec.Extra && len(args) != len(spec.Args)) {
+        (!spec.Extra && len(args) != len(spec.Args)) {
         if command == "help" && len(args) == 0 {
             command_list(cli)
             os.Exit(0)

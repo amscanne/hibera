@@ -3,8 +3,8 @@ package main
 import (
     "flag"
     "fmt"
-    "hibera/client"
     "hibera/cli"
+    "hibera/client"
     "strings"
 )
 
@@ -14,21 +14,21 @@ var perms = flag.String("perms", "rwx", "Permissions (combination of r,w,x).")
 var cliInfo = cli.Cli{
     "Hibera permissions client.",
     map[string]cli.Command{
-        "list" : cli.Command{
+        "list": cli.Command{
             "List access tokens.",
             "",
             []string{},
             []string{},
             false,
         },
-        "show" : cli.Command{
+        "show": cli.Command{
             "Show the given access token.",
             "",
             []string{"token"},
             []string{},
             false,
         },
-        "set" : cli.Command{
+        "set": cli.Command{
             "Set given permissions.",
             "",
             []string{"token"},
