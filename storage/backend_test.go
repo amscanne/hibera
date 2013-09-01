@@ -11,8 +11,8 @@ import (
 // The storage space required for empty entries.
 // Note that this was discovered experimentally,
 // there's nothing magical about this value at all.
-var BytesPerEntryMin = 96
-var BytesPerEntryMax = 100
+var BytesPerEntryMin = 19
+var BytesPerEntryMax = 21
 
 func Setup(t *testing.T) *Backend {
     log, err := ioutil.TempDir("", "log")
@@ -124,54 +124,6 @@ func TestOverwrite(t *testing.T) {
     Check(t, backend, []func(){wait1, wait2}, 1, 0, 2, 2)
     backend.squashLogs()
     Check(t, backend, []func(){}, 1, 1, 0, 2)
-}
-
-func TestHalfBatch(t *testing.T) {
-    backend := Setup(t)
-    defer Teardown(backend)
-    wait := doWrite(backend, MaximumLogBatch/2)
-    Check(t, backend, []func(){wait}, MaximumLogBatch/2, 0, MaximumLogBatch/2, MaximumLogBatch/2)
-    backend.squashLogs()
-    Check(t, backend, []func(){}, MaximumLogBatch/2, MaximumLogBatch/2, 0, MaximumLogBatch/2)
-}
-
-func TestHalfBatchOverwrite(t *testing.T) {
-    backend := Setup(t)
-    defer Teardown(backend)
-    wait1 := doWrite(backend, MaximumLogBatch/2)
-    wait2 := doWrite(backend, MaximumLogBatch/2)
-    Check(t, backend, []func(){wait1, wait2}, MaximumLogBatch/2, 0, MaximumLogBatch, MaximumLogBatch)
-    backend.squashLogs()
-    Check(t, backend, []func(){}, MaximumLogBatch/2, MaximumLogBatch/2, 0, MaximumLogBatch)
-}
-
-func TestFullBatch(t *testing.T) {
-    backend := Setup(t)
-    defer Teardown(backend)
-    wait := doWrite(backend, MaximumLogBatch)
-    Check(t, backend, []func(){wait}, MaximumLogBatch, 0, MaximumLogBatch, MaximumLogBatch)
-    backend.squashLogs()
-    Check(t, backend, []func(){}, MaximumLogBatch, MaximumLogBatch, 0, MaximumLogBatch)
-}
-
-func TestFullBatchPlusHalf(t *testing.T) {
-    backend := Setup(t)
-    defer Teardown(backend)
-    wait1 := doWrite(backend, MaximumLogBatch)
-    wait2 := doWrite(backend, MaximumLogBatch/2)
-    Check(t, backend, []func(){wait1, wait2}, MaximumLogBatch, 0, 3*MaximumLogBatch/2, MaximumLogBatch*3/2)
-    backend.squashLogs()
-    Check(t, backend, []func(){}, MaximumLogBatch, MaximumLogBatch, 0, MaximumLogBatch*3/2)
-}
-
-func TestFullBatchOverwrite(t *testing.T) {
-    backend := Setup(t)
-    defer Teardown(backend)
-    wait1 := doWrite(backend, MaximumLogBatch)
-    wait2 := doWrite(backend, MaximumLogBatch)
-    Check(t, backend, []func(){wait1, wait2}, MaximumLogBatch, 0, 2*MaximumLogBatch, MaximumLogBatch*2)
-    backend.squashLogs()
-    Check(t, backend, []func(){}, MaximumLogBatch, MaximumLogBatch, 0, MaximumLogBatch*2)
 }
 
 func doBenchmark(b *testing.B, unique bool) {

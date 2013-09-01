@@ -3,7 +3,6 @@ package storage
 import (
     "bytes"
     "encoding/binary"
-    "encoding/gob"
     "fmt"
     "hibera/utils"
     "io"
@@ -19,14 +18,9 @@ import (
     "sync/atomic"
 )
 
-// The number of writes to batch prior to flushing.
-// Note that this batching only happens when there is
-// an active queue of writes. If one write comes along
-// and no others are pending, then we will flush to disk.
-var MaximumLogBatch = 1024
-
-// Allow this maximum simultaneous Sync() calls.
-var MaximumFlushes = 2
+// The log buffer.
+// How big the buffer is for pending calls.
+var LogBuffer = 10240
 
 // The maximum log size.
 // If this log size is hit (1Mb default) then we will do
@@ -54,7 +48,7 @@ type Backend struct {
     logPath  string
     dataPath string
 
-    accepted map[key]value
+    locators map[key]Locator
 
     data         *os.File
     data_entries uint64
@@ -197,7 +191,7 @@ func NewBackend(logPath string, dataPath string) (*Backend, error) {
     b := new(Backend)
     b.logPath = logPath
     b.dataPath = dataPath
-    b.pending = make(chan *update, MaximumLogBatch)
+    b.pending = make(chan *update, LogBuffer)
     b.notify = make(chan bool)
     err := b.init()
     if err != nil {
@@ -266,14 +260,40 @@ func serialize(output *os.File, ent *entry) error {
 
     // Do the encoding.
     encoded := bytes.NewBuffer(make([]byte, 0))
-    enc := gob.NewEncoder(encoded)
-    err := enc.Encode(ent)
+
+    doEncode := func (data []byte) error {
+        err := binary.Write(encoded, binary.LittleEndian, uint32(len(data)))
+        if err != nil {
+            log.Print("Error encoding length: ", err)
+            return err
+        }
+        for n := 0; n < len(data); n++ {
+            written, err := encoded.Write(data[n:])
+            if err != nil {
+                log.Print("Error encoding data: ", err)
+                return err
+            }
+            n += written
+        }
+        return nil
+    }
+
+    err := doEncode([]byte(ent.Key))
     if err != nil {
-        log.Print("Error encoding an entry: ", err)
         return err
     }
 
-    // Finish our header.
+    err = doEncode(ent.Value.Data)
+    if err != nil {
+        return err
+    }
+
+    err = doEncode(ent.Value.Metadata)
+    if err != nil {
+        return err
+    }
+
+    // Write our header.
     err = binary.Write(output, binary.LittleEndian, uint32(encoded.Len()))
     if err != nil {
         log.Print("Error writing entry length: ", err)
@@ -305,8 +325,8 @@ func deserialize(input *os.File, ent *entry) error {
     }
 
     // Read the object.
-    encoded := make([]byte, length, length)
-    n, err := io.ReadFull(input, encoded)
+    data := make([]byte, length, length)
+    n, err := io.ReadFull(input, data)
     if (err == io.EOF || err == io.ErrUnexpectedEOF) && n == int(length) {
         // Perfect. We got exactly this object.
     } else if err != nil {
@@ -315,10 +335,39 @@ func deserialize(input *os.File, ent *entry) error {
     }
 
     // Do the decoding.
-    dec := gob.NewDecoder(bytes.NewBuffer(encoded))
-    err = dec.Decode(ent)
+    encoded := bytes.NewBuffer(data)
+    doDecode := func() ([]byte, error) {
+        var length uint32
+        err := binary.Read(encoded, binary.LittleEndian, &length)
+        if err != nil {
+            log.Print("Error decoding length: ", err)
+            return nil, err
+        }
+        blob := make([]byte, length, length)
+        for n := 0; n < len(blob); n += 1 {
+            read, err := encoded.Read(blob[n:])
+            if err != nil {
+                log.Print("Error decoding data: ", err)
+                return nil, err
+            }
+            n += read
+        }
+        return blob, nil
+    }
+
+    key_bytes, err := doDecode()
     if err != nil {
-        log.Print("Error decoding an entry: ", err)
+        return err
+    }
+    ent.Key = key(key_bytes)
+
+    ent.Value.Data, err = doDecode()
+    if err != nil {
+        return err
+    }
+
+    ent.Value.Metadata, err = doDecode()
+    if err != nil {
         return err
     }
 
@@ -410,10 +459,8 @@ func (b *Backend) logWriter() error {
     var logfile *os.File
 
     // Allow a limited number of flushers.
-    flush_chan := make(chan bool, MaximumFlushes)
-    for i := 0; i < MaximumFlushes; i += 1 {
-        flush_chan <- true
-    }
+    flush_chan := make(chan bool, 1)
+    flush_chan <- true
 
     // Allow a single squash at any moment.
     squash_chan := make(chan error, 1)
@@ -422,7 +469,7 @@ func (b *Backend) logWriter() error {
     reset := func() error {
         var err error
         log_number = atomic.AddUint64(&b.log_number, 1)
-        finished = make([]*update, 0, MaximumLogBatch)
+        finished = make([]*update, 0, 0)
         logfile, err = os.OpenFile(
             path.Join(b.logPath, fmt.Sprintf("log.%d", log_number)),
             os.O_WRONLY|os.O_CREATE, 0644)
@@ -517,27 +564,19 @@ func (b *Backend) logWriter() error {
 
         } else {
 
-            if len(finished) < MaximumLogBatch {
-                // Something in the queue?
-                // Do a non-blocking call. If we don't
-                // find anything right now, then we do
-                // a flush log to complete this batch.
-                select {
-                case upd := <-b.pending:
-                    if process(upd) {
-                        return <-squash_chan
-                    }
-                    break
-                case <-flush_chan:
-                    complete()
-                    break
-                }
-
-            } else {
-                // We're at a full batch.
-                // We have to do a flush of the log.
-                <-flush_chan
+            // Something in the queue?
+            // Do a non-blocking call. If we don't
+            // find anything right now, then we do
+            // a flush log to complete this batch.
+            select {
+            case <-flush_chan:
                 complete()
+                break
+            case upd := <-b.pending:
+                if process(upd) {
+                    return <-squash_chan
+                }
+                break
             }
         }
     }
@@ -600,7 +639,7 @@ func (b *Backend) LoadIds(number uint) ([]string, error) {
     }
 
     // Write out the result.
-    buf := new(bytes.Buffer)
+    buf := bytes.NewBuffer(make([]byte, 0))
     for _, id := range ids {
         buf.WriteString(id)
         buf.WriteString("\n")
