@@ -67,15 +67,19 @@ func (l *logFile) Write(ent *entry) (*logRecord, error) {
 
     // Find a free chunk.
     var offset int64
-    length := ent.Length()
+    length := ent.Usage()
+    remaining := uint64(0)
     found := false
 
     var index int
     var chk chunk
     for index, chk = range l.chunks {
-        if chk.length >= length {
+        if chk.length >= length &&
+           ((chk.length - length) == 0 ||
+           (chk.length - length) >= 4) {
             found = true
             offset = int64(chk.offset)
+            remaining = (chk.length - length)
             break
         }
     }
@@ -112,6 +116,13 @@ func (l *logFile) Write(ent *entry) (*logRecord, error) {
     }
     atomic.AddInt64(&l.entries, 1)
 
+    // Mark any remaining space as still free,
+    // and add the chunk to our list of chunks.
+    if remaining > 0 {
+        clear(l.file, remaining)
+        l.chunks = append(l.chunks, chunk{uint64(offset) + length, remaining})
+    }
+
     return l.NewRecord(uint64(offset)), nil
 }
 
@@ -137,101 +148,90 @@ func (l *logRecord) Read(ent *entry) (uint64, error) {
 }
 
 func (l *logRecord) Delete() error {
-    l.log.Mutex.Lock()
-    defer l.log.Mutex.Unlock()
 
-    // Seek to the appropriate offset.
-    _, err := l.log.file.Seek(int64(l.offset), 0)
-    if err != nil {
+    // Read the original record.
+    var ent entry
+    free_space, err := l.Read(&ent)
+    if err != nil || free_space > 0 {
         return err
     }
 
-    // Clear the record.
-    var ent entry
-    free_space, err := l.Read(&ent)
-    if free_space == 0 && err == nil {
+    l.log.Mutex.Lock()
+    defer l.log.Mutex.Unlock()
 
-        // Clear our the record in the underlying file.
-        err = clear(l.log.file, ent.Usage())
-        if err != nil {
-            return err
-        }
-        atomic.AddInt64(&l.log.entries, -1)
+    atomic.AddInt64(&l.log.entries, -1)
 
-        // Merge it with any existing chunks by
-        // popping them out of the list and keep going.
-        current := chunk{l.offset, ent.Usage()}
+    // Merge it with any existing chunks by
+    // popping them out of the list and keep going.
+    current := chunk{l.offset, ent.Usage()}
 
-        for {
-            merged := false
+    for {
+        merged := false
 
-            // Find a potential merge.
-            var index int
-            var other chunk
-            for index, other = range l.log.chunks {
-                if other.offset + other.length == current.offset {
-                    // Update our current chunk.
-                    current.offset = other.offset
-                    current.length = other.length + current.length
-                    merged = true
-                    break
-                }
-                if current.offset + current.length == other.offset {
-                    // Update our current chunk.
-                    current.length = current.length + other.length
-                    merged = true
-                    break
-                }
+        // Find a potential merge.
+        var index int
+        var other chunk
+        for index, other = range l.log.chunks {
+            if other.offset + other.length == current.offset {
+                // Update our current chunk.
+                current.offset = other.offset
+                current.length = other.length + current.length
+                merged = true
+                break
             }
-
-
-            if merged {
-                // Remove the last element from our list of chunks.
-                if index < len(l.log.chunks) - 1 {
-                    l.log.chunks[index] = l.log.chunks[len(l.log.chunks)-1]
-                }
-                l.log.chunks = l.log.chunks[:len(l.log.chunks)-1]
-                continue
-            } else {
-                // No merge found, stop.
+            if current.offset + current.length == other.offset {
+                // Update our current chunk.
+                current.length = current.length + other.length
+                merged = true
                 break
             }
         }
 
-        // Add in our newly merged chunk.
-        l.log.chunks = append(l.log.chunks, current)
+
+        if merged {
+            // Remove the last element from our list of chunks.
+            if index < len(l.log.chunks) - 1 {
+                l.log.chunks[index] = l.log.chunks[len(l.log.chunks)-1]
+            }
+            l.log.chunks = l.log.chunks[:len(l.log.chunks)-1]
+            continue
+        } else {
+            // No merge found, stop.
+            break
+        }
     }
 
+    // Seek to the appropriate offset.
+    _, err = l.log.file.Seek(int64(current.offset), 0)
+    if err != nil {
+        return err
+    }
+
+    // Clear our the record in the underlying file.
+    err = clear(l.log.file, current.length)
+    if err != nil {
+        return err
+    }
+
+    // Add in our newly merged chunk.
+    l.log.chunks = append(l.log.chunks, current)
+
+    // Drop the reference.
+    l.Discard()
     return nil
 }
 
-func (l *logRecord) Copy(output *logFile) (bool, error) {
-
-    // Ignore idempotent operations.
-    if l.log == output {
-        return false, nil
-    }
+func (l *logRecord) Copy(output *logFile) (*logRecord, error) {
 
     // Read the current record.
     var ent entry
     free_space, err := l.Read(&ent)
     if free_space != 0 || err != nil {
-        return false, err
+        return nil, err
     }
 
     // Create a new record.
-    out_rec, err := output.Write(&ent)
-    if err != nil {
-        return false, err
-    }
-
-    // Override the record.
-    orig_log := l.log
-    l.log = out_rec.log
-    l.offset = out_rec.offset
-    orig_log.Close()
-
-    return true, nil
+    return output.Write(&ent)
 }
 
 func (l *logRecord) Discard() {

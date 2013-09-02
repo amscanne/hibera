@@ -40,7 +40,7 @@ func clear(output *os.File, length uint64) error {
 
 func serialize(output *os.File, ent *entry) error {
 
-    // Get the current 
+    // Get the current offset.
     offset, err := output.Seek(0, 1)
     if err != nil {
         return err
@@ -110,7 +110,9 @@ func serialize(output *os.File, ent *entry) error {
         return err
     }
 
-    return nil
+    // Go to the end of the record.
+    offset, err = output.Seek(int64(encoded.Len()), 1)
+    return err
 }
 
 func deserialize(input *os.File, ent *entry) (uint64, uint64, error) {
@@ -130,7 +132,7 @@ func deserialize(input *os.File, ent *entry) (uint64, uint64, error) {
     // Check if it's free space.
     if length <= 0 {
         // Skip ahead past the free space.
-        _, err = input.Seek(int64(-length), 1)
+        _, err = input.Seek(int64(-length)-4, 1)
         return uint64(0), uint64(length), err
     }
 

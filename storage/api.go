@@ -33,7 +33,7 @@ func (s *Store) List() ([]string, error) {
 }
 
 func (s *Store) Run() error {
-    err := s.flush()
+    err := s.flusher()
     s.stopped <- true
     return err
 }

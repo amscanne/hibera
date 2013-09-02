@@ -19,6 +19,10 @@ type Store struct {
 
     pending chan *update
     handled uint64
+
+    flush chan bool
+    squash chan error
+
     stopped chan bool
 }
 
@@ -33,14 +37,23 @@ func NewStore(logPath string, dataPath string) (*Store, error) {
     s := new(Store)
     s.logs = logs
     s.pending = make(chan *update, LogBuffer)
-    s.stopped = make(chan bool)
+    s.stopped = make(chan bool, 1)
+
     return s, nil
 }
 
-func (s *Store) flush() error {
+func (s *Store) flusher() error {
 
     var finished []*update
     var logfile *logFile
+
+    // Allow a single flush at any given moment.
+    flush_chan := make(chan bool, 1)
+    flush_chan <- true
+
+    // Allow a single squash at any given moment.
+    squash_chan := make(chan error, 1)
+    squash_chan <- nil
 
     process := func(upd *update) bool {
         // Check for terminal.
@@ -86,7 +99,7 @@ func (s *Store) flush() error {
 
                 // Process normally.
                 if process(upd) {
-                    return s.logs.squashResult()
+                    return <-squash_chan
                 }
                 break
             }
@@ -98,15 +111,26 @@ func (s *Store) flush() error {
             // find anything right now, then we do
             // a flush log to complete this batch.
             select {
-            case <-s.logs.flushReady():
+            case <-flush_chan:
                 go func(logfile *logFile, finished []*update) {
                     // Sync the log.
                     s.logs.closeLog(logfile)
+
+                    // Allow other flushes.
+                    flush_chan <- true
 
                     // Notify waiters.
                     for _, upd := range finished {
                         upd.result <- nil
                     }
+
+                    // Squash the log.
+                    last_squash := <-squash_chan
+                    if last_squash == nil {
+                        last_squash = s.logs.checkSquash(logfile)
+                    }
+                    squash_chan <- last_squash
+
                 }(logfile, finished)
 
                 // Reset our buffers.
@@ -116,7 +140,7 @@ func (s *Store) flush() error {
 
             case upd := <-s.pending:
                 if process(upd) {
-                    return s.logs.squashResult()
+                    return <-squash_chan
                 }
                 break
             }

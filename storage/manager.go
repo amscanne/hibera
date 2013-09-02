@@ -26,9 +26,6 @@ type logManager struct {
     log_size     int64
     log_number   uint64
 
-    flush chan bool
-    squash chan error
-
     records map[key]*logRecord
 }
 
@@ -142,30 +139,15 @@ func (l *logManager) NewLog() (*logFile, error) {
         log_number)
 }
 
-func (l *logManager) flushReady() chan bool {
-    return l.flush
-}
-
 func (l *logManager) closeLog(logfile *logFile) {
     // Ensure we're synced.
     logfile.Sync()
     logfile.Close()
 
-    // Allow other flushes.
-    l.flush <- true
-
-    // Kick off a pivot if we've exceed our size.
+    // Add the final size to the tally.
     size, err := logfile.Size()
     if err == nil {
         atomic.AddInt64(&l.log_size, int64(size))
-    }
-
-    // Allow only one squash at a time.
-    last_err := <-l.squash
-    if last_err == nil {
-        l.squash<- l.checkSquash(logfile.number)
-    } else {
-        l.squash<- last_err
     }
 }
 
@@ -222,8 +204,11 @@ func (l *logManager) removeLogs(limit uint64) error {
     return nil
 }
 
-func (l *logManager) checkSquash(limit uint64) error {
+func (l *logManager) checkSquash(logfile *logFile) error {
+
+    // Check if we should squash the logs.
     if atomic.LoadInt64(&l.log_size) > MaximumLogSize {
+        limit := logfile.number
         return l.squashLogsUntil(limit)
     }
 
@@ -235,17 +220,24 @@ func (l *logManager) squashLogsUntil(limit uint64) error {
     // Update all current records.
     for key, record := range l.records {
 
+        // Ignore this record if it's the data record.
+        if l.data_records[key] == record {
+            continue
+        }
+
         // Copy all logs down to the data layer.
         orig_data, has_orig_data := l.data_records[key]
-        copied, err := record.Copy(l.data)
+        new_record, err := record.Copy(l.data)
         if err != nil {
-            return err
+            continue
         }
 
         // Remove the original record if it exists.
-        l.data_records[key] = record
-        if copied && has_orig_data {
+        l.data_records[key] = new_record
+        if new_record != nil && has_orig_data {
             orig_data.Delete()
+        } else if has_orig_data {
+            orig_data.Discard()
         }
     }
 
@@ -262,14 +254,14 @@ func (l *logManager) squashLogs() error {
     return l.squashLogsUntil(limit)
 }
 
-func (l *logManager) squashResult() error {
-    return <-l.squash
-}
-
 func (l *logManager) writeEntry(ent *entry, logfile *logFile) error {
     record, err := logfile.Write(ent)
     if err != nil {
         return err
+    }
+    orig_rec, ok := l.records[ent.key]
+    if ok {
+        orig_rec.Discard()
     }
     l.records[ent.key] = record
     return nil
@@ -281,10 +273,6 @@ func NewLogManager(logPath string, dataPath string) (*logManager, error) {
     l.dataPath = dataPath
     l.records = make(map[key]*logRecord)
     l.data_records = make(map[key]*logRecord)
-    l.flush = make(chan bool, 1)
-    l.squash = make(chan error, 1)
-    l.flush <- true
-    l.squash <- nil
 
     // Create the directories.
     err := os.MkdirAll(l.dataPath, 0644)
