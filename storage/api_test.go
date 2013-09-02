@@ -41,19 +41,29 @@ func doBenchmark(b *testing.B, workers int, ops int, unique bool, data_len int) 
     defer Teardown(store)
 
     data := make([]byte, data_len, data_len)
+    metadata := make([]byte, data_len/2, data_len/2)
     unique_data := make(map[string][]byte)
-    b.SetBytes(int64(2 * data_len))
+    unique_metadata := make(map[string][]byte)
+    b.SetBytes(int64(data_len + data_len/2))
 
     // Generate random data.
     for i := 0; i < len(data); i += 1 {
         data[i] = byte(i % 256)
+        if i < len(data)/2 {
+            metadata[i] = byte((i+1) % 256)
+        }
     }
     for i := 0; i < workers; i += 1 {
         chunk_data := make([]byte, data_len, data_len)
+        chunk_metadata := make([]byte, data_len/2, data_len/2)
         for j := 0; j < len(chunk_data); j += 1 {
             chunk_data[j] = byte((i+j) % 256)
+            if j < len(chunk_data)/2 {
+                chunk_metadata[j] = byte((i+j+1) % 256)
+            }
         }
         unique_data[fmt.Sprintf("a.%d", i)] = chunk_data
+        unique_metadata[fmt.Sprintf("a.%d", i)] = chunk_metadata
     }
 
     // Start the store.
@@ -69,9 +79,9 @@ func doBenchmark(b *testing.B, workers int, ops int, unique bool, data_len int) 
             for j := 0; j < ops; j += 1 {
                 if unique {
                     key := fmt.Sprintf("a.%d", i)
-                    store.Write(key, unique_data[key], unique_data[key])
+                    store.Write(key, unique_data[key], unique_metadata[key])
                 } else {
-                    store.Write("a", data, data)
+                    store.Write("a", data, metadata)
                 }
             }
             done <- true
@@ -100,7 +110,7 @@ func doBenchmark(b *testing.B, workers int, ops int, unique bool, data_len int) 
                 if bytes.Compare(unique_data[key], store_data) != 0 {
                     b.Fail()
                 }
-                if bytes.Compare(unique_data[key], store_metadata) != 0 {
+                if bytes.Compare(unique_metadata[key], store_metadata) != 0 {
                     b.Fail()
                 }
             } else {
@@ -111,7 +121,7 @@ func doBenchmark(b *testing.B, workers int, ops int, unique bool, data_len int) 
                 if bytes.Compare(data, store_data) != 0 {
                     b.Fail()
                 }
-                if bytes.Compare(data, store_metadata) != 0 {
+                if bytes.Compare(metadata, store_metadata) != 0 {
                     b.Fail()
                 }
             }
