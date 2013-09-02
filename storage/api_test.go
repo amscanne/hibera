@@ -125,18 +125,18 @@ func doBenchmark(b *testing.B, workers int, ops int, unique bool, data_len int) 
     }
 }
 
-func BenchmarkNWriters1Ops1KBytesUnique(b *testing.B) {
-    doBenchmark(b, b.N, 1, true, 1024)
+func BenchmarkNWriters1Ops4KBytesUnique(b *testing.B) {
+    doBenchmark(b, b.N, 1, true, 4096)
 }
-func BenchmarkNWriters1Ops1KBytesSame(b *testing.B) {
-    doBenchmark(b, b.N, 1, false, 1024)
+func BenchmarkNWriters1Ops4KBytesSame(b *testing.B) {
+    doBenchmark(b, b.N, 1, false, 4096)
 }
 
-func Benchmark100WritersNOps1KBytesUnique(b *testing.B) {
-    doBenchmark(b, 100, b.N, true, 1024)
+func Benchmark100WritersNOps4KBytesUnique(b *testing.B) {
+    doBenchmark(b, 100, b.N, true, 4096)
 }
-func Benchmark100WritersNOps1KBytesSame(b *testing.B) {
-    doBenchmark(b, 100, b.N, false, 1024)
+func Benchmark100WritersNOps4KBytesSame(b *testing.B) {
+    doBenchmark(b, 100, b.N, false, 4096)
 }
 
 func Benchmark100Writers1OpsNBytesUnique(b *testing.B) {

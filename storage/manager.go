@@ -227,17 +227,19 @@ func (l *logManager) squashLogsUntil(limit uint64) error {
 
         // Copy all logs down to the data layer.
         orig_data, has_orig_data := l.data_records[key]
-        new_record, err := record.Copy(l.data)
+        copied, err := record.Copy(l.data)
         if err != nil {
             continue
         }
 
-        // Remove the original record if it exists.
-        l.data_records[key] = new_record
-        if new_record != nil && has_orig_data {
-            orig_data.Delete()
-        } else if has_orig_data {
-            orig_data.Discard()
+        if copied {
+            // The record now points to data.
+            l.data_records[key] = record
+
+            // Remove the original record if it exists.
+            if has_orig_data {
+                orig_data.Delete()
+            }
         }
     }
 

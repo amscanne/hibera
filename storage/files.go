@@ -221,17 +221,37 @@ func (l *logRecord) Delete() error {
     return nil
 }
 
-func (l *logRecord) Copy(output *logFile) (*logRecord, error) {
+func (l *logRecord) Copy(output *logFile) (bool, error) {
+    // Check if it makes sense.
+    if l.log == output {
+        return false, nil
+    }
 
     // Read the current record.
     var ent entry
     free_space, err := l.Read(&ent)
     if free_space != 0 || err != nil {
-        return nil, err
+        return false, err
     }
 
     // Create a new record.
-    return output.Write(&ent)
+    out_rec, err := output.Write(&ent)
+    if err != nil {
+        return false, err
+    }
+
+    l.log.Mutex.Lock()
+    out_rec.log.Mutex.Lock()
+    defer l.log.Mutex.Unlock()
+    defer out_rec.log.Mutex.Unlock()
+
+    // Swap the bits.
+    orig_log := l.log
+    l.log = out_rec.log
+    l.offset = out_rec.offset
+    orig_log.Close()
+
+    return true, nil
 }
 
 func (l *logRecord) Discard() {
