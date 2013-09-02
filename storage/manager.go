@@ -44,7 +44,26 @@ func (l *logManager) loadData() error {
         if err != nil {
             continue
         }
+
+        // Check for an earlier key.
+        // NOTE: It's quite possible this the "original" record
+        // here is in fact the later record and we are deleting
+        // the wrong piece. However, if we somehow wound up with
+        // two records for the same key in the data log, then we
+        // know that something went wrong during the squash.
+        // Specifically, something went wrong between the Copy()
+        // and the Delete() in squashLogsUntil(). We know then,
+        // that the original log with the new record is still
+        // around and we will read it shortly.
+        orig_data_rec, has_data_rec := l.data_records[ent.key]
+
+        // Set the latest in the file.
         l.data_records[ent.key] = record
+
+        // Remove the "older" record (see above).
+        if has_data_rec {
+            orig_data_rec.Delete()
+        }
     }
 
     return nil
@@ -91,31 +110,40 @@ func (l *logManager) loadLogs() error {
 
     for _, basenum := range lognumbers {
         // Open the file.
-        file, err := OpenLog(
+        file, err := ReadLog(
             path.Join(l.logPath, fmt.Sprintf("log.%d", basenum)),
             uint64(basenum))
+        if err != nil {
+            return err
+        }
 
         // Get the filesize.
         size, err := file.Size()
         if err != nil {
             file.Close()
-            continue
+            return err
         }
 
         // Read all the entries.
         records, err := file.Load()
         if err != nil {
             file.Close()
-            continue
+            return err
         }
 
         // Set the current record.
         for _, record := range records {
             var ent entry
             _, err = record.Read(&ent)
+
+            // The end of the file may have
+            // been corrupted, so we let invalid
+            // records go. We are not as tolerant
+            // in other aspects of loading files.
             if err != nil {
                 continue
             }
+
             l.records[ent.key] = record
         }
 
@@ -136,7 +164,7 @@ func (l *logManager) NewLog() (*logFile, error) {
     log_number := atomic.AddUint64(&l.log_number, 1)
     return OpenLog(
         path.Join(l.logPath, fmt.Sprintf("log.%d", log_number)),
-        log_number)
+        log_number, true)
 }
 
 func (l *logManager) closeLog(logfile *logFile) {
@@ -284,7 +312,7 @@ func NewLogManager(logPath string, dataPath string) (*logManager, error) {
     }
 
     // Open our files.
-    l.data, err = OpenLog(path.Join(l.dataPath, "data"), 0)
+    l.data, err = OpenLog(path.Join(l.dataPath, "data"), 0, true)
     if err != nil {
         log.Print("Error initializing data file: ", err)
         return nil, err
@@ -298,6 +326,8 @@ func NewLogManager(logPath string, dataPath string) (*logManager, error) {
     }
 
     // Load log files.
+    // NOTE: This will set our highest log number as
+    // a side-effect for when we squashLogs() below.
     err = l.loadLogs()
     if err != nil {
         l.data.Close()

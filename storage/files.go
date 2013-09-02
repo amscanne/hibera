@@ -19,6 +19,7 @@ type logFile struct {
 
     chunks []chunk
 
+    start   int64
     refs    int32
     number  uint64
     entries int64
@@ -29,17 +30,42 @@ type logRecord struct {
     offset uint64
 }
 
-func OpenLog(path string, number uint64) (*logFile, error) {
-    log := new(logFile)
-    log.number = number
-    log.entries = int64(0)
-    logfile, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0644)
-    if err != nil {
-        return nil, err
+func OpenLog(path string, number uint64, create bool) (*logFile, error) {
+    l := new(logFile)
+    l.number = number
+    l.entries = int64(0)
+    var logfile *os.File
+    var offset int64
+    var err error
+    if create {
+        logfile, err = os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0644)
+        if err != nil {
+            return nil, err
+        }
+        offset, err = writeMagic(logfile)
+        if err != nil {
+            logfile.Close()
+            return nil, err
+        }
+    } else {
+        logfile, err = os.OpenFile(path, os.O_RDONLY, 0)
+        if err != nil {
+            return nil, err
+        }
+        offset, err = readMagic(logfile)
+        if err != nil {
+            logfile.Close()
+            return nil, err
+        }
     }
-    log.file = logfile
-    log.refs = int32(1)
-    return log, nil
+    l.start = offset
+    l.file = logfile
+    l.refs = int32(1)
+    return l, nil
+}
+
+func ReadLog(path string, number uint64) (*logFile, error) {
+    return OpenLog(path, number, false)
 }
 
 func (l *logFile) Size() (uint64, error) {
@@ -67,19 +93,20 @@ func (l *logFile) Write(ent *entry) (*logRecord, error) {
 
     // Find a free chunk.
     var offset int64
-    length := ent.Usage()
+    required := usage(ent)
+    min_required := usage(nil)
     remaining := uint64(0)
     found := false
 
     var index int
     var chk chunk
     for index, chk = range l.chunks {
-        if chk.length >= length &&
-            ((chk.length-length) == 0 ||
-                (chk.length-length) >= 4) {
+        if chk.length >= required &&
+            ((chk.length-required) == 0 ||
+                (chk.length-required) >= min_required) {
             found = true
             offset = int64(chk.offset)
-            remaining = (chk.length - length)
+            remaining = (chk.length - required)
             break
         }
     }
@@ -120,7 +147,7 @@ func (l *logFile) Write(ent *entry) (*logRecord, error) {
     // and add the chunk to our list of chunks.
     if remaining > 0 {
         clear(l.file, remaining)
-        l.chunks = append(l.chunks, chunk{uint64(offset) + length, remaining})
+        l.chunks = append(l.chunks, chunk{uint64(offset) + required, remaining})
     }
 
     return l.NewRecord(uint64(offset)), nil
@@ -163,7 +190,7 @@ func (l *logRecord) Delete() error {
 
     // Merge it with any existing chunks by
     // popping them out of the list and keep going.
-    current := chunk{l.offset, ent.Usage()}
+    current := chunk{l.offset, usage(&ent)}
 
     for {
         merged := false
@@ -267,7 +294,7 @@ func (l *logFile) Load() ([]*logRecord, error) {
     records := make([]*logRecord, 0)
 
     // Reset the pointer.
-    _, err := l.file.Seek(0, 0)
+    _, err := l.file.Seek(l.start, 0)
     if err != nil {
         return nil, err
     }

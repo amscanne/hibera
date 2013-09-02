@@ -4,6 +4,7 @@ import (
     "bytes"
     "fmt"
     "io/ioutil"
+    "math/rand"
     "os"
     "sync/atomic"
     "testing"
@@ -33,7 +34,25 @@ func Teardown(store *Store) {
     os.RemoveAll(store.logs.dataPath)
 }
 
-func doBenchmark(b *testing.B, workers int, ops int, unique bool, data_len int) {
+func generateData(size int, vary_len bool) []byte {
+    var length int
+    if vary_len {
+        length = rand.Int() % (2 * size)
+    } else {
+        length = size
+    }
+    start := rand.Int()
+    data := make([]byte, length, length)
+    for i := 0; i < length; i++ {
+        data[i] = byte((start + i) % 256)
+    }
+    return data
+}
+
+func doBenchmark(b *testing.B, workers int, ops int, unique bool, data_len int, vary_len bool) {
+    if ops < 10 {
+        return
+    }
     b.StopTimer()
     store := Setup(nil)
     if store == nil {
@@ -42,31 +61,8 @@ func doBenchmark(b *testing.B, workers int, ops int, unique bool, data_len int) 
     defer Teardown(store)
 
     count := uint32(0)
-    data := make([]byte, data_len, data_len)
-    metadata := make([]byte, data_len/2, data_len/2)
-    unique_data := make(map[string][]byte)
-    unique_metadata := make(map[string][]byte)
-    finished := make(map[string]bool)
-
-    // Generate random data.
-    for i := 0; i < len(data); i += 1 {
-        data[i] = byte(i % 256)
-        if i < len(data)/2 {
-            metadata[i] = byte((i + 1) % 256)
-        }
-    }
-    for i := 0; i < workers; i += 1 {
-        chunk_data := make([]byte, data_len, data_len)
-        chunk_metadata := make([]byte, data_len/2, data_len/2)
-        for j := 0; j < len(chunk_data); j += 1 {
-            chunk_data[j] = byte((i + j) % 256)
-            if j < len(chunk_data)/2 {
-                chunk_metadata[j] = byte((i + j + 1) % 256)
-            }
-        }
-        unique_data[fmt.Sprintf("a.%d", i)] = chunk_data
-        unique_metadata[fmt.Sprintf("a.%d", i)] = chunk_metadata
-    }
+    last_data := make(map[int][]byte)
+    last_metadata := make(map[int][]byte)
 
     // Start the store.
     go store.Run()
@@ -79,14 +75,18 @@ func doBenchmark(b *testing.B, workers int, ops int, unique bool, data_len int) 
     for i := 0; i < workers; i += 1 {
         go func(i int) {
             for {
+                data := generateData(data_len/2, vary_len)
+                metadata := generateData(data_len/2, vary_len)
+
                 if unique {
                     key := fmt.Sprintf("a.%d", i)
-                    finished[key] = true
-                    store.Write(key, unique_data[key], unique_metadata[key])
+                    store.Write(key, data, metadata)
                 } else {
-                    finished["a"] = true
                     store.Write("a", data, metadata)
                 }
+
+                last_data[i] = data
+                last_metadata[i] = metadata
 
                 // NOTE; This is actually inefficient. But we
                 // want to verify that everything is written properly
@@ -112,47 +112,82 @@ func doBenchmark(b *testing.B, workers int, ops int, unique bool, data_len int) 
     store.logs.squashLogs()
 
     // Sanity check the results.
-    for i := 0; i < workers; i += 1 {
-        go func(i int) {
-            if unique {
+    if unique {
+        for i := 0; i < workers; i += 1 {
+            go func(i int) {
                 key := fmt.Sprintf("a.%d", i)
                 store_data, store_metadata, err := store.Read(key)
                 if err != nil {
                     b.Fail()
                 }
-                if bytes.Compare(unique_data[key], store_data) != 0 {
+                if bytes.Compare(last_data[i], store_data) != 0 {
                     b.Fail()
                 }
-                if bytes.Compare(unique_metadata[key], store_metadata) != 0 {
+                if bytes.Compare(last_metadata[i], store_metadata) != 0 {
                     b.Fail()
                 }
-            } else {
-                store_data, store_metadata, err := store.Read("a")
-                if err != nil {
-                    b.Fail()
-                }
-                if bytes.Compare(data, store_data) != 0 {
-                    b.Fail()
-                }
-                if bytes.Compare(metadata, store_metadata) != 0 {
-                    b.Fail()
+                done <- true
+            }(i)
+        }
+        for i := 0; i < workers; i += 1 {
+            <-done
+        }
+    } else {
+        found := false
+        store_data, store_metadata, err := store.Read("a")
+        if err != nil {
+            b.Fail()
+        } else {
+            for i := 0; i < workers; i += 1 {
+                if bytes.Compare(store_data, last_data[i]) == 0 &&
+                    bytes.Compare(store_metadata, last_metadata[i]) == 0 {
+                    found = true
+                    break
                 }
             }
-            done <- true
-        }(i)
+        }
+        if !found {
+            b.Fail()
+        }
     }
 
     // Wait for all to complete.
     for i := 0; i < workers; i += 1 {
-        <-done
     }
 }
 
-func BenchmarkNWriters4KBytesUnique(b *testing.B) {
-    b.SetBytes(4096 + 4096/2)
-    doBenchmark(b, b.N, b.N, true, 4096)
+func Benchmark1Writer4KBytesUniqueFixed(b *testing.B) {
+    b.SetBytes(4096)
+    doBenchmark(b, 1, b.N, true, 4096, false)
 }
-func BenchmarkNWriters4KBytesSame(b *testing.B) {
-    b.SetBytes(4096 + 4096/2)
-    doBenchmark(b, b.N, b.N, false, 4096)
+func Benchmark1Writer4KBytesSameFixed(b *testing.B) {
+    b.SetBytes(4096)
+    doBenchmark(b, 1, b.N, false, 4096, false)
+}
+
+func Benchmark1Writer4KBytesUniqueRandom(b *testing.B) {
+    b.SetBytes(4096)
+    doBenchmark(b, 1, b.N, true, 4096, true)
+}
+func Benchmark1Writer4KBytesSameRandom(b *testing.B) {
+    b.SetBytes(4096)
+    doBenchmark(b, 1, b.N, false, 4096, true)
+}
+
+func BenchmarkNWriters4KBytesUniqueFixed(b *testing.B) {
+    b.SetBytes(4096)
+    doBenchmark(b, b.N, b.N, true, 4096, false)
+}
+func BenchmarkNWriters4KBytesSameFixed(b *testing.B) {
+    b.SetBytes(4096)
+    doBenchmark(b, b.N, b.N, false, 4096, false)
+}
+
+func BenchmarkNWriters4KBytesUniqueRandom(b *testing.B) {
+    b.SetBytes(4096)
+    doBenchmark(b, b.N, b.N, true, 4096, true)
+}
+func BenchmarkNWriters4KBytesSameRandom(b *testing.B) {
+    b.SetBytes(4096)
+    doBenchmark(b, b.N, b.N, false, 4096, true)
 }

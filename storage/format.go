@@ -3,22 +3,68 @@ package storage
 import (
     "bytes"
     "encoding/binary"
+    "errors"
     "io"
     "log"
     "os"
 )
 
-func (ent *entry) Length() uint64 {
-    // Return the encoded length.
-    return uint64(
-        4 + len([]byte(ent.key)) +
-            4 + len(ent.value.data) +
-            4 + len(ent.value.metadata))
+// Magic numbers.
+// These are defined arbitrarily.
+var magic1 = int32(0x37f273e1)
+var magic2 = int32(0x78cd3928)
+
+// The size of an int32.
+// Just defined for convenience, and to
+// prevent weird manipulations when using
+// the unsafe module. The size is 4 bytes,
+// it's not going to change.
+var int32_size = uint64(4)
+
+func writeMagic(output *os.File) (int64, error) {
+    err := binary.Write(output, binary.LittleEndian, magic1)
+    if err != nil {
+        return -1, err
+    }
+    err = binary.Write(output, binary.LittleEndian, magic2)
+    if err != nil {
+        return -1, err
+    }
+
+    // Grab the current offset.
+    return output.Seek(0, 1)
 }
 
-func (ent *entry) Usage() uint64 {
+func readMagic(input *os.File) (int64, error) {
+    var test_magic1 int32
+    var test_magic2 int32
+    err := binary.Read(input, binary.LittleEndian, &test_magic1)
+    if err != nil {
+        return -1, err
+    }
+    err = binary.Read(input, binary.LittleEndian, &test_magic2)
+    if err != nil {
+        return -1, err
+    }
+
+    // Ensure that our magic numbers match.
+    if test_magic1 != magic1 || test_magic2 != magic2 {
+        return -1, errors.New("invalid magic number")
+    }
+
+    // Grab the current offset.
+    return input.Seek(0, 1)
+}
+
+func usage(ent *entry) uint64 {
     // Return the length including header.
-    return 4 + ent.Length()
+    if ent == nil {
+        return int32_size
+    }
+    return (int32_size +
+        int32_size + uint64(len([]byte(ent.key))) +
+        int32_size + uint64(len(ent.value.data)) +
+        int32_size + uint64(len(ent.value.metadata)))
 }
 
 func clear(output *os.File, length uint64) error {
@@ -50,7 +96,7 @@ func serialize(output *os.File, ent *entry) error {
     encoded := bytes.NewBuffer(make([]byte, 0))
 
     doEncode := func(data []byte) error {
-        err := binary.Write(encoded, binary.LittleEndian, uint32(len(data)))
+        err := binary.Write(encoded, binary.LittleEndian, int32(len(data)))
         if err != nil {
             log.Print("Error encoding length: ", err)
             return err
@@ -82,7 +128,7 @@ func serialize(output *os.File, ent *entry) error {
     }
 
     // Simulate a cleared header.
-    err = clear(output, ent.Usage())
+    err = clear(output, usage(ent))
     if err != nil {
         return err
     }
@@ -149,7 +195,7 @@ func deserialize(input *os.File, ent *entry) (uint64, uint64, error) {
     // Do the decoding.
     encoded := bytes.NewBuffer(data)
     doDecode := func() ([]byte, error) {
-        var length uint32
+        var length int32
         err := binary.Read(encoded, binary.LittleEndian, &length)
         if err != nil {
             log.Print("Error decoding length: ", err)

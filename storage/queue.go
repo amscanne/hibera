@@ -6,9 +6,15 @@ import (
 )
 
 // The log buffer.
-// How big the buffer is for pending calls.
-var LogBuffer = 10240
+// How big the buffer is for pending calls. There
+// is no minimum size, but it should be big enough
+// to prevent back-and-forth blocking of the flusher
+// thread and the write() callers. It's more efficient
+// if the flusher thread can process as many outstanding
+// requests in a single CPU burst.
+var LogBuffer = 1024
 
+// An update to the database.
 type update struct {
     entry
     result chan error
@@ -27,6 +33,7 @@ type Store struct {
 }
 
 func NewStore(logPath string, dataPath string) (*Store, error) {
+
     // Create our log manager.
     logs, err := NewLogManager(logPath, dataPath)
     if err != nil {
@@ -71,27 +78,27 @@ func (s *Store) flusher() error {
         finished = append(finished, upd)
     }
 
-    complete := func() {
-        sync := func(logfile *logFile, finished []*update) {
-            // Sync the log.
-            s.logs.closeLog(logfile)
+    sync := func(logfile *logFile, finished []*update) {
+        // Sync the log.
+        s.logs.closeLog(logfile)
 
-            // Allow other flushes.
-            flush_chan <- true
+        // Allow other flushes.
+        flush_chan <- true
 
-            // Notify waiters.
-            for _, upd := range finished {
-                upd.result <- nil
-            }
-
-            // Squash the log.
-            last_squash := <-squash_chan
-            if last_squash == nil {
-                last_squash = s.logs.checkSquash(logfile)
-            }
-            squash_chan <- last_squash
+        // Notify waiters.
+        for _, upd := range finished {
+            upd.result <- nil
         }
 
+        // Squash the log.
+        last_squash := <-squash_chan
+        if last_squash == nil {
+            last_squash = s.logs.checkSquash(logfile)
+        }
+        squash_chan <- last_squash
+    }
+
+    complete := func() {
         // Run the sync.
         go sync(logfile, finished)
 
