@@ -72,10 +72,10 @@ func (s *Store) flusher() error {
         // Notify that an error occured.
         if err != nil {
             upd.result <- err
+        } else {
+            // Add it to our list of done.
+            finished = append(finished, upd)
         }
-
-        // Add it to our list of done.
-        finished = append(finished, upd)
     }
 
     sync := func(logfile *logFile, finished []*update) {

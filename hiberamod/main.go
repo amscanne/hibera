@@ -40,7 +40,7 @@ var cliInfo = cli.Cli{
 }
 
 func cli_list(c *client.HiberaAPI) error {
-    tokens, _, err := c.AccessList(cli.Namespace())
+    tokens, _, err := c.AccessList()
     if err != nil {
         return err
     }
@@ -50,8 +50,7 @@ func cli_list(c *client.HiberaAPI) error {
     return nil
 }
 
-func cli_show(c *client.HiberaAPI, raw_auth string) error {
-    auth := cli.Key(raw_auth)
+func cli_show(c *client.HiberaAPI, auth string) error {
     val, _, err := c.AccessGet(auth)
     if err != nil {
         return err
@@ -72,8 +71,7 @@ func cli_show(c *client.HiberaAPI, raw_auth string) error {
     return nil
 }
 
-func cli_set(c *client.HiberaAPI, raw_auth string, path string, perms string) error {
-    auth := cli.Key(raw_auth)
+func cli_set(c *client.HiberaAPI, auth string, path string, perms string) error {
     read := strings.Index(perms, "r") >= 0
     write := strings.Index(perms, "w") >= 0
     execute := strings.Index(perms, "x") >= 0

@@ -6,6 +6,7 @@ import (
     "fmt"
     "hibera/cli"
     "hibera/cluster"
+    "hibera/core"
     "hibera/server"
     "hibera/storage"
     "hibera/utils"
@@ -17,7 +18,7 @@ import (
     "strings"
 )
 
-var auth = flag.String("root", utils.DefaultBind, "The root authorization token.")
+var root = flag.String("root", utils.DefaultBind, "The root authorization token.")
 var bind = flag.String("bind", utils.DefaultBind, "Bind address for the server.")
 var port = flag.Uint("port", utils.DefaultPort, "Bind port for the server.")
 var logPath = flag.String("log", utils.DefaultLogPath, "Backing storage log path.")
@@ -104,7 +105,7 @@ func cli_run() error {
     if err != nil {
         return err
     }
-    c, err := cluster.NewCluster(backend, addr, *auth, *domain, ids)
+    c, err := cluster.NewCluster(backend, addr, core.Token(*root), *domain, ids)
     if err != nil {
         return err
     }

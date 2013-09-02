@@ -33,7 +33,7 @@ func BenchmarkRecomputeByKeys(b *testing.B) {
 func BenchmarkCached(b *testing.B) {
     r := Setup(TestSize, utils.DefaultKeys)
     for i := 0; i < b.N; i += 1 {
-        r.NodesFor(core.Key{"", ""})
+        r.NodesFor(core.Key(""))
     }
 }
 

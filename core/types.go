@@ -9,13 +9,12 @@ import (
 type Namespace string
 
 // Key for data access.
-type Key struct {
-    Namespace
-    Key string
-}
+type Key string
 
 // Revision for a given key.
-type Revision *big.Int
+type Revision struct {
+    *big.Int
+}
 
 // Internal id for sync connections.
 type EphemId uint64
@@ -24,7 +23,7 @@ type EphemId uint64
 type NodeInfo map[string]*Node
 
 // Permissions.
-type Perms struct {
+type PermissionInfo struct {
     Read    bool `json:"read"`
     Write   bool `json:"write"`
     Execute bool `json:"execute"`
@@ -33,11 +32,14 @@ type Perms struct {
     re  *regexp.Regexp
 }
 
+// An authentication token.
+type Token string
+
 // Individual access token (set of paths and permsissions).
-type Token map[string]Perms
+type Permissions map[string]PermissionInfo
 
 // Full set of permissions for a given namespace.
-type NamespaceAccess map[string]Token
+type NamespaceAccess map[Token]Permissions
 
 // Map of all access tokens in the cluster.
 type AccessInfo map[Namespace]NamespaceAccess

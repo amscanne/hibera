@@ -23,45 +23,45 @@ func (c *Cluster) getClient(url string) *client.HiberaAPI {
     if !ok {
         urls := make([]string, 1, 1)
         urls[0] = url
-        cl = client.NewHiberaAPI(urls, c.auth, c.Nodes.Self().Id(), 0, false)
+        cl = client.NewHiberaAPI(urls, c.root, c.Nodes.Self().Id(), 0, RootNamespace, false)
         c.clients[url] = cl
     }
     return cl
 }
 
-func (c *Cluster) doSet(node *core.Node, key core.Key, rev core.Revision, value []byte) (core.Revision, error) {
+func (c *Cluster) doSet(node *core.Node, ns core.Namespace, key core.Key, rev core.Revision, value []byte) (core.Revision, error) {
     if node == c.Nodes.Self() {
-        utils.Print("QUORUM", "    SET-LOCAL key=%s rev=%s", key.String(), (*rev).String())
-        return c.Data.DataSet(key, rev, value)
+        utils.Print("QUORUM", "    SET-LOCAL key=%s rev=%s", key, rev.String())
+        return c.Data.DataSet(ns, key, rev, value)
     }
 
-    utils.Print("QUORUM", "    SET-REMOTE key=%s rev=%s", key.String(), (*rev).String())
+    utils.Print("QUORUM", "    SET-REMOTE key=%s rev=%s", key, rev.String())
     cl := c.getClient(utils.MakeURL(node.Addr, "", nil))
-    rrev, err := cl.DataSet(key, rev, value)
+    rrev, err := cl.NSDataSet(ns, key, rev, value)
     return core.Revision(rrev), err
 }
 
-func (c *Cluster) doGet(node *core.Node, key core.Key) ([]byte, core.Revision, error) {
+func (c *Cluster) doGet(node *core.Node, ns core.Namespace, key core.Key) ([]byte, core.Revision, error) {
     if node == c.Nodes.Self() {
-        utils.Print("QUORUM", "    GET-LOCAL key=%s", key.String())
-        return c.Data.DataGet(key)
+        utils.Print("QUORUM", "    GET-LOCAL key=%s", key)
+        return c.Data.DataGet(ns, key)
     }
 
-    utils.Print("QUORUM", "    GET-REMOTE key=%s", key.String())
+    utils.Print("QUORUM", "    GET-REMOTE key=%s", key)
     cl := c.getClient(utils.MakeURL(node.Addr, "", nil))
-    value, rev, err := cl.DataGet(key, core.ZeroRevision, 1)
+    value, rev, err := cl.NSDataGet(ns, key, core.NoRevision, 1)
     return value, core.Revision(rev), err
 }
 
-func (c *Cluster) doRemove(node *core.Node, key core.Key, rev core.Revision) (core.Revision, error) {
+func (c *Cluster) doRemove(node *core.Node, ns core.Namespace, key core.Key, rev core.Revision) (core.Revision, error) {
     if node == c.Nodes.Self() {
-        utils.Print("QUORUM", "    REMOVE-LOCAL key=%s rev=%s", key.String(), (*rev).String())
-        return c.Data.DataRemove(key, rev)
+        utils.Print("QUORUM", "    REMOVE-LOCAL key=%s rev=%s", key, rev.String())
+        return c.Data.DataRemove(ns, key, rev)
     }
 
-    utils.Print("QUORUM", "    REMOVE-REMOTE key=%s rev=%s", key.String(), (*rev).String())
+    utils.Print("QUORUM", "    REMOVE-REMOTE key=%s rev=%s", key, rev.String())
     cl := c.getClient(utils.MakeURL(node.Addr, "", nil))
-    rrev, err := cl.DataRemove(key, rev)
+    rrev, err := cl.NSDataRemove(ns, key, rev)
     return core.Revision(rrev), err
 }
 
@@ -71,7 +71,7 @@ func NewQuorumError(revcounts map[core.Revision]int) error {
         if len(s) > 0 {
             s += ","
         }
-        s += fmt.Sprintf("rev=%s->%d", (*rev).String(), count)
+        s += fmt.Sprintf("rev=%s->%d", rev.String(), count)
     }
     return errors.New(fmt.Sprintf("QuorumError %s", s))
 }
@@ -82,9 +82,9 @@ func (c *Cluster) quorum(ring *ring, key core.Key, fn func(*core.Node, chan<- *Q
     var self *core.Node
     res := make(chan *QuorumResult)
     var err error
-    maxrev := core.ZeroRevision
+    maxrev := core.NoRevision
 
-    utils.Print("QUORUM", "START %s (%d/%d)", key.String(), len(nodes), ring.Size())
+    utils.Print("QUORUM", "START '%s' (%d/%d)", key, len(nodes), ring.Size())
 
     // Setup all the requests.
     for _, node := range nodes {
@@ -104,7 +104,7 @@ func (c *Cluster) quorum(ring *ring, key core.Key, fn func(*core.Node, chan<- *Q
                 errstr = fmt.Sprintf("true (%s)", qrs.err.Error())
             }
             utils.Print("QUORUM", "  NODE id=%s rev=%s err=%s",
-                qrs.node.Id(), (*qrs.rev).String(), errstr)
+                qrs.node.Id(), qrs.rev.String(), errstr)
         }
     }
 
@@ -132,7 +132,7 @@ func (c *Cluster) quorum(ring *ring, key core.Key, fn func(*core.Node, chan<- *Q
         if qrs[i] != nil && qrs[i].err != nil {
             err = qrs[i].err
         }
-        if qrs[i] != nil && (*qrs[i].rev).Cmp(maxrev) > 0 {
+        if qrs[i] != nil && qrs[i].rev.GreaterThan(maxrev) {
             maxrev = qrs[i].rev
         }
     }
@@ -156,7 +156,7 @@ func (c *Cluster) quorum(ring *ring, key core.Key, fn func(*core.Node, chan<- *Q
             // ourself, then it is included in the result.
             do_self()
 
-            utils.Print("QUORUM", "SUCCESS rev=%s", (*rev).String())
+            utils.Print("QUORUM", "SUCCESS rev=%s", rev.String())
             return revrefs[rev], nil
 
             // If the local node is one of the quorum.
@@ -172,7 +172,7 @@ func (c *Cluster) quorum(ring *ring, key core.Key, fn func(*core.Node, chan<- *Q
 
             // If it matches, we have quorum.
             if self_qr != nil && self_qr.err == nil && self_qr.rev == rev {
-                utils.Print("QUORUM", "SUCCESS rev=%s", (*rev).String())
+                utils.Print("QUORUM", "SUCCESS rev=%s", rev.String())
                 return self_qr, nil
             }
             if self_qr != nil && self_qr.err != nil {
@@ -182,7 +182,7 @@ func (c *Cluster) quorum(ring *ring, key core.Key, fn func(*core.Node, chan<- *Q
 
             // The local node did not match...
             // We stop at this point and remember the maxrev.
-            if self_qr != nil && (*self_qr.rev).Cmp(maxrev) > 0 {
+            if self_qr != nil && self_qr.rev.GreaterThan(maxrev) {
                 maxrev = self_qr.rev
             }
         }
@@ -200,7 +200,7 @@ func (c *Cluster) quorum(ring *ring, key core.Key, fn func(*core.Node, chan<- *Q
     if self_qr != nil {
         revcounts[self_qr.rev] += 1
         revrefs[self_qr.rev] = self_qr
-        if (*self_qr.rev).Cmp(maxrev) > 0 {
+        if self_qr.rev.GreaterThan(maxrev) {
             maxrev = self_qr.rev
         }
     }
@@ -213,10 +213,10 @@ func (c *Cluster) quorum(ring *ring, key core.Key, fn func(*core.Node, chan<- *Q
     return &QuorumResult{rev: maxrev}, err
 }
 
-func (c *Cluster) quorumGet(ring *ring, key core.Key) ([]byte, core.Revision, error) {
+func (c *Cluster) quorumGet(ring *ring, ns core.Namespace, key core.Key) ([]byte, core.Revision, error) {
     fn := func(node *core.Node, res chan<- *QuorumResult) {
-        utils.Print("QUORUM", "  GET key=%s", key.String())
-        value, rev, err := c.doGet(node, key)
+        utils.Print("QUORUM", "  GET key=%s", key)
+        value, rev, err := c.doGet(node, ns, key)
         res <- &QuorumResult{node, rev, value, err}
     }
     qr, err := c.quorum(ring, key, fn)
@@ -229,11 +229,11 @@ func (c *Cluster) quorumGet(ring *ring, key core.Key) ([]byte, core.Revision, er
     return value, rev, err
 }
 
-func (c *Cluster) quorumSet(ring *ring, key core.Key, rev core.Revision, value []byte) (core.Revision, error) {
+func (c *Cluster) quorumSet(ring *ring, ns core.Namespace, key core.Key, rev core.Revision, value []byte) (core.Revision, error) {
     fn := func(node *core.Node, res chan<- *QuorumResult) {
         utils.Print("QUORUM", "  SET key=%s rev=%s len=%d",
-            key.String(), (*rev).String(), len(value))
-        rev, err := c.doSet(node, key, rev, value)
+            key, rev.String(), len(value))
+        rev, err := c.doSet(node, ns, key, rev, value)
         res <- &QuorumResult{node, rev, value, err}
     }
     qr, err := c.quorum(ring, key, fn)
@@ -243,11 +243,11 @@ func (c *Cluster) quorumSet(ring *ring, key core.Key, rev core.Revision, value [
     return rev, err
 }
 
-func (c *Cluster) quorumRemove(ring *ring, key core.Key, rev core.Revision) (core.Revision, error) {
+func (c *Cluster) quorumRemove(ring *ring, ns core.Namespace, key core.Key, rev core.Revision) (core.Revision, error) {
     fn := func(node *core.Node, res chan<- *QuorumResult) {
         utils.Print("QUORUM", "  REMOVE key=%s rev=%s",
-            key.String(), (*rev).String())
-        rev, err := c.doRemove(node, key, rev)
+            key, rev.String())
+        rev, err := c.doRemove(node, ns, key, rev)
         res <- &QuorumResult{node, rev, nil, err}
     }
     qr, err := c.quorum(ring, key, fn)
@@ -262,26 +262,26 @@ type ListResult struct {
     err   error
 }
 
-func (c *Cluster) doList(node *core.Node, namespace core.Namespace) ([]core.Key, error) {
+func (c *Cluster) doList(node *core.Node, ns core.Namespace) ([]core.Key, error) {
     if node == c.Nodes.Self() {
         utils.Print("QUORUM", "    LIST-LOCAL")
-        return c.Data.DataList(namespace)
+        return c.Data.DataList(ns)
     }
 
     utils.Print("QUORUM", "    LIST-REMOTE")
     cl := c.getClient(utils.MakeURL(node.Addr, "", nil))
-    items, err := cl.DataList(namespace)
+    items, err := cl.NSDataList(ns)
     if items == nil || err != nil {
         return nil, err
     }
     keys := make([]core.Key, len(items), len(items))
     for i, item := range items {
-        keys[i] = core.Key{namespace, item}
+        keys[i] = core.Key(item)
     }
     return keys, nil
 }
 
-func (c *Cluster) allList(namespace core.Namespace) ([]core.Key, error) {
+func (c *Cluster) allList(ns core.Namespace) ([]core.Key, error) {
     nodes := c.Nodes.Inuse()
     items := make(map[core.Key]bool)
 
@@ -289,7 +289,7 @@ func (c *Cluster) allList(namespace core.Namespace) ([]core.Key, error) {
 
     // Setup all the requests.
     fn := func(node *core.Node, res chan<- *ListResult) {
-        items, err := c.doList(node, namespace)
+        items, err := c.doList(node, ns)
         res <- &ListResult{items, err}
     }
     reschan := make(chan *ListResult)
@@ -306,7 +306,7 @@ func (c *Cluster) allList(namespace core.Namespace) ([]core.Key, error) {
             for _, item := range res.items {
                 // Accept only non-zero length items.
                 // (This excludes the special cluster key).
-                if len(item.Key) > 0 {
+                if len(item) > 0 {
                     items[item] = true
                 }
             }

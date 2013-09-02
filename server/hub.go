@@ -28,12 +28,6 @@ type Connection struct {
     // The address associated with this conn.
     addr string
 
-    // The namespace used for this connection.
-    ns  core.Namespace
-
-    // The authentication information for this conn.
-    auth string
-
     // The user associated (if there is one).
     // This will be looked up on the first if
     // the user provided a generated ConnectionId.
@@ -108,14 +102,6 @@ func (c *Connection) ServerId() string {
     return string(c.addr)
 }
 
-func (c *Connection) Namespace() core.Namespace {
-    return c.ns
-}
-
-func (c *Connection) Auth() string {
-    return c.auth
-}
-
 func (c *Connection) EphemId() core.EphemId {
     if c.client != nil {
         return core.EphemId(c.client.ClientId)
@@ -136,10 +122,10 @@ func (c *Hub) genid() uint64 {
 
 func (c *Hub) NewConnection(raw net.Conn) *Connection {
     // Generate conn with no user, and a straight-forward id.
-    // The user can associate some namespace and conn-id with their
-    // active connection once the connection has been authenticated.
+    // The user can associate the appropriate conn-id with their
+    // active connection once they send the first headers along.
     addr := raw.RemoteAddr().String()
-    conn := &Connection{c, raw, ConnectionId(c.genid()), addr, "", "", nil, nil, false}
+    conn := &Connection{c, raw, ConnectionId(c.genid()), addr, nil, nil, false}
 
     // Set an initial read deadline on the connection.
     raw.SetReadDeadline(time.Now().Add(time.Second))
@@ -153,7 +139,7 @@ func (c *Hub) NewConnection(raw net.Conn) *Connection {
     return conn
 }
 
-func (c *Hub) FindConnection(id ConnectionId, userid UserId, ns string, auth string, notifier <-chan bool) *Connection {
+func (c *Hub) FindConnection(id ConnectionId, userid UserId, notifier <-chan bool) *Connection {
     c.Mutex.Lock()
     defer c.Mutex.Unlock()
 
@@ -161,10 +147,6 @@ func (c *Hub) FindConnection(id ConnectionId, userid UserId, ns string, auth str
     if conn == nil {
         return nil
     }
-
-    // Save the namespace and authentication information.
-    conn.ns = core.Namespace(ns)
-    conn.auth = auth
 
     if conn.inited {
         return conn

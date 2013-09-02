@@ -86,15 +86,21 @@ func Main(cli Cli, run func(command string, args []string) error) {
     // Seed the random number generator.
     rand.Seed(time.Now().UTC().UnixNano())
 
+    // Parse flags.
+    arg0 := os.Args[0]
+    flag.Parse()
+    args := flag.Args()
+
     // Pull out our arguments.
-    if len(os.Args) < 2 {
-        top_usage(cli, os.Args[0])
+    if len(args) == 0 {
+        top_usage(cli, arg0)
         command_list(cli)
         os.Exit(1)
     }
 
-    // Pull out the command and arguments.
-    command := os.Args[1]
+    // Pull out the command.
+    command := args[0]
+    args = args[1:]
 
     // Grab the spec.
     spec, ok := cli.Commands[command]
@@ -102,16 +108,11 @@ func Main(cli Cli, run func(command string, args []string) error) {
         if command == "help" {
             spec = HelpCommand
         } else {
-            top_usage(cli, os.Args[0])
+            top_usage(cli, arg0)
             command_list(cli)
             os.Exit(1)
         }
     }
-
-    // Parse all given flags.
-    os.Args = os.Args[1:]
-    flag.Parse()
-    args := flag.Args()
 
     // Check the arguments match.
     if len(args) < len(spec.Args) ||

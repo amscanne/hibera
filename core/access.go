@@ -15,10 +15,10 @@ type Access struct {
     proposedLock sync.RWMutex
 
     // The default admin authorization.
-    auth string
+    root Token
 }
 
-func (access *Access) Check(key Key, auth string, read bool, write bool, execute bool) bool {
+func (access *Access) Check(ns Namespace, auth Token, key Key, read bool, write bool, execute bool) bool {
     access.allLock.RLock()
     defer access.allLock.RUnlock()
 
@@ -26,15 +26,15 @@ func (access *Access) Check(key Key, auth string, read bool, write bool, execute
     // check this authentication token against the
     // global token. This allows the global token
     // to manipulate unconfigured namespaces.
-    token, ok := access.all[key.Namespace][auth]
+    token, ok := access.all[ns][auth]
     if !ok {
-        return auth == access.auth
+        return ns == Namespace("") && auth == access.root
     }
 
     // Check the paths against the current.
     for _, perms := range token {
         // Check the specific operations.
-        if perms.re != nil && perms.re.Match([]byte(key.Key)) {
+        if perms.re != nil && perms.re.Match([]byte(key)) {
             if (!read || perms.Read) && (!write || perms.Write) || (!execute || perms.Execute) {
                 return true
             }
@@ -45,17 +45,29 @@ func (access *Access) Check(key Key, auth string, read bool, write bool, execute
     return false
 }
 
-func (access *Access) List(ns Namespace) []string {
+func (access *Access) Has(ns Namespace) bool {
+    access.allLock.RLock()
+    defer access.allLock.RUnlock()
+
+    if ns == Namespace("") {
+        return true
+    }
+
+    _, ok := access.all[ns]
+    return ok
+}
+
+func (access *Access) List(ns Namespace) []Token {
     access.allLock.RLock()
     defer access.allLock.RUnlock()
 
     // Namespace does not exist.
     if _, ok := access.all[ns]; !ok {
-        return make([]string, 0, 0)
+        return make([]Token, 0, 0)
     }
 
     // List all available tokens.
-    res := make([]string, len(access.all[ns]), len(access.all[ns]))
+    res := make([]Token, len(access.all[ns]), len(access.all[ns]))
     i := 0
     for auth, _ := range access.all[ns] {
         res[i] = auth
@@ -64,37 +76,37 @@ func (access *Access) List(ns Namespace) []string {
     return res
 }
 
-func (access *Access) Get(auth Key) (*Token, error) {
+func (access *Access) Get(ns Namespace, auth Token) (*Permissions, error) {
     access.allLock.RLock()
     defer access.allLock.RUnlock()
 
     // Namespace does not exist.
-    if _, ok := access.all[auth.Namespace]; !ok {
+    if _, ok := access.all[ns]; !ok {
         return nil, nil
     }
 
     // Get associated paths.
-    token, ok := access.all[auth.Namespace][auth.Key]
+    token, ok := access.all[ns][auth]
     if !ok {
         return nil, nil
     }
     return &token, nil
 }
 
-func (access *Access) Update(auth Key, path string, read bool, write bool, execute bool) error {
+func (access *Access) Update(ns Namespace, auth Token, key Key, read bool, write bool, execute bool) error {
     access.proposedLock.Lock()
     defer access.proposedLock.Unlock()
 
     // Ensure the namespace exists.
-    if _, ok := access.proposed[auth.Namespace]; !ok {
-        access.proposed[auth.Namespace] = make(NamespaceAccess)
+    if _, ok := access.proposed[ns]; !ok {
+        access.proposed[ns] = make(NamespaceAccess)
     }
 
     // Add the proposal.
-    if _, ok := access.proposed[auth.Namespace][auth.Key]; !ok {
-        access.proposed[auth.Namespace][auth.Key] = make(Token)
+    if _, ok := access.proposed[ns][auth]; !ok {
+        access.proposed[ns][auth] = make(Permissions)
     }
-    access.proposed[auth.Namespace][auth.Key][path] = Perms{read, write, execute, nil}
+    access.proposed[ns][auth][string(key)] = PermissionInfo{read, write, execute, nil}
     return nil
 }
 
@@ -154,7 +166,7 @@ func (access *Access) Decode(info AccessInfo) error {
                     access.all[ns] = make(NamespaceAccess)
                 }
                 if _, ok := access.all[ns][auth]; !ok {
-                    access.all[ns][auth] = make(Token)
+                    access.all[ns][auth] = make(Permissions)
                 }
                 for tokpath, perms := range token {
                     if !perms.Read && !perms.Write && !perms.Execute {
@@ -202,9 +214,9 @@ func (access *Access) Reset() {
     access.proposed = make(AccessInfo)
 }
 
-func NewAccess(auth string) *Access {
+func NewAccess(root Token) *Access {
     access := new(Access)
-    access.auth = auth
+    access.root = root
     access.Reset()
     return access
 }

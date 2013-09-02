@@ -14,13 +14,9 @@ var delay = flag.Uint("delay", 1000, "Delay and retry failed requests.")
 var Options = []string{"api", "auth", "host", "delay"}
 
 func Client() *client.HiberaAPI {
-    return client.NewHiberaClient(*api, *auth, *delay)
+    return client.NewHiberaClient(*api, *auth, *delay, *host)
 }
 
 func Namespace() core.Namespace {
     return core.Namespace(*host)
-}
-
-func Key(key string) core.Key {
-    return core.Key{Namespace(), key}
 }

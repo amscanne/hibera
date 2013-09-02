@@ -21,9 +21,10 @@ var NoRevision = errors.New("No X-Revision Found")
 
 type HiberaAPI struct {
     urls         []string
-    auth         string
+    auth         core.Token
     clientid     string
     delay        uint
+    defaultNS    core.Namespace
     useRedirects bool
     cache        map[string]string
     *http.Client
@@ -66,9 +67,10 @@ func boolToStr(val bool) string {
 
 func NewHiberaAPI(
     urls []string,
-    auth string,
+    auth core.Token,
     clientid string,
     delay uint,
+    defaultNS core.Namespace,
     useRedirects bool) *HiberaAPI {
 
     // Check the clientId.
@@ -82,6 +84,7 @@ func NewHiberaAPI(
     api.auth = auth
     api.clientid = clientid
     api.delay = delay
+    api.defaultNS = defaultNS
     api.useRedirects = useRedirects
     api.cache = make(map[string]string)
 
@@ -101,7 +104,7 @@ func NewHiberaAPI(
     return api
 }
 
-func NewHiberaClient(addrs string, auth string, delay uint) *HiberaAPI {
+func NewHiberaClient(addrs string, auth string, delay uint, namespace string) *HiberaAPI {
     if addrs == "" {
         // If no addrs are provided, try using
         // the environment variable. If this
@@ -119,34 +122,34 @@ func NewHiberaClient(addrs string, auth string, delay uint) *HiberaAPI {
     }
     urls := utils.GenerateURLs(addrs, utils.DefaultHost, utils.DefaultPort)
     clientid := generateClientId()
-    return NewHiberaAPI(urls, auth, clientid, delay, true)
+    return NewHiberaAPI(urls, core.Token(auth), clientid, delay, core.Namespace(namespace), true)
 }
 
 type httpArgs struct {
-    namespace core.Namespace
-    path      string
-    headers   map[string]string
-    params    map[string]string
-    body      []byte
+    ns      core.Namespace
+    path    string
+    headers map[string]string
+    params  map[string]string
+    body    []byte
 }
 
-func (h *HiberaAPI) makeArgs(namespace core.Namespace, path string) httpArgs {
+func (h *HiberaAPI) makeArgs(ns core.Namespace, path string) httpArgs {
     headers := make(map[string]string)
     params := make(map[string]string)
-    return httpArgs{namespace, path, headers, params, nil}
+    return httpArgs{ns, path, headers, params, nil}
 }
 
 func (h *HiberaAPI) getRev(resp *http.Response) (core.Revision, error) {
-    rev := resp.Header["X-Revision"]
-    if len(rev) == 0 {
-        return core.ZeroRevision, NoRevision
+    rev_header := resp.Header["X-Revision"]
+    if len(rev_header) == 0 {
+        return core.NoRevision, NoRevision
     }
-    intrev, ok := core.ParseRevision(rev[0])
-    if ok {
-        utils.Print("CLIENT", "REVISION %s", (*intrev).String())
-        return intrev, nil
+    rev, err := core.RevisionFromString(rev_header[0])
+    if err != nil {
+        return core.NoRevision, err
     }
-    return intrev, NoRevision
+    utils.Print("CLIENT", "REVISION %s", rev.String())
+    return rev, nil
 }
 
 func (h *HiberaAPI) getContent(resp *http.Response) ([]byte, error) {
@@ -179,10 +182,8 @@ func (h *HiberaAPI) makeRequest(method string, args httpArgs, hint string) (*htt
 
     // Append headers.
     req.Header.Add("X-Client-Id", h.clientid)
-    req.Header.Add("X-Authorization", h.auth)
-    if args.namespace != "" {
-        req.Header.Add("Host", string(args.namespace))
-    }
+    req.Header.Add("X-Authorization", string(h.auth))
+    req.Header.Add("X-Namespace", string(args.ns))
     for key, value := range args.headers {
         req.Header.Add(key, value)
     }
@@ -200,6 +201,9 @@ func (h *HiberaAPI) doRequest(method string, args httpArgs, hint string) ([]byte
             var content []byte
 
             utils.Print("CLIENT", "%s %s", method, req.URL.String())
+            if args.body != nil {
+                utils.Print("CLIENT", "BODY %s", string(args.body))
+            }
             resp, err = h.Client.Do(req)
             if resp != nil {
                 utils.Print("CLIENT", "%s", resp.Status)
@@ -209,7 +213,7 @@ func (h *HiberaAPI) doRequest(method string, args httpArgs, hint string) ([]byte
                 urlerr, ok := err.(*url.Error)
                 if resp != nil && ok && urlerr.Err == skipRedirect {
                     if !h.useRedirects {
-                        return nil, core.ZeroRevision, err
+                        return nil, core.NoRevision, err
                     } else {
                         // All is okay -- we process the redirect below.
                         // NOTE: In this case, the body has already been
@@ -276,7 +280,7 @@ func (h *HiberaAPI) doRequest(method string, args httpArgs, hint string) ([]byte
         }
 
         if h.delay == 0 {
-            return nil, core.ZeroRevision, err
+            return nil, core.NoRevision, err
         }
 
         // Clear any cache hint on an error.
@@ -288,7 +292,7 @@ func (h *HiberaAPI) doRequest(method string, args httpArgs, hint string) ([]byte
         time.Sleep(time.Duration(random_delay) * time.Millisecond)
     }
 
-    return nil, core.ZeroRevision, nil
+    return nil, core.NoRevision, nil
 }
 
 func (h *HiberaAPI) Info() ([]byte, core.Revision, error) {
@@ -328,7 +332,7 @@ func (h *HiberaAPI) NodeGet(id string) (*core.Node, core.Revision, error) {
     args := h.makeArgs("", fmt.Sprintf("/v1.0/nodes/%s", id))
     content, rev, err := h.doRequest("GET", args, id)
     if err != nil {
-        return nil, core.ZeroRevision, err
+        return nil, core.NoRevision, err
     }
     var node core.Node
     err = json.Unmarshal(content, &node)
@@ -338,11 +342,15 @@ func (h *HiberaAPI) NodeGet(id string) (*core.Node, core.Revision, error) {
     return &node, rev, err
 }
 
-func (h *HiberaAPI) AccessList(namespace core.Namespace) ([]string, core.Revision, error) {
-    args := h.makeArgs(namespace, "/v1.0/access")
+func (h *HiberaAPI) AccessList() ([]string, core.Revision, error) {
+    return h.NSAccessList(h.defaultNS)
+}
+
+func (h *HiberaAPI) NSAccessList(ns core.Namespace) ([]string, core.Revision, error) {
+    args := h.makeArgs(ns, "/v1.0/access")
     content, rev, err := h.doRequest("GET", args, "")
     if err != nil {
-        return nil, core.ZeroRevision, err
+        return nil, core.NoRevision, err
     }
     var tokens []string
     err = json.Unmarshal(content, &tokens)
@@ -352,26 +360,34 @@ func (h *HiberaAPI) AccessList(namespace core.Namespace) ([]string, core.Revisio
     return tokens, rev, err
 }
 
-func (h *HiberaAPI) AccessUpdate(auth core.Key, path string, read bool, write bool, execute bool) (core.Revision, error) {
-    args := h.makeArgs(auth.Namespace, fmt.Sprintf("/v1.0/access/%s", auth.Key))
+func (h *HiberaAPI) AccessUpdate(auth string, path string, read bool, write bool, execute bool) (core.Revision, error) {
+    return h.NSAccessUpdate(h.defaultNS, core.Token(auth), path, read, write, execute)
+}
+
+func (h *HiberaAPI) NSAccessUpdate(ns core.Namespace, auth core.Token, path string, read bool, write bool, execute bool) (core.Revision, error) {
+    args := h.makeArgs(ns, fmt.Sprintf("/v1.0/access/%s", string(auth)))
     args.params["path"] = path
     args.params["read"] = boolToStr(read)
     args.params["write"] = boolToStr(write)
     args.params["execute"] = boolToStr(execute)
     _, rev, err := h.doRequest("POST", args, "")
     if err != nil {
-        return core.ZeroRevision, err
+        return core.NoRevision, err
     }
     return rev, err
 }
 
-func (h *HiberaAPI) AccessGet(auth core.Key) (*core.Token, core.Revision, error) {
-    args := h.makeArgs(auth.Namespace, fmt.Sprintf("/v1.0/access/%s", auth.Key))
+func (h *HiberaAPI) AccessGet(auth string) (*core.Permissions, core.Revision, error) {
+    return h.NSAccessGet(h.defaultNS, core.Token(auth))
+}
+
+func (h *HiberaAPI) NSAccessGet(ns core.Namespace, auth core.Token) (*core.Permissions, core.Revision, error) {
+    args := h.makeArgs(ns, fmt.Sprintf("/v1.0/access/%s", string(auth)))
     content, rev, err := h.doRequest("GET", args, "")
     if err != nil {
-        return nil, core.ZeroRevision, err
+        return nil, core.NoRevision, err
     }
-    var val core.Token
+    var val core.Permissions
     err = json.Unmarshal(content, &val)
     if err != nil {
         return nil, rev, err
@@ -379,14 +395,18 @@ func (h *HiberaAPI) AccessGet(auth core.Key) (*core.Token, core.Revision, error)
     return &val, rev, err
 }
 
-func (h *HiberaAPI) SyncJoin(key core.Key, name string, limit uint, timeout uint) (int, core.Revision, error) {
-    args := h.makeArgs(key.Namespace, fmt.Sprintf("/v1.0/sync/%s", key))
+func (h *HiberaAPI) SyncJoin(key string, name string, limit uint, timeout uint) (int, core.Revision, error) {
+    return h.NSSyncJoin(h.defaultNS, core.Key(key), name, limit, timeout)
+}
+
+func (h *HiberaAPI) NSSyncJoin(ns core.Namespace, key core.Key, name string, limit uint, timeout uint) (int, core.Revision, error) {
+    args := h.makeArgs(ns, fmt.Sprintf("/v1.0/sync/%s", string(key)))
     args.params["name"] = name
     args.params["limit"] = strconv.FormatUint(uint64(limit), 10)
     args.params["timeout"] = strconv.FormatUint(uint64(timeout), 10)
-    content, rev, err := h.doRequest("POST", args, key.Key)
+    content, rev, err := h.doRequest("POST", args, string(key))
     if err != nil {
-        return -1, core.ZeroRevision, err
+        return -1, core.NoRevision, err
     }
     var index int
     err = json.Unmarshal(content, &index)
@@ -396,20 +416,28 @@ func (h *HiberaAPI) SyncJoin(key core.Key, name string, limit uint, timeout uint
     return index, rev, err
 }
 
-func (h *HiberaAPI) SyncLeave(key core.Key, name string) (core.Revision, error) {
-    args := h.makeArgs(key.Namespace, fmt.Sprintf("/v1.0/sync/%s", key))
+func (h *HiberaAPI) SyncLeave(key string, name string) (core.Revision, error) {
+    return h.NSSyncLeave(h.defaultNS, core.Key(key), name)
+}
+
+func (h *HiberaAPI) NSSyncLeave(ns core.Namespace, key core.Key, name string) (core.Revision, error) {
+    args := h.makeArgs(ns, fmt.Sprintf("/v1.0/sync/%s", string(key)))
     args.params["name"] = name
-    _, rev, err := h.doRequest("DELETE", args, key.Key)
+    _, rev, err := h.doRequest("DELETE", args, string(key))
     return rev, err
 }
 
-func (h *HiberaAPI) SyncMembers(key core.Key, name string, limit uint) (int, []string, core.Revision, error) {
-    args := h.makeArgs(key.Namespace, fmt.Sprintf("/v1.0/sync/%s", key))
+func (h *HiberaAPI) SyncMembers(key string, name string, limit uint) (int, []string, core.Revision, error) {
+    return h.NSSyncMembers(h.defaultNS, core.Key(key), name, limit)
+}
+
+func (h *HiberaAPI) NSSyncMembers(ns core.Namespace, key core.Key, name string, limit uint) (int, []string, core.Revision, error) {
+    args := h.makeArgs(ns, fmt.Sprintf("/v1.0/sync/%s", string(key)))
     args.params["name"] = name
     args.params["limit"] = strconv.FormatUint(uint64(limit), 10)
-    content, rev, err := h.doRequest("GET", args, key.Key)
+    content, rev, err := h.doRequest("GET", args, string(key))
     if err != nil {
-        return -1, nil, core.ZeroRevision, err
+        return -1, nil, core.NoRevision, err
     }
     var info core.SyncInfo
     err = json.Unmarshal(content, &info)
@@ -419,30 +447,46 @@ func (h *HiberaAPI) SyncMembers(key core.Key, name string, limit uint) (int, []s
     return info.Index, info.Members, rev, err
 }
 
-func (h *HiberaAPI) EventFire(key core.Key, rev core.Revision) (core.Revision, error) {
-    args := h.makeArgs(key.Namespace, fmt.Sprintf("/v1.0/event/%s", key))
-    args.params["rev"] = (*rev).String()
-    _, rev, err := h.doRequest("POST", args, key.Key)
+func (h *HiberaAPI) EventFire(key string, rev core.Revision) (core.Revision, error) {
+    return h.NSEventFire(h.defaultNS, core.Key(key), rev)
+}
+
+func (h *HiberaAPI) NSEventFire(ns core.Namespace, key core.Key, rev core.Revision) (core.Revision, error) {
+    args := h.makeArgs(ns, fmt.Sprintf("/v1.0/event/%s", string(key)))
+    args.params["rev"] = rev.String()
+    _, rev, err := h.doRequest("POST", args, string(key))
     return rev, err
 }
 
-func (h *HiberaAPI) EventWait(key core.Key, rev core.Revision, timeout uint) (core.Revision, error) {
-    args := h.makeArgs(key.Namespace, fmt.Sprintf("/v1.0/event/%s", key))
-    args.params["rev"] = (*rev).String()
+func (h *HiberaAPI) EventWait(key string, rev core.Revision, timeout uint) (core.Revision, error) {
+    return h.NSEventWait(h.defaultNS, core.Key(key), rev, timeout)
+}
+
+func (h *HiberaAPI) NSEventWait(ns core.Namespace, key core.Key, rev core.Revision, timeout uint) (core.Revision, error) {
+    args := h.makeArgs(ns, fmt.Sprintf("/v1.0/event/%s", string(key)))
+    args.params["rev"] = rev.String()
     args.params["timeout"] = strconv.FormatUint(uint64(timeout), 10)
-    _, rev, err := h.doRequest("GET", args, key.Key)
+    _, rev, err := h.doRequest("GET", args, string(key))
     return rev, err
 }
 
-func (h *HiberaAPI) DataGet(key core.Key, rev core.Revision, timeout uint) ([]byte, core.Revision, error) {
-    args := h.makeArgs(key.Namespace, fmt.Sprintf("/v1.0/data/%s", key))
-    args.params["rev"] = (*rev).String()
-    args.params["timeout"] = strconv.FormatUint(uint64(timeout), 10)
-    return h.doRequest("GET", args, key.Key)
+func (h *HiberaAPI) DataGet(key string, rev core.Revision, timeout uint) ([]byte, core.Revision, error) {
+    return h.NSDataGet(h.defaultNS, core.Key(key), rev, timeout)
 }
 
-func (h *HiberaAPI) DataList(namespace core.Namespace) ([]string, error) {
-    args := h.makeArgs(namespace, "/v1.0/data")
+func (h *HiberaAPI) NSDataGet(ns core.Namespace, key core.Key, rev core.Revision, timeout uint) ([]byte, core.Revision, error) {
+    args := h.makeArgs(ns, fmt.Sprintf("/v1.0/data/%s", string(key)))
+    args.params["rev"] = rev.String()
+    args.params["timeout"] = strconv.FormatUint(uint64(timeout), 10)
+    return h.doRequest("GET", args, string(key))
+}
+
+func (h *HiberaAPI) DataList() ([]string, error) {
+    return h.NSDataList(h.defaultNS)
+}
+
+func (h *HiberaAPI) NSDataList(ns core.Namespace) ([]string, error) {
+    args := h.makeArgs(ns, "/v1.0/data")
     content, _, err := h.doRequest("GET", args, "")
     var items []string
     err = json.Unmarshal(content, &items)
@@ -452,17 +496,36 @@ func (h *HiberaAPI) DataList(namespace core.Namespace) ([]string, error) {
     return items, nil
 }
 
-func (h *HiberaAPI) DataSet(key core.Key, rev core.Revision, value []byte) (core.Revision, error) {
-    args := h.makeArgs(key.Namespace, fmt.Sprintf("/v1.0/data/%s", key))
-    args.params["rev"] = (*rev).String()
+func (h *HiberaAPI) DataSet(key string, rev core.Revision, value []byte) (core.Revision, error) {
+    return h.NSDataSet(h.defaultNS, core.Key(key), rev, value)
+}
+
+func (h *HiberaAPI) NSDataSet(ns core.Namespace, key core.Key, rev core.Revision, value []byte) (core.Revision, error) {
+    if rev == core.NoRevision {
+        var err error
+        _, rev, err = h.NSDataGet(ns, key, rev, 0)
+        if err != nil {
+            return rev, err
+        }
+
+        // Try the next revision.
+        rev = rev.Next()
+    }
+
+    args := h.makeArgs(ns, fmt.Sprintf("/v1.0/data/%s", string(key)))
+    args.params["rev"] = rev.String()
     args.body = value
-    _, rev, err := h.doRequest("POST", args, key.Key)
+    _, rev, err := h.doRequest("POST", args, string(key))
     return rev, err
 }
 
-func (h *HiberaAPI) DataRemove(key core.Key, rev core.Revision) (core.Revision, error) {
-    args := h.makeArgs(key.Namespace, fmt.Sprintf("/v1.0/data/%s", key))
-    args.params["rev"] = (*rev).String()
-    _, rev, err := h.doRequest("DELETE", args, key.Key)
+func (h *HiberaAPI) DataRemove(key string, rev core.Revision) (core.Revision, error) {
+    return h.NSDataRemove(h.defaultNS, core.Key(key), rev)
+}
+
+func (h *HiberaAPI) NSDataRemove(ns core.Namespace, key core.Key, rev core.Revision) (core.Revision, error) {
+    args := h.makeArgs(ns, fmt.Sprintf("/v1.0/data/%s", string(key)))
+    args.params["rev"] = rev.String()
+    _, rev, err := h.doRequest("DELETE", args, string(key))
     return rev, err
 }

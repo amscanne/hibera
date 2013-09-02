@@ -16,7 +16,6 @@ import (
 )
 
 var UnhandledRequest = errors.New("Unhandled request")
-var InvalidRevision = errors.New("Invalid revision")
 
 type Listener struct {
     net.Listener
@@ -61,7 +60,7 @@ func (c HTTPConnection) RemoteAddr() net.Addr {
 }
 
 func (c HTTPConnection) Close() error {
-    // Inform the core about this dropped conn.
+    // Inform the core about this dropped req.
     c.Connection.Drop()
     err := c.Conn.Close()
 
@@ -108,11 +107,11 @@ func (s *HTTPServer) boolParam(r *http.Request, name string) bool {
 func (s *HTTPServer) revParam(r *http.Request, name string) (core.Revision, error) {
     values := r.Form[name]
     if len(values) == 0 {
-        return core.ZeroRevision, nil
+        return core.NoRevision, nil
     }
-    rev, ok := core.ParseRevision(values[0])
-    if !ok {
-        return nil, InvalidRevision
+    rev, err := core.RevisionFromString(values[0])
+    if err != nil {
+        return core.NoRevision, err
     }
     return rev, nil
 }
@@ -138,8 +137,8 @@ func (s *HTTPServer) getContent(r *http.Request) ([]byte, error) {
     return buf, nil
 }
 
-func (s *HTTPServer) getConnection(r *http.Request, auth string, notifier <-chan bool) *Connection {
-    // Pull out the relevant conn.
+func (s *HTTPServer) getConnection(r *http.Request, notifier <-chan bool) *Connection {
+    // Pull out the relevant req.
     // NOTE: This is a hack. The underlying connection is our
     // special connection object -- and we return a string which
     // is the connection Id. So we turn it back into an integer
@@ -149,35 +148,52 @@ func (s *HTTPServer) getConnection(r *http.Request, auth string, notifier <-chan
         return nil
     }
 
-    // Our namespace is given by the host header.
-    // If this is given as an IP address, then we use the
-    // default namespace.
-    parts := strings.SplitN(r.Host, ":", 2)
-    var host string
-    if net.ParseIP(parts[0]) == nil {
-        // Use the given host as the namespace.
-        host = parts[0]
-    } else {
-        // Use the default namespace.
-        host = ""
-    }
-
     if len(r.Header["X-Client-Id"]) > 0 {
-        // Return a connection with the asssociate conn.
+        // Return a connection with the asssociate req.
         return s.Hub.FindConnection(ConnectionId(id),
-            UserId(r.Header["X-Client-Id"][0]), host, auth, notifier)
+            UserId(r.Header["X-Client-Id"][0]), notifier)
     }
 
-    // Return a connection with no associated conn.
-    return s.Hub.FindConnection(ConnectionId(id), "", host, auth, notifier)
+    // Return a connection with no associated req.
+    return s.Hub.FindConnection(ConnectionId(id), "", notifier)
 }
 
-func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
-    // Check the authorization header.
+func (s *HTTPServer) getRequest(r *http.Request, notifier <-chan bool) *Request {
     var auth string
+    var ns string
+
+    // Grab the connection.
+    conn := s.getConnection(r, notifier)
+    if conn == nil {
+        return nil
+    }
+
+    // Check the authorization header.
     if len(r.Header["X-Authorization"]) > 0 {
         auth = r.Header["X-Authorization"][0]
     }
+
+    // Check if we have an explicit namespace.
+    if len(r.Header["X-Namespace"]) > 0 {
+        ns = r.Header["X-Namespace"][0]
+    } else {
+        // Our namespace may be given by the host header.
+        // If this is given as an IP address, then we use the
+        // default namespace.
+        parts := strings.SplitN(r.Host, ":", 2)
+        if net.ParseIP(parts[0]) == nil {
+            // Use the given host as the namespace.
+            ns = parts[0]
+        } else {
+            // Use the default namespace.
+            ns = ""
+        }
+    }
+
+    return NewRequest(conn, core.Token(auth), core.Namespace(ns))
+}
+
+func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
 
     // Pull out a connection (with the close notifiers).
     closeNotifier, ok := w.(http.CloseNotifier)
@@ -195,14 +211,11 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
     }
 
     // Grab the connection object.
-    conn := s.getConnection(r, auth, closeNotifier.CloseNotify())
-    if conn == nil {
+    req := s.getRequest(r, closeNotifier.CloseNotify())
+    if req == nil {
         http.Error(w, "", http.StatusNotFound)
         return
     }
-
-    // Debug.
-    utils.Print("HTTP", "%s %s?%s conn=%s", r.Method, r.URL.Path, r.URL.RawQuery, conn.ServerId())
 
     // Extract out parameters.
     // NOTE: We do this after reading the body because we
@@ -217,7 +230,7 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
     buf := new(bytes.Buffer)
     enc := json.NewEncoder(buf)
     err = UnhandledRequest
-    rev := core.ZeroRevision
+    rev := core.NoRevision
 
     // Process the request.
     if parts[0] == "v1.0" {
@@ -230,17 +243,17 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
                 switch r.Method {
                 case "GET":
                     var data []byte
-                    data, rev, err = s.Cluster.Info(conn)
+                    data, rev, err = s.Cluster.Info(req)
                     if err == nil {
                         _, err = buf.Write(data)
                     }
                     break
                 case "POST":
                     replication := uint(s.intParam(r, "replication"))
-                    rev, err = s.Cluster.Activate(conn, replication)
+                    rev, err = s.Cluster.Activate(req, replication)
                     break
                 case "DELETE":
-                    rev, err = s.Cluster.Deactivate(conn)
+                    rev, err = s.Cluster.Deactivate(req)
                     break
                 }
                 break
@@ -249,7 +262,7 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
                 switch r.Method {
                 case "GET":
                     var items []core.Key
-                    items, rev, err = s.Cluster.DataList(conn)
+                    items, rev, err = s.Cluster.DataList(req)
                     if err == nil {
                         err = enc.Encode(items)
                     }
@@ -260,8 +273,8 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
             case "access":
                 switch r.Method {
                 case "GET":
-                    var tokens []string
-                    tokens, rev, err = s.Cluster.AccessList(conn)
+                    var tokens []core.Token
+                    tokens, rev, err = s.Cluster.AccessList(req)
                     if err == nil {
                         err = enc.Encode(tokens)
                     }
@@ -274,7 +287,7 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
                 case "GET":
                     var nodes []string
                     active := s.boolParam(r, "active")
-                    nodes, rev, err = s.Cluster.NodeList(conn, active)
+                    nodes, rev, err = s.Cluster.NodeList(req, active)
                     if err == nil {
                         err = enc.Encode(nodes)
                     }
@@ -285,33 +298,34 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
 
         } else if len(parts) == 2 {
 
-            key := core.Key{conn.Namespace(), parts[1]}
+            key := core.Key(parts[1])
+            auth := core.Token(parts[1])
 
             switch parts[0] {
             case "sync":
                 switch r.Method {
                 case "GET":
-                    name := conn.Name(s.strParam(r, "name"))
+                    name := req.Name(s.strParam(r, "name"))
                     limit := uint(s.intParam(r, "limit"))
                     var info core.SyncInfo
-                    info, rev, err = s.Cluster.SyncMembers(conn, key, name, limit)
+                    info, rev, err = s.Cluster.SyncMembers(req, key, name, limit)
                     if err == nil {
                         err = enc.Encode(info)
                     }
                     break
                 case "POST":
-                    name := conn.Name(s.strParam(r, "name"))
+                    name := req.Name(s.strParam(r, "name"))
                     limit := uint(s.intParam(r, "limit"))
                     timeout := uint(s.intParam(r, "timeout"))
                     var index int
-                    index, rev, err = s.Cluster.SyncJoin(conn, key, name, limit, timeout)
+                    index, rev, err = s.Cluster.SyncJoin(req, key, name, limit, timeout)
                     if err == nil {
                         err = enc.Encode(index)
                     }
                     break
                 case "DELETE":
-                    name := conn.Name(s.strParam(r, "name"))
-                    rev, err = s.Cluster.SyncLeave(conn, key, name)
+                    name := req.Name(s.strParam(r, "name"))
+                    rev, err = s.Cluster.SyncLeave(req, key, name)
                     break
                 }
                 break
@@ -322,7 +336,7 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
                     rev, err = s.revParam(r, "rev")
                     if err == nil {
                         timeout := uint(s.intParam(r, "timeout"))
-                        value, rev, err = s.Cluster.DataGet(conn, key, rev, timeout)
+                        value, rev, err = s.Cluster.DataGet(req, key, rev, timeout)
                         if err == nil {
                             _, err = buf.Write(value)
                         }
@@ -331,13 +345,13 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
                 case "POST":
                     rev, err = s.revParam(r, "rev")
                     if err == nil {
-                        rev, err = s.Cluster.DataSet(conn, key, rev, content)
+                        rev, err = s.Cluster.DataSet(req, key, rev, content)
                     }
                     break
                 case "DELETE":
                     rev, err = s.revParam(r, "rev")
                     if err == nil {
-                        rev, err = s.Cluster.DataRemove(conn, key, rev)
+                        rev, err = s.Cluster.DataRemove(req, key, rev)
                     }
                     break
                 }
@@ -345,18 +359,18 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
             case "access":
                 switch r.Method {
                 case "GET":
-                    var value *core.Token
-                    value, rev, err = s.Cluster.AccessGet(conn, key)
+                    var value *core.Permissions
+                    value, rev, err = s.Cluster.AccessGet(req, auth)
                     if err == nil {
                         err = enc.Encode(value)
                     }
                     break
                 case "POST":
-                    path := s.strParam(r, "path")
+                    path := core.Key(s.strParam(r, "path"))
                     read := s.boolParam(r, "read")
                     write := s.boolParam(r, "write")
                     execute := s.boolParam(r, "execute")
-                    rev, err = s.Cluster.AccessUpdate(conn, key, path, read, write, execute)
+                    rev, err = s.Cluster.AccessUpdate(req, auth, path, read, write, execute)
                     break
                 }
                 break
@@ -364,7 +378,7 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
                 switch r.Method {
                 case "GET":
                     var value *core.Node
-                    value, rev, err = s.Cluster.NodeGet(conn, parts[1])
+                    value, rev, err = s.Cluster.NodeGet(req, parts[1])
                     if err == nil {
                         err = enc.Encode(value)
                     }
@@ -377,13 +391,13 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
                     rev, err = s.revParam(r, "rev")
                     if err == nil {
                         timeout := uint(s.intParam(r, "timeout"))
-                        rev, err = s.Cluster.EventWait(conn, key, rev, timeout)
+                        rev, err = s.Cluster.EventWait(req, key, rev, timeout)
                     }
                     break
                 case "POST":
                     rev, err = s.revParam(r, "rev")
                     if err == nil {
-                        rev, err = s.Cluster.EventFire(conn, key, rev)
+                        rev, err = s.Cluster.EventFire(req, key, rev)
                     }
                     break
                 }
@@ -398,9 +412,9 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
         // We fully specify the Content-Length that was written
         // and always return a revision (although often it will
         // be 0 because the call didn't have a revision).
-        w.Header().Set("X-Revision", (*rev).String())
+        w.Header().Set("X-Revision", rev.String())
         w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
-        utils.Print("HTTP", "200 X-Revision %s", (*rev).String())
+        utils.Print("HTTP", "200 X-Revision %s", rev.String())
         io.Copy(w, buf)
         break
 
@@ -434,7 +448,7 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
         // The error could result from a revision conflict,
         // so this is important information and can't just
         // be ignored by the client.
-        w.Header().Set("X-Revision", (*rev).String())
+        w.Header().Set("X-Revision", rev.String())
         utils.Print("HTTP", "501")
         http.Error(w, err.Error(), http.StatusInternalServerError)
         break

@@ -61,10 +61,30 @@ func usage(ent *entry) uint64 {
     if ent == nil {
         return int32_size
     }
+
+    // NOTE: We encode nil as length -1.
+    // So the usage is the same as a zero length
+    // array, except it's a special encoding that
+    // is used internally to signify a delete (as
+    // opposed to just setting data to nil).
+    var data_len int
+    if ent.value.data == nil {
+        data_len = 0
+    } else {
+        data_len = len(ent.value.data)
+    }
+
+    var metadata_len int
+    if ent.value.metadata == nil {
+        metadata_len = 0
+    } else {
+        metadata_len = len(ent.value.metadata)
+    }
+
     return (int32_size +
         int32_size + uint64(len([]byte(ent.key))) +
-        int32_size + uint64(len(ent.value.data)) +
-        int32_size + uint64(len(ent.value.metadata)))
+        int32_size + uint64(data_len) +
+        int32_size + uint64(metadata_len))
 }
 
 func clear(output *os.File, length uint64) error {
@@ -89,6 +109,7 @@ func serialize(output *os.File, ent *entry) error {
     // Get the current offset.
     offset, err := output.Seek(0, 1)
     if err != nil {
+        log.Print("Error seeking: ", err)
         return err
     }
 
@@ -96,6 +117,11 @@ func serialize(output *os.File, ent *entry) error {
     encoded := bytes.NewBuffer(make([]byte, 0))
 
     doEncode := func(data []byte) error {
+        if data == nil {
+            // See NOTE above in usage().
+            // We encode nil as length -1.
+            return binary.Write(encoded, binary.LittleEndian, int32(-1))
+        }
         err := binary.Write(encoded, binary.LittleEndian, int32(len(data)))
         if err != nil {
             log.Print("Error encoding length: ", err)
@@ -146,6 +172,7 @@ func serialize(output *os.File, ent *entry) error {
     // Return the original offset.
     offset, err = output.Seek(offset, 0)
     if err != nil {
+        log.Print("Error seeking: ", err)
         return err
     }
 
@@ -158,6 +185,9 @@ func serialize(output *os.File, ent *entry) error {
 
     // Go to the end of the record.
     offset, err = output.Seek(int64(encoded.Len()), 1)
+    if err != nil {
+        log.Print("Error seeking: ", err)
+    }
     return err
 }
 
@@ -166,12 +196,7 @@ func deserialize(input *os.File, ent *entry) (uint64, uint64, error) {
     // Read the header.
     length := int32(0)
     err := binary.Read(input, binary.LittleEndian, &length)
-    if err == io.ErrUnexpectedEOF {
-        return uint64(0), uint64(0), io.EOF
-    } else if err != nil {
-        if err != io.EOF {
-            log.Print("Error reading entry header: ", err)
-        }
+    if err != nil {
         return uint64(0), uint64(0), err
     }
 
@@ -187,8 +212,10 @@ func deserialize(input *os.File, ent *entry) (uint64, uint64, error) {
     n, err := io.ReadFull(input, data)
     if (err == io.EOF || err == io.ErrUnexpectedEOF) && n == int(length) {
         // Perfect. We got exactly this object.
+        err = nil
+    } else if err == io.ErrUnexpectedEOF {
+        return uint64(length), uint64(0), io.EOF
     } else if err != nil {
-        log.Print("Error reading full entry: ", err)
         return uint64(length), uint64(0), err
     }
 
@@ -197,15 +224,28 @@ func deserialize(input *os.File, ent *entry) (uint64, uint64, error) {
     doDecode := func() ([]byte, error) {
         var length int32
         err := binary.Read(encoded, binary.LittleEndian, &length)
-        if err != nil {
+        if err == io.EOF {
+            // Okay. We still read the object,
+            // other it would be ErrUnexpectedEOF.
+        } else if err != nil {
             log.Print("Error decoding length: ", err)
             return nil, err
+        }
+        if length == int32(-1) {
+            // See NOTE above in usage().
+            // We encode nil as length -1.
+            return nil, nil
         }
         blob := make([]byte, length, length)
         for n := 0; n < len(blob); {
             read, err := encoded.Read(blob[n:])
-            if err != nil {
-                log.Print("Error decoding data: ", err)
+            if (err == io.EOF || err == io.ErrUnexpectedEOF) && (n+read) == int(length) {
+                // This is a really annoying way of passing EOF.
+                // Same as other two cases above, we've read the
+                // object we just happen to be at the end of file.
+            } else if err != nil {
+                log.Printf("Error decoding data (%d/%d bytes read): %s",
+                    n+read, length, err.Error())
                 return nil, err
             }
             n += read

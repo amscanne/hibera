@@ -2,6 +2,7 @@ package storage
 
 import (
     "fmt"
+    "hibera/utils"
     "log"
     "os"
     "path"
@@ -31,17 +32,24 @@ type logManager struct {
 
 func (l *logManager) loadData() error {
 
+    utils.Print("STORAGE", "Loading data...")
+
     // Just check all records.
     records, err := l.data.Load()
     if err != nil {
+        utils.Print("STORAGE", "Error loading: %s", err)
         return err
     }
+
+    // Reset records.
+    l.data_records = make(map[key]*logRecord)
 
     // Set just the data record.
     for _, record := range records {
         var ent entry
         _, err = record.Read(&ent)
         if err != nil {
+            utils.Print("STORAGE", "Skipping record: %s", err)
             continue
         }
 
@@ -57,12 +65,37 @@ func (l *logManager) loadData() error {
         // around and we will read it shortly.
         orig_data_rec, has_data_rec := l.data_records[ent.key]
 
-        // Set the latest in the file.
-        l.data_records[ent.key] = record
+        if ent.value.data != nil || ent.value.metadata != nil {
+            // Set the latest in the file.
+            utils.Print("STORAGE", "Loading data record '%s'...", ent.key)
+            l.data_records[ent.key] = record
+        } else {
+            // Clear the records.
+            utils.Print("STORAGE", "Deleting data record '%s'...", ent.key)
+            delete(l.data_records, ent.key)
+            record.Delete()
+        }
 
         // Remove the "older" record (see above).
         if has_data_rec {
+            utils.Print("STORAGE", "Deleting original record '%s'...", ent.key)
             orig_data_rec.Delete()
+        }
+    }
+
+    // Setup the records.
+    for key, record := range l.data_records {
+
+        orig_ref, has_orig_ref := l.records[key]
+
+        // Grab an additional reference to the data record,
+        // since when we drop this it will be discarded.
+        record.Grab()
+        l.records[key] = record
+
+        // Drop a reference to the original record.
+        if has_orig_ref {
+            orig_ref.Discard()
         }
     }
 
@@ -109,9 +142,12 @@ func (l *logManager) loadLogs() error {
     sort.Sort(sort.IntSlice(lognumbers))
 
     for _, basenum := range lognumbers {
+        filename := fmt.Sprintf("log.%d", basenum)
+        utils.Print("STORAGE", "Loading from %s...", filename)
+
         // Open the file.
         file, err := ReadLog(
-            path.Join(l.logPath, fmt.Sprintf("log.%d", basenum)),
+            path.Join(l.logPath, filename),
             uint64(basenum))
         if err != nil {
             return err
@@ -144,7 +180,18 @@ func (l *logManager) loadLogs() error {
                 continue
             }
 
+            orig_rec, has_orig_rec := l.records[ent.key]
+
+            // Save the new record.
             l.records[ent.key] = record
+
+            // If there was an original record,
+            // unlike the data case we don't delete it.
+            // We simply drop the old reference. It will
+            // be deleted when the log files are squashed.
+            if has_orig_rec {
+                orig_rec.Discard()
+            }
         }
 
         // Save the highest log number.
@@ -223,6 +270,7 @@ func (l *logManager) removeLogs(limit uint64) error {
         }
 
         // Take off the entries.
+        utils.Print("STORAGE", "Removed log file '%s'.", logfile)
         atomic.AddInt64(&l.log_size, -fi.Size())
     }
 
@@ -255,19 +303,28 @@ func (l *logManager) squashLogsUntil(limit uint64) error {
 
         // Copy all logs down to the data layer.
         orig_data, has_orig_data := l.data_records[key]
-        copied, err := record.Copy(l.data)
+        ent, err := record.Copy(l.data)
         if err != nil {
             continue
         }
+        utils.Print("STORAGE", "Saved data record '%s'...", ent.key)
 
-        if copied {
+        // Remove the original record if it exists.
+        if has_orig_data {
+            utils.Print("STORAGE", "Deleting original data record '%s'...", ent.key)
+            orig_data.Delete()
+        }
+
+        // Check for a delete.
+        if ent.value.data == nil && ent.value.metadata == nil {
+            // Delete this record also.
+            utils.Print("STORAGE", "Deleting saved record '%s'...", ent.key)
+            delete(l.data_records, key)
+            record.Delete()
+        } else {
             // The record now points to data.
+            utils.Print("STORAGE", "Leaving new record '%s'...", ent.key)
             l.data_records[key] = record
-
-            // Remove the original record if it exists.
-            if has_orig_data {
-                orig_data.Delete()
-            }
         }
     }
 
@@ -312,7 +369,7 @@ func NewLogManager(logPath string, dataPath string) (*logManager, error) {
     }
 
     // Open our files.
-    l.data, err = OpenLog(path.Join(l.dataPath, "data"), 0, true)
+    l.data, err = OpenLog(path.Join(l.dataPath, "data.0"), 0, true)
     if err != nil {
         log.Print("Error initializing data file: ", err)
         return nil, err

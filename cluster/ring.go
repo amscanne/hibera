@@ -184,7 +184,7 @@ func (r *ring) NodesFor(key core.Key) []*core.Node {
     defer r.Mutex.Unlock()
 
     // Check if it's been cached.
-    h := utils.Hash(key.String())
+    h := utils.Hash(string(key))
     cached := r.cache[h]
     if cached == nil {
         // Do a manual lookup.

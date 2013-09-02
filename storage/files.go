@@ -1,6 +1,7 @@
 package storage
 
 import (
+    "hibera/utils"
     "io"
     "log"
     "os"
@@ -159,6 +160,10 @@ func (l *logFile) Close() {
     }
 }
 
+func (l *logFile) Open() {
+    atomic.AddInt32(&l.refs, 1)
+}
+
 func (l *logRecord) Read(ent *entry) (uint64, error) {
     l.log.Mutex.Lock()
     defer l.log.Mutex.Unlock()
@@ -247,23 +252,18 @@ func (l *logRecord) Delete() error {
     return nil
 }
 
-func (l *logRecord) Copy(output *logFile) (bool, error) {
-    // Check if it makes sense.
-    if l.log == output {
-        return false, nil
-    }
-
+func (l *logRecord) Copy(output *logFile) (*entry, error) {
     // Read the current record.
     var ent entry
     free_space, err := l.Read(&ent)
     if free_space != 0 || err != nil {
-        return false, err
+        return nil, err
     }
 
     // Create a new record.
     out_rec, err := output.Write(&ent)
     if err != nil {
-        return false, err
+        return &ent, err
     }
 
     l.log.Mutex.Lock()
@@ -277,12 +277,17 @@ func (l *logRecord) Copy(output *logFile) (bool, error) {
     l.offset = out_rec.offset
     orig_log.Close()
 
-    return true, nil
+    return &ent, nil
 }
 
 func (l *logRecord) Discard() {
     // Drop our reference.
     l.log.Close()
+}
+
+func (l *logRecord) Grab() {
+    // Grab another reference.
+    l.log.Open()
 }
 
 func (l *logFile) Load() ([]*logRecord, error) {
@@ -296,6 +301,7 @@ func (l *logFile) Load() ([]*logRecord, error) {
     // Reset the pointer.
     _, err := l.file.Seek(l.start, 0)
     if err != nil {
+        log.Print("Error during seek: ", err)
         return nil, err
     }
 
@@ -303,30 +309,33 @@ func (l *logFile) Load() ([]*logRecord, error) {
     l.chunks = make([]chunk, 0)
 
     for {
-        var ent entry
-        _, free_space, err := deserialize(l.file, &ent)
-        if err == io.EOF {
-            break
-        } else if err != nil {
-            return records, err
-        }
-
         // Get the current offset.
-        offset, err := l.file.Seek(1, 0)
+        offset, err := l.file.Seek(0, 1)
         if err != nil {
             log.Print("Error reading offset: ", err)
             continue
         }
 
+        // Deserialize this entry.
+        var ent entry
+        record_size, free_space, err := deserialize(l.file, &ent)
+        if err == io.EOF || err == io.ErrUnexpectedEOF {
+            break
+        } else if err != nil {
+            return records, err
+        }
+
         if free_space != 0 {
             // Save it as a free chunk.
             l.chunks = append(l.chunks, chunk{uint64(offset), free_space})
+            utils.Print("STORAGE", "Free space @ %d (length: %d)", offset, free_space)
             continue
         }
 
         // Return the read entry.
         atomic.AddInt64(&l.entries, 1)
         records = append(records, l.NewRecord(uint64(offset)))
+        utils.Print("STORAGE", "Record @ %d (length: %d)", offset, record_size)
     }
 
     return records, nil

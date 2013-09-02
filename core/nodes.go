@@ -1,6 +1,7 @@
 package core
 
 import (
+    "errors"
     "fmt"
     "hibera/utils"
     "sort"
@@ -9,6 +10,7 @@ import (
 )
 
 var DropLimit = uint32(10)
+var NoNode = errors.New("no node")
 
 type Node struct {
     // The node address (host:port).
@@ -68,8 +70,8 @@ func NewNode(addr string, keys []string, domain string) *Node {
     node.Domain = domain
     node.Active = false
     node.Dropped = 0
-    node.Current = ZeroRevision
-    node.Modified = ZeroRevision
+    node.Current = NoRevision.Copy()
+    node.Modified = NoRevision.Copy()
     return node
 }
 
@@ -94,7 +96,7 @@ func (nodes *Nodes) Heartbeat(id string, rev Revision) bool {
         // will be removed and replaced by other nodes,
         // but we allow that to happen organically.
         node.RstDropped()
-        node.Current = rev
+        node.Current = rev.Copy()
         return true
     }
 
@@ -113,24 +115,24 @@ func (nodes *Nodes) NoHeartbeat(id string) {
     }
 }
 
-func (nodes *Nodes) Activate(id string, rev Revision) bool {
+func (nodes *Nodes) Activate(id string, rev Revision) error {
     nodes.RWMutex.RLock()
     defer nodes.RWMutex.RUnlock()
 
     node := nodes.all[id]
     if node == nil {
-        return false
+        return NoNode
     }
 
     // We activate this node.
     if !node.Active {
         node.Active = true
-        node.Modified = rev
-        node.Current = rev
+        node.Modified = rev.Copy()
+        node.Current = rev.Copy()
         node.RstDropped()
     }
 
-    return true
+    return nil
 }
 
 func (nodes *Nodes) List(active bool) ([]string, error) {
@@ -190,7 +192,7 @@ func (nodes *Nodes) Others() []*Node {
 
 func (nodes *Nodes) Suspicious(rev Revision) []*Node {
     return nodes.filter(func(node *Node) bool {
-        return node.Active && node != nodes.self && (node.Dropped > 0 || (*node.Current).Cmp(rev) < 0)
+        return node.Active && node != nodes.self && (node.Dropped > 0 || rev.GreaterThan(node.Current))
     })
 }
 
@@ -220,7 +222,7 @@ func (nodes *Nodes) Encode(next bool, na NodeInfo, N uint) (bool, error) {
     // date pretty quickly, as they are currently suspicious.
     if next {
         for _, node := range nodes.all {
-            if node.Active && node.Alive() && (*node.Current).Cmp(nodes.self.Current) < 0 {
+            if node.Active && node.Alive() && nodes.self.Current.GreaterThan(node.Current) {
                 addokay = false
                 break
             }
@@ -240,7 +242,7 @@ func (nodes *Nodes) Encode(next bool, na NodeInfo, N uint) (bool, error) {
                 domains[node.Domain] = true
                 na[id] = NewNode(node.Addr, node.Keys, node.Domain)
                 na[id].Active = node.Alive()
-                na[id].Modified = IncRevision(nodes.self.Current)
+                na[id].Modified = nodes.self.Current.Next()
                 changed = true
             }
 
@@ -253,15 +255,15 @@ func (nodes *Nodes) Encode(next bool, na NodeInfo, N uint) (bool, error) {
                 na[id].Active = false
                 na[id].Dropped = DropLimit
                 na[id].Current = node.Current
-                na[id].Modified = IncRevision(nodes.self.Current)
+                na[id].Modified = nodes.self.Current.Next()
                 changed = true
             }
 
         } else {
             na[id] = NewNode(node.Addr, node.Keys, node.Domain)
             na[id].Active = node.Active
-            na[id].Current = node.Current
-            na[id].Modified = node.Modified
+            na[id].Current = node.Current.Copy()
+            na[id].Modified = node.Modified.Copy()
             na[id].Dropped = node.Dropped
         }
     }
@@ -280,7 +282,7 @@ func (nodes *Nodes) Decode(na NodeInfo) (bool, error) {
         orig_active := (nodes.all[id] != nil && nodes.all[id].Active)
 
         if nodes.all[id] == nil ||
-            (*nodes.all[id].Modified).Cmp(node.Modified) < 0 {
+            node.Modified.GreaterThan(nodes.all[id].Modified) {
             if id == nodes.self.Id() {
                 nodes.self = node
             }
