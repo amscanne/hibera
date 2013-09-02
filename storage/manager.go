@@ -20,11 +20,11 @@ type logManager struct {
     logPath  string
     dataPath string
 
-    data *logFile
+    data         *logFile
     data_records map[key]*logRecord
 
-    log_size     int64
-    log_number   uint64
+    log_size   int64
+    log_number uint64
 
     records map[key]*logRecord
 }

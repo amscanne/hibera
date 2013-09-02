@@ -19,13 +19,13 @@ type logFile struct {
 
     chunks []chunk
 
-    refs int32
-    number uint64
+    refs    int32
+    number  uint64
     entries int64
 }
 
 type logRecord struct {
-    log *logFile
+    log    *logFile
     offset uint64
 }
 
@@ -75,8 +75,8 @@ func (l *logFile) Write(ent *entry) (*logRecord, error) {
     var chk chunk
     for index, chk = range l.chunks {
         if chk.length >= length &&
-           ((chk.length - length) == 0 ||
-           (chk.length - length) >= 4) {
+            ((chk.length-length) == 0 ||
+                (chk.length-length) >= 4) {
             found = true
             offset = int64(chk.offset)
             remaining = (chk.length - length)
@@ -93,7 +93,7 @@ func (l *logFile) Write(ent *entry) (*logRecord, error) {
         }
 
         // Update our chunk list.
-        if index != (len(l.chunks)-1) {
+        if index != (len(l.chunks) - 1) {
             // Move the last element into this position.
             l.chunks[index] = l.chunks[len(l.chunks)-1]
         }
@@ -172,14 +172,14 @@ func (l *logRecord) Delete() error {
         var index int
         var other chunk
         for index, other = range l.log.chunks {
-            if other.offset + other.length == current.offset {
+            if other.offset+other.length == current.offset {
                 // Update our current chunk.
                 current.offset = other.offset
                 current.length = other.length + current.length
                 merged = true
                 break
             }
-            if current.offset + current.length == other.offset {
+            if current.offset+current.length == other.offset {
                 // Update our current chunk.
                 current.length = current.length + other.length
                 merged = true
@@ -187,10 +187,9 @@ func (l *logRecord) Delete() error {
             }
         }
 
-
         if merged {
             // Remove the last element from our list of chunks.
-            if index < len(l.log.chunks) - 1 {
+            if index < len(l.log.chunks)-1 {
                 l.log.chunks[index] = l.log.chunks[len(l.log.chunks)-1]
             }
             l.log.chunks = l.log.chunks[:len(l.log.chunks)-1]

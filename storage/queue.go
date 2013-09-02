@@ -20,7 +20,7 @@ type Store struct {
     pending chan *update
     handled uint64
 
-    flush chan bool
+    flush  chan bool
     squash chan error
 
     stopped chan bool
@@ -55,12 +55,7 @@ func (s *Store) flusher() error {
     squash_chan := make(chan error, 1)
     squash_chan <- nil
 
-    process := func(upd *update) bool {
-        // Check for terminal.
-        if upd == nil {
-            return true
-        }
-
+    process := func(upd *update) {
         // Track stats.
         atomic.AddUint64(&s.handled, 1)
 
@@ -70,14 +65,39 @@ func (s *Store) flusher() error {
         // Notify that an error occured.
         if err != nil {
             upd.result <- err
-            return false
         }
 
         // Add it to our list of done.
         finished = append(finished, upd)
+    }
 
-        // Keep going.
-        return false
+    complete := func() {
+        sync := func(logfile *logFile, finished []*update) {
+            // Sync the log.
+            s.logs.closeLog(logfile)
+
+            // Allow other flushes.
+            flush_chan <- true
+
+            // Notify waiters.
+            for _, upd := range finished {
+                upd.result <- nil
+            }
+
+            // Squash the log.
+            last_squash := <-squash_chan
+            if last_squash == nil {
+                last_squash = s.logs.checkSquash(logfile)
+            }
+            squash_chan <- last_squash
+        }
+
+        // Run the sync.
+        go sync(logfile, finished)
+
+        // Reset our buffers.
+        logfile = nil
+        finished = nil
     }
 
     for {
@@ -88,19 +108,23 @@ func (s *Store) flusher() error {
             // Block indefinitely.
             select {
             case upd := <-s.pending:
+                // Check for terminal.
+                if upd == nil {
+                    return <-squash_chan
+                }
+
                 // Initialize the log.
                 var err error
                 finished = make([]*update, 0, 0)
                 logfile, err = s.logs.NewLog()
                 if err != nil {
                     log.Print("Error opening log: ", err)
-                    return err
+                    upd.result <- err
+                    continue
                 }
 
                 // Process normally.
-                if process(upd) {
-                    return <-squash_chan
-                }
+                process(upd)
                 break
             }
 
@@ -112,36 +136,19 @@ func (s *Store) flusher() error {
             // a flush log to complete this batch.
             select {
             case <-flush_chan:
-                go func(logfile *logFile, finished []*update) {
-                    // Sync the log.
-                    s.logs.closeLog(logfile)
-
-                    // Allow other flushes.
-                    flush_chan <- true
-
-                    // Notify waiters.
-                    for _, upd := range finished {
-                        upd.result <- nil
-                    }
-
-                    // Squash the log.
-                    last_squash := <-squash_chan
-                    if last_squash == nil {
-                        last_squash = s.logs.checkSquash(logfile)
-                    }
-                    squash_chan <- last_squash
-
-                }(logfile, finished)
-
-                // Reset our buffers.
-                logfile = nil
-                finished = nil
+                complete()
                 break
 
             case upd := <-s.pending:
-                if process(upd) {
+                // Check for terminal.
+                if upd == nil {
+                    <-flush_chan
+                    complete()
                     return <-squash_chan
                 }
+
+                // Process normally.
+                process(upd)
                 break
             }
         }

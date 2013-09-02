@@ -8,15 +8,15 @@ import (
     "os"
 )
 
-func (ent* entry) Length() uint64 {
+func (ent *entry) Length() uint64 {
     // Return the encoded length.
     return uint64(
-        4 + len([]byte(ent.key))+
-        4 + len(ent.value.data) +
-        4 + len(ent.value.metadata))
+        4 + len([]byte(ent.key)) +
+            4 + len(ent.value.data) +
+            4 + len(ent.value.metadata))
 }
 
-func (ent* entry) Usage() uint64 {
+func (ent *entry) Usage() uint64 {
     // Return the length including header.
     return 4 + ent.Length()
 }
@@ -49,7 +49,7 @@ func serialize(output *os.File, ent *entry) error {
     // Do the encoding.
     encoded := bytes.NewBuffer(make([]byte, 0))
 
-    doEncode := func (data []byte) error {
+    doEncode := func(data []byte) error {
         err := binary.Write(encoded, binary.LittleEndian, uint32(len(data)))
         if err != nil {
             log.Print("Error encoding length: ", err)

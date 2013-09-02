@@ -1,10 +1,11 @@
 package storage
 
 import (
+    "bytes"
     "fmt"
     "io/ioutil"
     "os"
-    "bytes"
+    "sync/atomic"
     "testing"
 )
 
@@ -40,26 +41,27 @@ func doBenchmark(b *testing.B, workers int, ops int, unique bool, data_len int) 
     }
     defer Teardown(store)
 
+    count := uint32(0)
     data := make([]byte, data_len, data_len)
     metadata := make([]byte, data_len/2, data_len/2)
     unique_data := make(map[string][]byte)
     unique_metadata := make(map[string][]byte)
-    b.SetBytes(int64(data_len + data_len/2))
+    finished := make(map[string]bool)
 
     // Generate random data.
     for i := 0; i < len(data); i += 1 {
         data[i] = byte(i % 256)
         if i < len(data)/2 {
-            metadata[i] = byte((i+1) % 256)
+            metadata[i] = byte((i + 1) % 256)
         }
     }
     for i := 0; i < workers; i += 1 {
         chunk_data := make([]byte, data_len, data_len)
         chunk_metadata := make([]byte, data_len/2, data_len/2)
         for j := 0; j < len(chunk_data); j += 1 {
-            chunk_data[j] = byte((i+j) % 256)
+            chunk_data[j] = byte((i + j) % 256)
             if j < len(chunk_data)/2 {
-                chunk_metadata[j] = byte((i+j+1) % 256)
+                chunk_metadata[j] = byte((i + j + 1) % 256)
             }
         }
         unique_data[fmt.Sprintf("a.%d", i)] = chunk_data
@@ -76,12 +78,23 @@ func doBenchmark(b *testing.B, workers int, ops int, unique bool, data_len int) 
     done := make(chan bool, workers)
     for i := 0; i < workers; i += 1 {
         go func(i int) {
-            for j := 0; j < ops; j += 1 {
+            for {
                 if unique {
                     key := fmt.Sprintf("a.%d", i)
+                    finished[key] = true
                     store.Write(key, unique_data[key], unique_metadata[key])
                 } else {
+                    finished["a"] = true
                     store.Write("a", data, metadata)
+                }
+
+                // NOTE; This is actually inefficient. But we
+                // want to verify that everything is written properly
+                // below, so we tolerate at least every worker writing
+                // their keys once. Any overread from this specific
+                // piece should be dominated in the long run anyways.
+                if atomic.AddUint32(&count, 1) > uint32(ops) {
+                    break
                 }
             }
             done <- true
@@ -99,7 +112,7 @@ func doBenchmark(b *testing.B, workers int, ops int, unique bool, data_len int) 
     store.logs.squashLogs()
 
     // Sanity check the results.
-    for i:= 0; i < workers; i += 1 {
+    for i := 0; i < workers; i += 1 {
         go func(i int) {
             if unique {
                 key := fmt.Sprintf("a.%d", i)
@@ -135,23 +148,11 @@ func doBenchmark(b *testing.B, workers int, ops int, unique bool, data_len int) 
     }
 }
 
-func BenchmarkNWriters1Ops4KBytesUnique(b *testing.B) {
-    doBenchmark(b, b.N, 1, true, 4096)
+func BenchmarkNWriters4KBytesUnique(b *testing.B) {
+    b.SetBytes(4096 + 4096/2)
+    doBenchmark(b, b.N, b.N, true, 4096)
 }
-func BenchmarkNWriters1Ops4KBytesSame(b *testing.B) {
-    doBenchmark(b, b.N, 1, false, 4096)
-}
-
-func Benchmark100WritersNOps4KBytesUnique(b *testing.B) {
-    doBenchmark(b, 100, b.N, true, 4096)
-}
-func Benchmark100WritersNOps4KBytesSame(b *testing.B) {
-    doBenchmark(b, 100, b.N, false, 4096)
-}
-
-func Benchmark100Writers1OpsNBytesUnique(b *testing.B) {
-    doBenchmark(b, 100, 1, true, b.N)
-}
-func Benchmark100Writers1OpsNBytesKSame(b *testing.B) {
-    doBenchmark(b, 100, 1, false, b.N)
+func BenchmarkNWriters4KBytesSame(b *testing.B) {
+    b.SetBytes(4096 + 4096/2)
+    doBenchmark(b, b.N, b.N, false, 4096)
 }
