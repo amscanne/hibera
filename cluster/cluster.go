@@ -488,7 +488,7 @@ func (c *Cluster) timedHealthcheck() {
 }
 
 func NewCluster(
-    backend *storage.Backend,
+    store *storage.Store,
     addr string,
     auth string,
     domain string,
@@ -500,7 +500,7 @@ func NewCluster(
     c.auth = auth
     c.Nodes = core.NewNodes(addr, ids, domain)
     c.Access = core.NewAccess(auth)
-    c.Data = core.NewData(backend)
+    c.Data = core.NewData(store)
     c.ring = NewRing(2*c.N+1, c.Nodes)
     c.clients = make(map[string]*client.HiberaAPI)
 

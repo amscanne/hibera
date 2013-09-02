@@ -14,6 +14,7 @@ import (
     "runtime"
     "runtime/pprof"
     "strings"
+    "path"
 )
 
 var auth = flag.String("root", utils.DefaultBind, "The root authorization token.")
@@ -91,7 +92,7 @@ func cli_run() error {
     }
 
     // Initialize our storage.
-    backend, err := storage.NewBackend(*logPath, *dataPath)
+    backend, err := storage.NewStore(*logPath, *dataPath)
     if err != nil {
         return err
     }
@@ -99,7 +100,7 @@ func cli_run() error {
 
     // Create our cluster.
     // We load our keys from the persistent storage.
-    ids, err := backend.LoadIds(*keys)
+    ids, err := utils.LoadIds(path.Join(*dataPath, "ids"), *keys)
     if err != nil {
         return err
     }

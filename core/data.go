@@ -144,7 +144,7 @@ type Data struct {
 
     // Our backend.
     // This is used to store data keys.
-    store *storage.Backend
+    store *storage.Store
 }
 
 func (d *Data) lock(key Key) *Lock {
@@ -534,7 +534,7 @@ func (d *Data) Purge(id EphemId) {
     }
 }
 
-func NewData(store *storage.Backend) *Data {
+func NewData(store *storage.Store) *Data {
     d := new(Data)
     d.Cond = sync.NewCond(new(sync.Mutex))
     d.store = store
