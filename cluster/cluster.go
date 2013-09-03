@@ -145,12 +145,17 @@ func (c *Cluster) Active() bool {
     return !c.rev.IsZero()
 }
 
-func (c *Cluster) lockedActivate(N uint) error {
+func (c *Cluster) doActivate(N uint) (core.Revision, error) {
+    c.Mutex.Lock()
+    defer c.Mutex.Unlock()
+
+    // Always take this as the new replication factor.
+    c.new_N = N
+
     // If we're already activated, we simply
     // take on the latest replication factor.
     if c.Active() {
-        c.new_N = N
-        return nil
+        return c.rev, nil
     }
 
     // Activate our node.
@@ -160,13 +165,28 @@ func (c *Cluster) lockedActivate(N uint) error {
     c.Nodes.Reset()
     err := c.Nodes.Activate(c.Nodes.Self().Id(), rev_one)
     if err != nil {
-        utils.Print("CLUSTER", "ACTIVATE-ERROR")
-        return err
+        utils.Print("CLUSTER", "NODE-ACTIVATE-ERROR %s", err.Error())
+        return c.rev, err
+    }
+
+    // Do an encoding of this cluster.
+    data, err := c.lockedEncode(false)
+    if err != nil {
+        c.Nodes.Reset()
+        utils.Print("CLUSTER", "ENCODE-ACTIVATE-ERROR %s", err.Error())
+        return c.rev, err
+    }
+
+    // Write out the new data.
+    rev, err := c.Data.DataSet(RootNamespace, RootKey, rev_one, data)
+    if err != nil {
+        c.Nodes.Reset()
+        utils.Print("CLUSTER", "DATA-SET-ERROR %s", err.Error())
+        return rev, err
     }
 
     // Change our revision (manually).
-    c.N = N
-    return c.lockedChangeRevision(rev_one, true)
+    return c.lockedChangeRevision(rev_one, false)
 }
 
 func (c *Cluster) lockedDeactivate() error {
@@ -227,7 +247,7 @@ func (c *Cluster) doSync(addr *net.UDPAddr) error {
     }
 
     // Update our revision.
-    err = c.lockedChangeRevision(core.Revision(rev), force)
+    _, err = c.lockedChangeRevision(rev, force)
     c.Mutex.Unlock()
     c.doneSync()
     return err
@@ -283,14 +303,14 @@ func (c *Cluster) purgeData(namespace core.Namespace, key core.Key, notify chan 
     notify <- true
 }
 
-func (c *Cluster) lockedChangeRevision(rev core.Revision, force bool) error {
+func (c *Cluster) lockedChangeRevision(rev core.Revision, force bool) (core.Revision, error) {
     // We only update revisions unless force is set.
     // Force will be set when we are joining some other
     // cluster (with a potentially conflicting history)
     // so we may end up with a lower revision.
     if c.rev.GreaterThan(rev) && !force {
         utils.Print("CLUSTER", "Cowarding refusing to downgrade revision.")
-        return nil
+        return c.rev, nil
     }
 
     utils.Print("CLUSTER", "Revision %s has %d active nodes.",
@@ -314,7 +334,7 @@ func (c *Cluster) lockedChangeRevision(rev core.Revision, force bool) error {
     namespaces, err := c.Data.DataNamespaces()
     if err != nil {
         utils.Print("CLUSTER", "NAMESPACE-ERROR rev=%s", rev.String())
-        return err
+        return c.rev, err
     }
 
     done := 0
@@ -402,7 +422,7 @@ func (c *Cluster) lockedChangeRevision(rev core.Revision, force bool) error {
     c.rev = rev.Copy()
     c.Nodes.Heartbeat(c.Nodes.Self().Id(), c.rev)
 
-    return nil
+    return c.rev, nil
 }
 
 func (c *Cluster) healthcheck() {
@@ -535,10 +555,12 @@ func NewCluster(
         force, err := c.lockedDecode(data)
         if err == nil {
             c.Mutex.Lock()
-            err = c.lockedChangeRevision(rev, force)
+            rev, err = c.lockedChangeRevision(rev, force)
             c.Mutex.Unlock()
             if err != nil {
-                utils.Print("CLUSTER", "START-ERROR ", err.Error())
+                utils.Print("CLUSTER", "START-ERROR %s", err.Error())
+            } else {
+                utils.Print("CLUSTER", "START-OKAY rev=%s", rev.String())
             }
         } else {
             c.Data.DataRemove(RootNamespace, RootKey, core.NoRevision)

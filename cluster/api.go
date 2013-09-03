@@ -120,9 +120,7 @@ func (c *Cluster) Activate(req Request, N uint) (core.Revision, error) {
         }
     }
 
-    c.Mutex.Lock()
-    defer c.Mutex.Unlock()
-    return c.rev, c.lockedActivate(N)
+    return c.doActivate(N)
 }
 
 func (c *Cluster) Deactivate(req Request) (core.Revision, error) {
