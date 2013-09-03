@@ -346,11 +346,23 @@ func (l *logManager) writeEntry(ent *entry, logfile *logFile) error {
     if err != nil {
         return err
     }
-    orig_rec, ok := l.records[ent.key]
-    if ok {
+    orig_rec, has_orig_rec := l.records[ent.key]
+
+    // Was this a delete? If so, forget our delete
+    // record and just store nothing. Otherwise, store
+    // the latest record.
+    if ent.value.data == nil && ent.value.metadata == nil {
+        delete(l.records, ent.key)
+        record.Discard()
+    } else {
+        l.records[ent.key] = record
+    }
+
+    // Discard the original reference.
+    if has_orig_rec {
         orig_rec.Discard()
     }
-    l.records[ent.key] = record
+
     return nil
 }
 
