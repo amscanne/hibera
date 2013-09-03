@@ -52,7 +52,7 @@ type Request interface {
 func (c *Cluster) doRedirect(req Request, key core.Key) (bool, error) {
     // Check that the cluster is activated.
     if !c.Active() {
-        return false, &PermissionError{key}
+        return false, &NotActivatedError{}
     }
 
     // Check for other servers.
@@ -64,14 +64,8 @@ func (c *Cluster) doRedirect(req Request, key core.Key) (bool, error) {
     // Redirect to the master.
     master := c.ring.MasterFor(key)
     if master == nil || master == c.Nodes.Self() {
-        // Check that the cluster is activated.
-        if !c.Active() {
-            utils.Print("CLUSTER", "REDIRECT NOT-ACTIVATED key=%s", key)
-            return false, &NotActivatedError{}
-        } else {
-            utils.Print("CLUSTER", "REDIRECT IS-MASTER key=%s", key)
-            return false, nil
-        }
+        utils.Print("CLUSTER", "REDIRECT IS-MASTER key=%s", key)
+        return false, nil
     }
 
     utils.Print("CLUSTER", "REDIRECT OKAY key=%s", key)

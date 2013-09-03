@@ -23,18 +23,18 @@ type logFile struct {
     start   int64
     refs    int32
     number  uint64
-    entries int64
 }
 
 type logRecord struct {
-    log    *logFile
+    log *logFile
+    sync.Mutex
+
     offset uint64
 }
 
 func OpenLog(path string, number uint64, create bool) (*logFile, error) {
     l := new(logFile)
     l.number = number
-    l.entries = int64(0)
     var logfile *os.File
     var offset int64
     var err error
@@ -69,19 +69,14 @@ func ReadLog(path string, number uint64) (*logFile, error) {
     return OpenLog(path, number, false)
 }
 
-func (l *logFile) Size() (uint64, error) {
-    // Get the filesize.
-    fi, err := os.Stat(l.file.Name())
-    if err != nil {
-        return uint64(0), err
-    }
-    return uint64(fi.Size()), err
-}
-
 func (l *logFile) NewRecord(offset uint64) *logRecord {
     // Add a reference and return a record.
     atomic.AddInt32(&l.refs, 1)
-    return &logRecord{l, offset}
+
+    var lr logRecord
+    lr.log = l
+    lr.offset = offset
+    return &lr
 }
 
 func (l *logFile) Sync() {
@@ -142,7 +137,6 @@ func (l *logFile) Write(ent *entry) (*logRecord, error) {
     if err != nil {
         return nil, err
     }
-    atomic.AddInt64(&l.entries, 1)
 
     // Mark any remaining space as still free,
     // and add the chunk to our list of chunks.
@@ -164,7 +158,8 @@ func (l *logFile) Open() {
     atomic.AddInt32(&l.refs, 1)
 }
 
-func (l *logRecord) Read(ent *entry) (uint64, error) {
+func (l *logRecord) ReadUnsafe(ent *entry) (uint64, error) {
+    // Lock the file to guard for the seek().
     l.log.Mutex.Lock()
     defer l.log.Mutex.Unlock()
 
@@ -179,19 +174,27 @@ func (l *logRecord) Read(ent *entry) (uint64, error) {
     return free_space, err
 }
 
+func (l *logRecord) Read(ent *entry) (uint64, error) {
+    l.Mutex.Lock()
+    defer l.Mutex.Unlock()
+    return l.ReadUnsafe(ent)
+}
+
 func (l *logRecord) Delete() error {
+    l.Mutex.Lock()
+    defer l.Mutex.Unlock()
 
     // Read the original record.
     var ent entry
-    free_space, err := l.Read(&ent)
+    free_space, err := l.ReadUnsafe(&ent)
     if err != nil || free_space > 0 {
         return err
     }
 
+    // Protect access to the file via seek().
+    // (and the scanning of the available chunks).
     l.log.Mutex.Lock()
     defer l.log.Mutex.Unlock()
-
-    atomic.AddInt64(&l.log.entries, -1)
 
     // Merge it with any existing chunks by
     // popping them out of the list and keep going.
@@ -253,9 +256,12 @@ func (l *logRecord) Delete() error {
 }
 
 func (l *logRecord) Copy(output *logFile) (*entry, error) {
+    l.Mutex.Lock()
+    defer l.Mutex.Unlock()
+
     // Read the current record.
     var ent entry
-    free_space, err := l.Read(&ent)
+    free_space, err := l.ReadUnsafe(&ent)
     if free_space != 0 || err != nil {
         return nil, err
     }
@@ -266,15 +272,12 @@ func (l *logRecord) Copy(output *logFile) (*entry, error) {
         return &ent, err
     }
 
-    l.log.Mutex.Lock()
-    out_rec.log.Mutex.Lock()
-    defer l.log.Mutex.Unlock()
-    defer out_rec.log.Mutex.Unlock()
-
     // Swap the bits.
     orig_log := l.log
     l.log = out_rec.log
     l.offset = out_rec.offset
+
+    // Discard the original log reference.
     orig_log.Close()
 
     return &ent, nil
@@ -295,7 +298,6 @@ func (l *logFile) Load() ([]*logRecord, error) {
     defer l.Mutex.Unlock()
 
     // Entries to return.
-    l.entries = int64(0)
     records := make([]*logRecord, 0)
 
     // Reset the pointer.
@@ -333,7 +335,6 @@ func (l *logFile) Load() ([]*logRecord, error) {
         }
 
         // Return the read entry.
-        atomic.AddInt64(&l.entries, 1)
         records = append(records, l.NewRecord(uint64(offset)))
         utils.Print("STORAGE", "Record @ %d (length: %d)", offset, record_size)
     }

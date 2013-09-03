@@ -205,28 +205,32 @@ func (c *Cluster) doSync(addr *net.UDPAddr) error {
     if !c.startSync() {
         return nil
     }
-    defer c.doneSync()
 
     // Pull the remote info from the node.
     cl := c.getClient(utils.AsURL(addr))
     data, rev, err := cl.Info()
     if err != nil {
+        c.doneSync()
         utils.Print("CLUSTER", "SYNC-CLIENT-ERROR %s", err.Error())
         return err
     }
 
     c.Mutex.Lock()
-    defer c.Mutex.Unlock()
 
     // Update our nodemap.
     force, err := c.lockedDecode(data)
     if err != nil {
         utils.Print("CLUSTER", "SYNC-DATA-ERROR %s", err.Error())
+        c.Mutex.Unlock()
+        c.doneSync()
         return err
     }
 
     // Update our revision.
-    return c.lockedChangeRevision(core.Revision(rev), force)
+    err = c.lockedChangeRevision(core.Revision(rev), force)
+    c.Mutex.Unlock()
+    c.doneSync()
+    return err
 }
 
 func (c *Cluster) GossipUpdate(addr *net.UDPAddr, id string, rev core.Revision, dead []string) {

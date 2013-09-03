@@ -2,6 +2,7 @@ package storage
 
 import (
     "log"
+    "time"
     "sync/atomic"
 )
 
@@ -13,6 +14,12 @@ import (
 // if the flusher thread can process as many outstanding
 // requests in a single CPU burst.
 var LogBuffer = 1024
+
+// The timeout deadline.
+// We aggressively batch updates. We don't flush the
+// log until one of two things happens: no updates come
+// are queued, the timeout deadline is hit.
+var Deadline = 50 * time.Millisecond
 
 // An update to the database.
 type update struct {
@@ -53,6 +60,7 @@ func (s *Store) flusher() error {
 
     var finished []*update
     var logfile *logFile
+    var timeout <-chan time.Time
 
     // Allow a single flush at any given moment.
     flush_chan := make(chan bool, 1)
@@ -61,6 +69,9 @@ func (s *Store) flusher() error {
     // Allow a single squash at any given moment.
     squash_chan := make(chan error, 1)
     squash_chan <- nil
+
+    // See NOTE about the Deadline at the top.
+    ready_to_flush := false
 
     process := func(upd *update) {
         // Track stats.
@@ -91,9 +102,14 @@ func (s *Store) flusher() error {
         }
 
         // Squash the log.
+        // NOTE: Just like the flushers above, we only allow
+        // a single squash to proceed at any time. This basically
+        // means that the two operations won't trample on each other's
+        // feet -- but it's quite possible one squash will be covered
+        // in the other one.
         last_squash := <-squash_chan
         if last_squash == nil {
-            last_squash = s.logs.checkSquash(logfile)
+            last_squash = s.logs.squashLogsUntil(logfile.number)
         }
         squash_chan <- last_squash
     }
@@ -122,7 +138,6 @@ func (s *Store) flusher() error {
 
                 // Initialize the log.
                 var err error
-                finished = make([]*update, 0, 0)
                 logfile, err = s.logs.NewLog()
                 if err != nil {
                     log.Print("Error opening log: ", err)
@@ -130,22 +145,58 @@ func (s *Store) flusher() error {
                     continue
                 }
 
+                // Create our queue.
+                finished = make([]*update, 0, 0)
+
+                // This is the first request, create our deadline.
+                ready_to_flush = false
+                timeout = time.After(Deadline)
+
                 // Process normally.
                 process(upd)
                 break
             }
 
-        } else {
+        } else if !ready_to_flush {
 
             // Something in the queue?
             // Do a non-blocking call. If we don't
             // find anything right now, then we do
             // a flush log to complete this batch.
             select {
+            case <-timeout:
+                // We've past our deadline.
+                ready_to_flush = true
+                break
+            case upd := <-s.pending:
+                // Check for terminal.
+                if upd == nil {
+                    <-flush_chan
+                    complete()
+                    return <-squash_chan
+                }
+
+                // Process normally.
+                process(upd)
+                break
+            default:
+                // Nothing in the queue.
+                // Even though we haven't timed out,
+                // we schedule a flush for this.
+                ready_to_flush = true
+                break
+            }
+        } else {
+
+            // Do a full-blocking call.
+            // Very shortly after we've able to flush
+            // (given that the selection is pseudo-random)
+            // we will execute the flush call.
+
+            select {
             case <-flush_chan:
                 complete()
                 break
-
             case upd := <-s.pending:
                 // Check for terminal.
                 if upd == nil {
@@ -160,4 +211,6 @@ func (s *Store) flusher() error {
             }
         }
     }
+
+    return nil
 }

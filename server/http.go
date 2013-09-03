@@ -449,7 +449,7 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
         // so this is important information and can't just
         // be ignored by the client.
         w.Header().Set("X-Revision", rev.String())
-        utils.Print("HTTP", "501")
+        utils.Print("HTTP", "500")
         http.Error(w, err.Error(), http.StatusInternalServerError)
         break
     }

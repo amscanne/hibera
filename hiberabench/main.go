@@ -2,11 +2,12 @@ package main
 
 import (
     "fmt"
-    "time"
-    "math/rand"
-    "hibera/client"
     "hibera/cli"
+    "hibera/client"
     "hibera/core"
+    "math/rand"
+    "sync/atomic"
+    "time"
 )
 
 var size = cli.Flags.Uint("size", 1024, "Data size.")
@@ -17,21 +18,21 @@ var duration = cli.Flags.Float64("duration", 10.0, "Duration of test (in seconds
 var cliInfo = cli.Cli{
     "Hibera cluster benchmarking tool.",
     map[string]cli.Command{
-        "read" : cli.Command{
+        "read": cli.Command{
             "Run a read benchmark (requires write benchmark).",
             "",
             []string{"key"},
             []string{"workers", "duration"},
             true,
         },
-        "write" : cli.Command{
+        "write": cli.Command{
             "Run a write benchmark.",
             "",
             []string{"key"},
             []string{"size", "workers", "duration"},
             true,
         },
-        "mixed" : cli.Command{
+        "mixed": cli.Command{
             "Run a mixed benchmark.",
             "",
             []string{"key"},
@@ -42,56 +43,28 @@ var cliInfo = cli.Cli{
     cli.Options,
 }
 
-type workResult struct {
-    err error
-    ops uint64
-    data uint64
-    waited time.Duration
-}
-
 func do_worker(
     c *client.HiberaAPI,
-    end_time time.Time,
-    keys_chan chan string,
-    result_chan chan *workResult,
+    keys []string,
+    error_chan chan error,
+    ops *uint64,
+    data *uint64,
     work func(key string) (uint64, error)) {
 
-    ops := uint64(0)
-    data := uint64(0)
-    waited := time.Duration(0)
-
     for {
-        // Grab a key.
-        key := <-keys_chan
-
-        // Check our time.
-        start := time.Now()
-        if start.After(end_time) {
-            // This operation does *not* have it's
-            // information tracked (wait time, data, etc.).
-            // It finished after the deadline, so in fairness
-            // it doesn't count either way (good or bad).
-            break
-        }
+        // Select a random key.
+        key := keys[rand.Int()%len(keys)]
 
         // Do the work.
         n, err := work(key)
         if err != nil {
-            result_chan <- &workResult{err, ops, data, waited}
+            error_chan <- err
         }
 
-        // Add our stats.
-        end := time.Now()
-        ops += 1
-        data += n
-        waited += end.Sub(start)
-
-        // Put the key back.
-        keys_chan <- key
+        // Update the stats.
+        atomic.AddUint64(ops, 1)
+        atomic.AddUint64(data, n)
     }
-
-    // Send the final results.
-    result_chan <- &workResult{nil, ops, data, waited}
 }
 
 func do_bench(
@@ -101,39 +74,34 @@ func do_bench(
     keys []string,
     work func(key string) (uint64, error)) (float64, float64, error) {
 
-    result_chan := make(chan *workResult, workers)
-    key_chan := make(chan string, len(keys) * int(workers))
+    // Create an error channel.
+    error_chan := make(chan error)
+
+    // Our stats.
+    // These are atomically updated by the workers.
     ops := uint64(0)
     data := uint64(0)
-    waited := time.Duration(0)
-    end_time := time.Now().Add(time.Duration(uint64(duration * float64(time.Second))))
 
-    // Fill the key channel.
-    for i := 0; i < int(workers); i += 1 {
-        for j := 0; j < len(keys); j += 1 {
-            key_chan <- keys[j]
-        }
-    }
+    // Start our clock.
+    duration_ns := time.Duration(uint64(duration * float64(time.Second)))
 
     // Start all the workers.
     for i := 0; i < int(workers); i += 1 {
-        go do_worker(c, end_time, key_chan, result_chan, work)
+        go do_worker(c, keys, error_chan, &ops, &data, work)
     }
 
-    // Wait for all workers to finish.
-    for i := 0; i < int(workers); i += 1 {
-        result := <-result_chan
-        if result.err != nil {
-            return float64(0), float64(0), result.err
-        }
-        ops += result.ops
-        data += result.data
-        waited += result.waited
+    // Run the test.
+    select {
+    case <-time.After(duration_ns):
+        break
+    case err := <-error_chan:
+        // Error during the test, return.
+        return float64(0), float64(0), err
     }
 
     // Give an estimate of the throughput and latency.
-    ops_per_second := float64(ops) / duration
-    throughput_mb := float64(data) / duration / float64(1024*1024)
+    ops_per_second := float64(atomic.LoadUint64(&ops)) / duration
+    throughput_mb := float64(atomic.LoadUint64(&data)) / duration / float64(1024*1024)
 
     return ops_per_second, throughput_mb, nil
 }
@@ -173,7 +141,7 @@ func cli_read(c *client.HiberaAPI, duration float64, workers uint, keys []string
         return err
     }
     fmt.Printf(
-        "write:  duration=%.2fs, workers=%d, ops=%.2f/s, rate=%.2fMb/s\n",
+        "read:  duration=%.2fs, workers=%d, ops=%.2f/s, rate=%.2fMb/s\n",
         duration,
         workers,
         ops_per_second,
@@ -201,7 +169,7 @@ func cli_mixed(c *client.HiberaAPI, duration float64, size uint, workers uint, r
         return err
     }
     fmt.Printf(
-        "write:  duration=%.2fs, size=%d, workers=%d, ratio=%f ops=%.2f/s, rate=%.2fMb/s\n",
+        "mixed:  duration=%.2fs, size=%d, workers=%d, ratio=%f ops=%.2f/s, rate=%.2fMb/s\n",
         duration,
         size,
         workers,

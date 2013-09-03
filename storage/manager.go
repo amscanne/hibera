@@ -47,7 +47,7 @@ func (l *logManager) loadData() error {
     // Set just the data record.
     for _, record := range records {
         var ent entry
-        _, err = record.Read(&ent)
+        _, err = record.ReadUnsafe(&ent)
         if err != nil {
             utils.Print("STORAGE", "Skipping record: %s", err)
             continue
@@ -86,7 +86,7 @@ func (l *logManager) loadData() error {
     // Setup the records.
     for key, record := range l.data_records {
 
-        orig_ref, has_orig_ref := l.records[key]
+        orig_rec, has_orig_rec := l.records[key]
 
         // Grab an additional reference to the data record,
         // since when we drop this it will be discarded.
@@ -94,8 +94,8 @@ func (l *logManager) loadData() error {
         l.records[key] = record
 
         // Drop a reference to the original record.
-        if has_orig_ref {
-            orig_ref.Discard()
+        if has_orig_rec {
+            orig_rec.Discard()
         }
     }
 
@@ -153,13 +153,6 @@ func (l *logManager) loadLogs() error {
             return err
         }
 
-        // Get the filesize.
-        size, err := file.Size()
-        if err != nil {
-            file.Close()
-            return err
-        }
-
         // Read all the entries.
         records, err := file.Load()
         if err != nil {
@@ -170,7 +163,7 @@ func (l *logManager) loadLogs() error {
         // Set the current record.
         for _, record := range records {
             var ent entry
-            _, err = record.Read(&ent)
+            _, err = record.ReadUnsafe(&ent)
 
             // The end of the file may have
             // been corrupted, so we let invalid
@@ -200,7 +193,6 @@ func (l *logManager) loadLogs() error {
         }
 
         // Keep going.
-        l.log_size += int64(size)
         file.Close()
     }
 
@@ -218,12 +210,6 @@ func (l *logManager) closeLog(logfile *logFile) {
     // Ensure we're synced.
     logfile.Sync()
     logfile.Close()
-
-    // Add the final size to the tally.
-    size, err := logfile.Size()
-    if err == nil {
-        atomic.AddInt64(&l.log_size, int64(size))
-    }
 }
 
 func (l *logManager) removeLogs(limit uint64) error {
@@ -256,12 +242,6 @@ func (l *logManager) removeLogs(limit uint64) error {
             continue
         }
 
-        // Get the filesize.
-        fi, err := os.Stat(logfile)
-        if err != nil {
-            continue
-        }
-
         // Try the actual remove.
         err = os.Remove(logfile)
         if err != nil {
@@ -271,7 +251,6 @@ func (l *logManager) removeLogs(limit uint64) error {
 
         // Take off the entries.
         utils.Print("STORAGE", "Removed log file '%s'.", logfile)
-        atomic.AddInt64(&l.log_size, -fi.Size())
     }
 
     // Reset the log number if it's still limit.
@@ -280,20 +259,14 @@ func (l *logManager) removeLogs(limit uint64) error {
     return nil
 }
 
-func (l *logManager) checkSquash(logfile *logFile) error {
-
-    // Check if we should squash the logs.
-    if atomic.LoadInt64(&l.log_size) > MaximumLogSize {
-        limit := logfile.number
-        return l.squashLogsUntil(limit)
-    }
-
-    return nil
-}
-
 func (l *logManager) squashLogsUntil(limit uint64) error {
 
     // Update all current records.
+    // NOTE: This routine does not need to take any locks
+    // or handle concurrency. This is provided by the Copy()
+    // method in the underlying logRecord. This ensures that
+    // the write operation is atomic.
+
     for key, record := range l.records {
 
         // Ignore this record if it's the data record.
@@ -324,6 +297,7 @@ func (l *logManager) squashLogsUntil(limit uint64) error {
         } else {
             // The record now points to data.
             utils.Print("STORAGE", "Leaving new record '%s'...", ent.key)
+            record.Grab()
             l.data_records[key] = record
         }
     }

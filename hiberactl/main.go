@@ -2,10 +2,10 @@ package main
 
 import (
     "fmt"
-    "strings"
     "hibera/cli"
     "hibera/client"
     "hibera/utils"
+    "strings"
 )
 
 var replication = cli.Flags.Uint("replication", utils.DefaultN, "The replication factor.")
@@ -47,7 +47,7 @@ var cliInfo = cli.Cli{
             "Deactivate the API target.",
             "",
             []string{},
-            []string{"N"},
+            []string{},
             false,
         },
         "list-tokens": cli.Command{

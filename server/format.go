@@ -10,8 +10,8 @@ var pingMessage = messageType(0)
 var pongMessage = messageType(1)
 
 type message struct {
-    Type messageType `json:"type"`
+    Type     messageType   `json:"type"`
     Revision core.Revision `json:"revision"`
-    Id string `json:"id"`
-    Dead []string `json:"dead"`
+    Id       string        `json:"id"`
+    Dead     []string      `json:"dead"`
 }

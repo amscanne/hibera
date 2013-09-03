@@ -386,6 +386,8 @@ func cli_push(c *client.HiberaAPI, key string) error {
             return err
         }
     }
+
+    return nil
 }
 
 func cli_pull(c *client.HiberaAPI, key string) error {
@@ -408,6 +410,8 @@ func cli_pull(c *client.HiberaAPI, key string) error {
             return err
         }
     }
+
+    return nil
 }
 
 func cli_set(c *client.HiberaAPI, key string, value *string) error {

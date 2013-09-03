@@ -108,8 +108,11 @@ func Main(cli Cli, run func(command string, args []string) error) {
     }
 
     // Pull out the command.
+    // (and reparse, we support options before and after).
     command := args[0]
     args = args[1:]
+    Flags.Parse(args)
+    args = Flags.Args()
 
     // Grab the spec.
     spec, ok := cli.Commands[command]
