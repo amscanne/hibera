@@ -132,27 +132,27 @@ func (d *Data) lock(ns Namespace, key Key) *Lock {
     return lock
 }
 
-func (d *Data) getRev(ns Namespace, key Key) Revision {
+func (d *Data) getSyncRev(ns Namespace, key Key) Revision {
     return d.revs[ns][key]
 }
 
-func (d *Data) setRev(ns Namespace, key Key, rev Revision) {
+func (d *Data) setSyncRev(ns Namespace, key Key, rev Revision) {
     d.revs[ns][key] = rev.Copy()
 }
 
-func (d *Data) delRev(ns Namespace, key Key) {
+func (d *Data) delSyncRev(ns Namespace, key Key) {
     delete(d.revs[ns], key)
 }
 
-func (d *Data) getRevMap(ns Namespace, key Key) *EphemeralSet {
+func (d *Data) getSyncMap(ns Namespace, key Key) *EphemeralSet {
     return d.sync[ns][key]
 }
 
-func (d *Data) setRevMap(ns Namespace, key Key, revmap *EphemeralSet) {
+func (d *Data) setSyncMap(ns Namespace, key Key, revmap *EphemeralSet) {
     d.sync[ns][key] = revmap
 }
 
-func (d *Data) delRevMap(ns Namespace, key Key) {
+func (d *Data) delSyncMap(ns Namespace, key Key) {
     delete(d.sync[ns], key)
 }
 
@@ -209,14 +209,14 @@ func (d *Data) SyncMembers(ns Namespace, key Key, name string, limit uint) (Sync
     defer lock.unlock()
 
     // Lookup the key.
-    revmap := d.getRevMap(ns, key)
+    revmap := d.getSyncMap(ns, key)
     if revmap == nil {
         // This is valid, it's an empty key.
-        return NoSyncInfo, d.getRev(ns, key), nil
+        return NoSyncInfo, d.getSyncRev(ns, key), nil
     }
 
     // Return the members and rev.
-    return d.computeIndex(revmap, name, limit), d.getRev(ns, key), nil
+    return d.computeIndex(revmap, name, limit), d.getSyncRev(ns, key), nil
 }
 
 func (d *Data) computeIndex(revmap *EphemeralSet, name string, limit uint) SyncInfo {
@@ -291,11 +291,11 @@ func (d *Data) SyncJoin(
     var revmap *EphemeralSet
     for {
         // Lookup the key.
-        revmap = d.getRevMap(ns, key)
+        revmap = d.getSyncMap(ns, key)
         if revmap == nil {
             newmap := make(EphemeralSet)
             revmap = &newmap
-            d.setRevMap(ns, key, revmap)
+            d.setSyncMap(ns, key, revmap)
         }
 
         // Lookup the key and see if we're a member.
@@ -307,7 +307,7 @@ func (d *Data) SyncJoin(
         // Check that we're still not there already.
         if !(*revmap)[id][name].IsZero() {
             info := d.computeIndex(revmap, name, limit)
-            return info.Index, d.getRev(ns, key), nil
+            return info.Index, d.getSyncRev(ns, key), nil
         }
 
         // Count the number of holders.
@@ -324,11 +324,11 @@ func (d *Data) SyncJoin(
         now := time.Now()
         if timeout > 0 && now.After(end) {
             info := d.computeIndex(revmap, name, limit)
-            return info.Index, d.getRev(ns, key), nil
+            return info.Index, d.getSyncRev(ns, key), nil
         }
         if !lock.wait(timeout > 0, end.Sub(now), notifier) || !valid() {
             info := d.computeIndex(revmap, name, limit)
-            return info.Index, d.getRev(ns, key), nil
+            return info.Index, d.getSyncRev(ns, key), nil
         }
     }
 
@@ -345,7 +345,7 @@ func (d *Data) SyncLeave(id EphemId, ns Namespace, key Key, name string) (Revisi
     defer lock.unlock()
 
     // Lookup the key and see if we're a member.
-    revmap := d.getRevMap(ns, key)
+    revmap := d.getSyncMap(ns, key)
     if revmap == nil {
         return NoRevision, NotFound
     }
@@ -359,7 +359,7 @@ func (d *Data) SyncLeave(id EphemId, ns Namespace, key Key, name string) (Revisi
         }
     }
     if len(*revmap) == 0 {
-        d.delRevMap(ns, key)
+        d.delSyncMap(ns, key)
     }
 
     utils.Print("DATA", "LEAVE key=%s id=%d",
@@ -426,6 +426,10 @@ func (d *Data) DataModify(
     }
 
     // Do the operation.
+    // NOTE: When we leave this function,
+    // we always fire a notification event
+    // on the lock for this key. That will
+    // wake any data watchers.
     return rev, mod(rev)
 }
 
@@ -439,11 +443,7 @@ func (d *Data) DataSet(ns Namespace, key Key, rev Revision, value []byte) (Revis
 func (d *Data) DataRemove(ns Namespace, key Key, rev Revision) (Revision, error) {
 
     return d.DataModify(ns, key, rev, func(rev Revision) error {
-        err := d.store.Delete(toStoreKey(ns, key))
-        if err == nil {
-            d.delRev(ns, key)
-        }
-        return err
+        return d.store.Delete(toStoreKey(ns, key))
     })
 }
 
@@ -499,7 +499,7 @@ func (d *Data) EventWait(
     defer lock.unlock()
 
     getrev := func() (Revision, error) {
-        return d.getRev(ns, key), nil
+        return d.getSyncRev(ns, key), nil
     }
     // If the rev is 0, then we start waiting on the current rev.
     if rev.IsZero() {
@@ -511,15 +511,15 @@ func (d *Data) EventWait(
 func (d *Data) doFire(ns Namespace, key Key, rev Revision, lock *Lock) (Revision, error) {
 
     // Check our condition.
-    if !rev.IsZero() && !rev.GreaterThan(d.getRev(ns, key)) {
-        return d.getRev(ns, key), NotFound
+    if !rev.IsZero() && !rev.GreaterThan(d.getSyncRev(ns, key)) {
+        return d.getSyncRev(ns, key), NotFound
     }
 
     // Update our rev.
     if rev.IsZero() {
-        rev = d.getRev(ns, key).Next()
+        rev = d.getSyncRev(ns, key).Next()
     }
-    d.setRev(ns, key, rev)
+    d.setSyncRev(ns, key, rev)
 
     // Broadcast.
     lock.notify()
