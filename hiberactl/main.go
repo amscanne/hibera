@@ -2,31 +2,34 @@ package main
 
 import (
     "fmt"
+    "strings"
     "hibera/cli"
     "hibera/client"
     "hibera/utils"
 )
 
 var replication = cli.Flags.Uint("replication", utils.DefaultN, "The replication factor.")
+var path = cli.Flags.String("path", ".*", "The path for a given token (regular expression).")
+var perms = cli.Flags.String("perms", "rwx", "Permissions (combination of r,w,x).")
 
 var cliInfo = cli.Cli{
     "Hibera cluster control tool.",
     map[string]cli.Command{
-        "nodes": cli.Command{
+        "list-nodes": cli.Command{
             "List all nodes.",
             "",
             []string{},
             []string{},
             false,
         },
-        "active": cli.Command{
+        "list-active": cli.Command{
             "List all active nodes.",
             "",
             []string{},
             []string{},
             false,
         },
-        "info": cli.Command{
+        "node-info": cli.Command{
             "Show node info.",
             "",
             []string{"id"},
@@ -47,8 +50,29 @@ var cliInfo = cli.Cli{
             []string{"N"},
             false,
         },
+        "list-tokens": cli.Command{
+            "List access tokens.",
+            "",
+            []string{},
+            []string{},
+            false,
+        },
+        "show-token": cli.Command{
+            "Show the given access token.",
+            "",
+            []string{"token"},
+            []string{},
+            false,
+        },
+        "set-token": cli.Command{
+            "Set given permissions.",
+            "",
+            []string{"token"},
+            []string{"path", "perms"},
+            false,
+        },
     },
-    []string{"api", "auth", "delay"},
+    cli.Options,
 }
 
 func cli_activate(c *client.HiberaAPI) error {
@@ -59,7 +83,7 @@ func cli_deactivate(c *client.HiberaAPI) error {
     return c.Deactivate()
 }
 
-func cli_nodes(c *client.HiberaAPI) error {
+func cli_list_nodes(c *client.HiberaAPI) error {
     nodes, _, err := c.NodeList(false)
     if err != nil {
         return err
@@ -70,7 +94,7 @@ func cli_nodes(c *client.HiberaAPI) error {
     return nil
 }
 
-func cli_active(c *client.HiberaAPI) error {
+func cli_list_active(c *client.HiberaAPI) error {
     nodes, _, err := c.NodeList(true)
     if err != nil {
         return err
@@ -81,7 +105,7 @@ func cli_active(c *client.HiberaAPI) error {
     return nil
 }
 
-func cli_info(c *client.HiberaAPI, id string) error {
+func cli_node_info(c *client.HiberaAPI, id string) error {
     node, _, err := c.NodeGet(id)
     if err != nil {
         return err
@@ -100,6 +124,46 @@ func cli_info(c *client.HiberaAPI, id string) error {
     return nil
 }
 
+func cli_list_tokens(c *client.HiberaAPI) error {
+    tokens, _, err := c.AccessList()
+    if err != nil {
+        return err
+    }
+    for _, token := range tokens {
+        fmt.Printf("%s\n", token)
+    }
+    return nil
+}
+
+func cli_show_token(c *client.HiberaAPI, auth string) error {
+    val, _, err := c.AccessGet(auth)
+    if err != nil {
+        return err
+    }
+
+    for path, perms := range *val {
+        asstr := func(val bool, t string) string {
+            if val {
+                return t
+            }
+            return "-"
+        }
+        rs := asstr(perms.Read, "r")
+        ws := asstr(perms.Write, "w")
+        xs := asstr(perms.Execute, "x")
+        fmt.Printf("%s%s%s %s\n", rs, ws, xs, path)
+    }
+    return nil
+}
+
+func cli_set_token(c *client.HiberaAPI, auth string, path string, perms string) error {
+    read := strings.Index(perms, "r") >= 0
+    write := strings.Index(perms, "w") >= 0
+    execute := strings.Index(perms, "x") >= 0
+    _, err := c.AccessUpdate(auth, path, read, write, execute)
+    return err
+}
+
 func do_cli(command string, args []string) error {
 
     client := cli.Client()
@@ -109,12 +173,18 @@ func do_cli(command string, args []string) error {
         return cli_activate(client)
     case "deactivate":
         return cli_deactivate(client)
-    case "nodes":
-        return cli_nodes(client)
-    case "active":
-        return cli_active(client)
-    case "info":
-        return cli_info(client, args[0])
+    case "list-nodes":
+        return cli_list_nodes(client)
+    case "list-active":
+        return cli_list_active(client)
+    case "node-info":
+        return cli_node_info(client, args[0])
+    case "list-tokens":
+        return cli_list_tokens(client)
+    case "show-token":
+        return cli_show_token(client, args[0])
+    case "set-token":
+        return cli_set_token(client, args[0], *path, *perms)
     }
 
     return nil

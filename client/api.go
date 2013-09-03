@@ -120,6 +120,12 @@ func NewHiberaClient(addrs string, auth string, delay uint, namespace string) *H
     } else {
         os.Setenv("HIBERA_AUTH", auth)
     }
+    if namespace == "" {
+        // Same for namespace.
+        namespace = os.Getenv("HIBERA_NAMESPACE")
+    } else {
+        os.Setenv("HIBERA_NAMESPACE", namespace)
+    }
     urls := utils.GenerateURLs(addrs, utils.DefaultHost, utils.DefaultPort)
     clientid := generateClientId()
     return NewHiberaAPI(urls, core.Token(auth), clientid, delay, core.Namespace(namespace), true)
