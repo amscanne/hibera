@@ -1,8 +1,8 @@
 package server
 
 import (
-    "code.google.com/p/goprotobuf/proto"
     "fmt"
+    "encoding/json"
     "hibera/cluster"
     "hibera/core"
     "hibera/utils"
@@ -30,8 +30,8 @@ var MaxHeartbeat = 1000
 // The number of dead servers to encode in a heartbeat.
 var DeadServers = 5
 
-func (s *GossipServer) send(addr *net.UDPAddr, m *Message) error {
-    data, err := proto.Marshal(m)
+func (s *GossipServer) send(addr *net.UDPAddr, m *message) error {
+    data, err := json.Marshal(m)
     if err != nil {
         return err
     }
@@ -56,14 +56,14 @@ func (s *GossipServer) sendPingPong(addr *net.UDPAddr, pong bool) {
         gossip[i] = dead[v].Id()
     }
 
-    // Build our ping message.
-    t := uint32(TYPE_PING)
-    version := s.Cluster.Version().String()
-    id := s.Cluster.Nodes.Self().Id()
+    // Build our message.
+    t := pingMessage
     if pong {
-        t = uint32(TYPE_PONG)
+        t = pongMessage
     }
-    m := &Message{&t, &version, &id, gossip, nil}
+    rev := s.Cluster.Version()
+    id := s.Cluster.Nodes.Self().Id()
+    m := &message{t, rev, id, gossip}
     utils.Print("GOSSIP", "SEND addr=%s type=%d", addr, t)
     s.send(addr, m)
 }
@@ -139,24 +139,17 @@ func NewGossipServer(c *cluster.Cluster, addr string, port uint, seeds []string)
     return gs, nil
 }
 
-func (s *GossipServer) process(addr *net.UDPAddr, m *Message) {
+func (s *GossipServer) process(addr *net.UDPAddr, m *message) {
     // Check for our own id (prevents broadcast from looping back).
-    if m.GetId() == s.Cluster.Nodes.Self().Id() {
-        return
-    }
-
-    // Decode the revision.
-    rev, err := core.RevisionFromString(m.GetVersion())
-    if err != nil {
+    if m.Id == s.Cluster.Nodes.Self().Id() {
         return
     }
 
     // Update the cluster status based on gossip.
-    utils.Print("GOSSIP", "RECV addr=%s type=%d", addr, m.GetType())
-    s.Cluster.GossipUpdate(addr, m.GetId(), rev, m.GetDead())
+    utils.Print("GOSSIP", "RECV addr=%s type=%d", addr, m.Type)
+    s.Cluster.GossipUpdate(addr, m.Id, m.Revision, m.Dead)
 
-    if m.GetType() == uint32(TYPE_PING) &&
-        !s.Cluster.Version().IsZero() {
+    if m.Type == pingMessage && s.Cluster.Active() {
         // Respond to the ping.
         go s.sendPingPong(addr, true)
     }
@@ -170,14 +163,14 @@ func (s *GossipServer) Serve() {
         if err != nil {
             continue
         }
-        m := &Message{}
-        err = proto.Unmarshal(packet[0:n], m)
+        var m message
+        err = json.Unmarshal(packet[0:n], &m)
         if err != nil {
             continue
         }
 
         // Process whenever.
-        go s.process(addr, m)
+        go s.process(addr, &m)
     }
 }
 
