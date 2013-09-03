@@ -515,7 +515,7 @@ func do_cli(command string, args []string) error {
 
     switch command {
     case "run":
-        cmd := make_command(args...)
+        cmd := make_command(args[1:]...)
         start_cmd := make_command(*start)
         stop_cmd := make_command(*stop)
         return cli_run(client, args[0], *name, *limit, *timeout, start_cmd, stop_cmd, cmd, *data)
@@ -557,7 +557,7 @@ func do_cli(command string, args []string) error {
     case "list":
         return cli_list(client)
     case "sync":
-        cmd := make_command(cli.Flags.Args()...)
+        cmd := make_command(args[1:]...)
         return cli_sync(client, args[0], *output, cmd, *timeout)
     case "watch":
         return cli_watch(client, args[0], *timeout)
