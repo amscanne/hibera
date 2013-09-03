@@ -4,7 +4,6 @@ import (
     "bufio"
     "bytes"
     "errors"
-    "flag"
     "fmt"
     "hibera/cli"
     "hibera/client"
@@ -18,15 +17,15 @@ import (
     "syscall"
 )
 
-var timeout = flag.Uint("timeout", 0, "Timeout (in ms) for acquiring a lock.")
-var name = flag.String("name", "", "Name to use (other than machine address).")
-var start = flag.String("start", "", "Script to start the given service.")
-var stop = flag.String("stop", "", "Script to stop the given service.")
-var limit = flag.Uint("limit", 0, "Limit for machines to run or simultanous locks.")
-var output = flag.String("output", "", "Output file for sync.")
-var data = flag.Bool("data", false, "Use the synchronization group data mapping.")
-var path = flag.String("path", ".*", "The path for a given token (regular expression).")
-var perms = flag.String("perms", "rwx", "Permissions (combination of r,w,x).")
+var timeout = cli.Flags.Uint("timeout", 0, "Timeout (in ms) for acquiring a lock.")
+var name = cli.Flags.String("name", "", "Name to use (other than machine address).")
+var start = cli.Flags.String("start", "", "Script to start the given service.")
+var stop = cli.Flags.String("stop", "", "Script to stop the given service.")
+var limit = cli.Flags.Uint("limit", 0, "Limit for machines to run or simultanous locks.")
+var output = cli.Flags.String("output", "", "Output file for sync.")
+var data = cli.Flags.Bool("data", false, "Use the synchronization group data mapping.")
+var path = cli.Flags.String("path", ".*", "The path for a given token (regular expression).")
+var perms = cli.Flags.String("perms", "rwx", "Permissions (combination of r,w,x).")
 
 var cliInfo = cli.Cli{
     "Hibera command line client.",
@@ -554,7 +553,7 @@ func do_cli(command string, args []string) error {
     case "list":
         return cli_list(client)
     case "sync":
-        cmd := make_command(flag.Args()...)
+        cmd := make_command(cli.Flags.Args()...)
         return cli_sync(client, args[0], *output, cmd, *timeout)
     case "watch":
         return cli_watch(client, args[0], *timeout)

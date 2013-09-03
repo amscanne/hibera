@@ -2,7 +2,6 @@ package main
 
 import (
     "errors"
-    "flag"
     "fmt"
     "hibera/cli"
     "hibera/cluster"
@@ -18,16 +17,16 @@ import (
     "strings"
 )
 
-var root = flag.String("root", utils.DefaultBind, "The root authorization token.")
-var bind = flag.String("bind", utils.DefaultBind, "Bind address for the server.")
-var port = flag.Uint("port", utils.DefaultPort, "Bind port for the server.")
-var logPath = flag.String("log", utils.DefaultLogPath, "Backing storage log path.")
-var dataPath = flag.String("data", utils.DefaultDataPath, "Backing storage data path.")
-var domain = flag.String("domain", utils.DefaultDomain, "Failure domain for this server.")
-var keys = flag.Uint("keys", utils.DefaultKeys, "The number of keys for this node (weight).")
-var seeds = flag.String("seeds", utils.DefaultSeeds, "Seeds for joining the cluster.")
-var active = flag.Uint("active", utils.DefaultActive, "Maximum active simutaneous clients.")
-var profile = flag.String("profile", "", "Enabling profiling and write to file.")
+var root = cli.Flags.String("root", utils.DefaultBind, "The root authorization token.")
+var bind = cli.Flags.String("bind", utils.DefaultBind, "Bind address for the server.")
+var port = cli.Flags.Uint("port", utils.DefaultPort, "Bind port for the server.")
+var logPath = cli.Flags.String("log", utils.DefaultLogPath, "Backing storage log path.")
+var dataPath = cli.Flags.String("data", utils.DefaultDataPath, "Backing storage data path.")
+var domain = cli.Flags.String("domain", utils.DefaultDomain, "Failure domain for this server.")
+var keys = cli.Flags.Uint("keys", utils.DefaultKeys, "The number of keys for this node (weight).")
+var seeds = cli.Flags.String("seeds", utils.DefaultSeeds, "Seeds for joining the cluster.")
+var active = cli.Flags.Uint("active", utils.DefaultActive, "Maximum active simutaneous clients.")
+var profile = cli.Flags.String("profile", "", "Enabling profiling and write to file.")
 
 func discoverAddress() string {
     addrs, _ := net.InterfaceAddrs()

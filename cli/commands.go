@@ -11,6 +11,8 @@ import (
     "time"
 )
 
+var Flags = flag.NewFlagSet("hibera", flag.ExitOnError)
+
 type Command struct {
     Help     string
     LongHelp string
@@ -27,7 +29,7 @@ type Cli struct {
 
 // Universal debug flag.
 // This is available to all programs.
-var debug = flag.Bool("debug", false, "Enable all debugging.")
+var debug = Flags.Bool("debug", false, "Enable all debugging.")
 
 // Universal help command.
 // This is available to all programs.
@@ -39,7 +41,7 @@ func top_usage(cli Cli, arg0 string) {
     fmt.Printf("    %s\n\n", cli.Help)
 }
 
-func command_list(cli Cli) {
+func command_list(cli Cli, arg0 string) {
     fmt.Printf("available commands:\n\n")
     command_list := make([]string, len(cli.Commands))
     i := 0
@@ -53,10 +55,12 @@ func command_list(cli Cli) {
         fmt.Printf("    %-20s    %s\n", command, spec.Help)
     }
     fmt.Printf("\n")
+    fmt.Printf("   You can use '%s help <command>' for detailed help.\n", arg0)
+    fmt.Printf("\n")
 }
 
-func command_help(cli Cli, command string, spec Command) {
-    fmt.Printf("usage: %s [options...]", command)
+func command_help(cli Cli, arg0 string, command string, spec Command) {
+    fmt.Printf("usage: %s [options...] %s", arg0, command)
     for _, arg := range spec.Args {
         fmt.Printf(" <%s>", arg)
     }
@@ -74,10 +78,10 @@ func command_help(cli Cli, command string, spec Command) {
             flag.Usage)
     }
     for _, option := range cli.Options {
-        print_flag(flag.Lookup(option))
+        print_flag(Flags.Lookup(option))
     }
     for _, option := range spec.Options {
-        print_flag(flag.Lookup(option))
+        print_flag(Flags.Lookup(option))
     }
     fmt.Printf("\n")
 }
@@ -88,13 +92,18 @@ func Main(cli Cli, run func(command string, args []string) error) {
 
     // Parse flags.
     arg0 := os.Args[0]
-    flag.Parse()
-    args := flag.Args()
+    usage := func() {
+        top_usage(cli, arg0)
+        command_list(cli, arg0)
+    }
+    Flags.Usage = usage
+    Flags.Parse(os.Args[1:])
+    args := Flags.Args()
 
     // Pull out our arguments.
     if len(args) == 0 {
         top_usage(cli, arg0)
-        command_list(cli)
+        command_list(cli, arg0)
         os.Exit(1)
     }
 
@@ -109,7 +118,7 @@ func Main(cli Cli, run func(command string, args []string) error) {
             spec = HelpCommand
         } else {
             top_usage(cli, arg0)
-            command_list(cli)
+            command_list(cli, arg0)
             os.Exit(1)
         }
     }
@@ -118,10 +127,10 @@ func Main(cli Cli, run func(command string, args []string) error) {
     if len(args) < len(spec.Args) ||
         (!spec.Extra && len(args) != len(spec.Args)) {
         if command == "help" && len(args) == 0 {
-            command_list(cli)
+            command_list(cli, arg0)
             os.Exit(0)
         } else {
-            command_help(cli, command, spec)
+            command_help(cli, arg0, command, spec)
             os.Exit(1)
         }
     }
@@ -141,10 +150,10 @@ func Main(cli Cli, run func(command string, args []string) error) {
         }
 
         if !ok {
-            command_list(cli)
+            command_list(cli, arg0)
             os.Exit(1)
         } else {
-            command_help(cli, args[0], spec)
+            command_help(cli, arg0, args[0], spec)
             os.Exit(0)
         }
     } else {

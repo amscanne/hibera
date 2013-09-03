@@ -1,14 +1,13 @@
 package main
 
 import (
-    "flag"
     "fmt"
     "hibera/cli"
     "hibera/client"
     "hibera/utils"
 )
 
-var replication = flag.Uint("replication", utils.DefaultN, "The replication factor.")
+var replication = cli.Flags.Uint("replication", utils.DefaultN, "The replication factor.")
 
 var cliInfo = cli.Cli{
     "Hibera cluster control tool.",

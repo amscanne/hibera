@@ -1,15 +1,14 @@
 package main
 
 import (
-    "flag"
     "fmt"
     "hibera/cli"
     "hibera/client"
     "strings"
 )
 
-var path = flag.String("path", ".*", "The path for a given token (regular expression).")
-var perms = flag.String("perms", "rwx", "Permissions (combination of r,w,x).")
+var path = cli.Flags.String("path", ".*", "The path for a given token (regular expression).")
+var perms = cli.Flags.String("perms", "rwx", "Permissions (combination of r,w,x).")
 
 var cliInfo = cli.Cli{
     "Hibera permissions client.",
