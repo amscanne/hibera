@@ -22,13 +22,17 @@ func (access *Access) Check(ns Namespace, auth Token, key Key, read bool, write 
     access.allLock.RLock()
     defer access.allLock.RUnlock()
 
-    // If no namespace permissions are defined,
-    // check this authentication token against the
-    // global token. This allows the global token
-    // to manipulate unconfigured namespaces.
-    token, ok := access.all[ns][auth]
-    if !ok {
-        return ns == Namespace("") && auth == access.root
+    // Check for the root token.
+    // This is the only way that new namespaces
+    // can be created and destroyed.
+    if auth == access.root {
+        return true
+    }
+
+    // Disallow access to unconfigured namespaces.
+    token, exists := access.all[ns][auth]
+    if !exists {
+        return false
     }
 
     // Check the paths against the current.

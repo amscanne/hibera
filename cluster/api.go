@@ -349,11 +349,7 @@ func (c *Cluster) EventFire(req Request, key core.Key, rev core.Revision) (core.
 func (c *Cluster) AccessList(req Request) ([]core.Token, core.Revision, error) {
     utils.Print("CLUSTER", "ACCESS-LIST")
 
-    // NOTE: For access operations, we also authenticate
-    // against the root namespace. This is because namespace
-    // updates can generate cluster revision updates, we
-    // don't want to allow these for arbitrary API users.
-    err := c.Authorize(RootNamespace, req.Auth(), RootKey, true, false, false)
+    err := c.Authorize(req.Namespace(), req.Auth(), RootKey, true, false, false)
     if err != nil {
         return nil, c.rev, err
     }
@@ -370,8 +366,7 @@ func (c *Cluster) AccessList(req Request) ([]core.Token, core.Revision, error) {
 func (c *Cluster) AccessGet(req Request, auth core.Token) (*core.Permissions, core.Revision, error) {
     utils.Print("CLUSTER", "ACCESS-GET auth=%s", auth)
 
-    // NOTE: See AccessList() above.
-    err := c.Authorize(RootNamespace, req.Auth(), RootKey, true, false, false)
+    err := c.Authorize(req.Namespace(), req.Auth(), RootKey, true, false, false)
     if err != nil {
         return nil, c.rev, err
     }
@@ -388,8 +383,7 @@ func (c *Cluster) AccessGet(req Request, auth core.Token) (*core.Permissions, co
 func (c *Cluster) AccessUpdate(req Request, auth core.Token, key core.Key, read bool, write bool, execute bool) (core.Revision, error) {
     utils.Print("CLUSTER", "ACCESS-UPDATE auth=%s key=%s", auth, key)
 
-    // NOTE: See AccessList() above.
-    err := c.Authorize(RootNamespace, req.Auth(), RootKey, false, true, false)
+    err := c.Authorize(req.Namespace(), req.Auth(), RootKey, false, true, false)
     if err != nil {
         return c.rev, err
     }
