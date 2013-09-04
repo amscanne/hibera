@@ -88,11 +88,3 @@ func (r *Revision) UnmarshalJSON(data []byte) error {
 func (r *Revision) MarshalJSON() ([]byte, error) {
     return []byte(r.String()), nil
 }
-
-func (r Revision) Copy() Revision {
-    if r.Int == nil {
-        return Revision{nil}
-    }
-    big_int := *r.Int
-    return Revision{&big_int}
-}
