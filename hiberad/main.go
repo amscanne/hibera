@@ -12,6 +12,8 @@ import (
     "net"
     "os"
     "path"
+    "syscall"
+    "os/signal"
     "runtime"
     "runtime/pprof"
     "strings"
@@ -83,7 +85,7 @@ func cli_run() error {
 
     // Turn on profiling.
     if *profile != "" {
-        f, err := os.Create(*profile)
+        f, err := os.OpenFile(*profile, os.O_RDWR|os.O_CREATE, 0644)
         if err != nil {
             return err
         }
@@ -115,8 +117,15 @@ func cli_run() error {
         return err
     }
 
+    // Enable clean exit.
+    terminate := make(chan os.Signal, 2)
+    signal.Notify(terminate, os.Interrupt, syscall.SIGTERM)
+
     // Run our server.
-    s.Run()
+    go s.Run()
+
+    // Wait for a signal.
+    <-terminate
     return nil
 }
 
