@@ -20,6 +20,7 @@ type NameMap map[string]Revision
 type EphemeralSet map[EphemId]NameMap
 
 var NotFound = errors.New("Key not found or inconsistent")
+var RevConflict = errors.New("Revision is not sufficient")
 
 type Lock struct {
     sem     chan bool
@@ -427,7 +428,7 @@ func (d *Data) DataModify(
         rev = metadata_rev.Next()
     }
     if !rev.GreaterThan(metadata_rev) {
-        return metadata_rev, err
+        return metadata_rev, RevConflict
     }
 
     // Do the operation.
