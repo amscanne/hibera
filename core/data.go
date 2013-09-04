@@ -470,7 +470,7 @@ func (d *Data) doWait(
         }
 
         // Wait until we are no longer on the given rev.
-        if currev != rev {
+        if !currev.Equals(rev) {
             break
         }
 

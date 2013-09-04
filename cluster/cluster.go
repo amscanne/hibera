@@ -481,7 +481,7 @@ func (c *Cluster) healthcheck() {
             // hasn't changed. Otherwise, we simply end
             // up in a spinny loop chewing CPU waiting
             // for the situation to change.
-            if new_target_rev == target_rev {
+            if new_target_rev.Equals(target_rev) {
                 break
             }
 
@@ -519,7 +519,7 @@ func (c *Cluster) lockedClusterDataSet(bytes []byte, target_rev core.Revision) (
     // Yikes, something has happened between the quorum set
     // above and the lock being reacquired. Let it be handled
     // on the next healthcheck and bail.
-    if rev != target_rev || orig_rev != c.rev {
+    if !rev.Equals(target_rev) || !c.rev.Equals(orig_rev) {
         utils.Print("CLUSTER", "SET-CLUSTER-REV-CHANGED")
         return rev, nil
     }

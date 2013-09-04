@@ -198,7 +198,7 @@ func cli_run(
                 }
 
                 // Save whether changed.
-                datachanged = (newindex != oldindex || olddatarev != datarev)
+                datachanged = (newindex != oldindex || !olddatarev.Equals(datarev))
                 olddatarev = datarev
 
             } else {
