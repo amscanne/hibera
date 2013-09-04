@@ -137,7 +137,7 @@ func (d *Data) getSyncRev(ns Namespace, key Key) Revision {
 }
 
 func (d *Data) setSyncRev(ns Namespace, key Key, rev Revision) {
-    d.revs[ns][key] = rev.Copy()
+    d.revs[ns][key] = rev
 }
 
 func (d *Data) delSyncRev(ns Namespace, key Key) {
@@ -226,7 +226,7 @@ func (d *Data) computeIndex(revmap *EphemeralSet, name string, limit uint) SyncI
     allmap := make(map[string]Revision, 0)
     for _, set := range *revmap {
         for member, revjoined := range set {
-            allmap[member] = revjoined.Copy()
+            allmap[member] = revjoined
         }
     }
 
@@ -334,7 +334,7 @@ func (d *Data) SyncJoin(
 
     // Join and fire.
     rev, err := d.doFire(ns, key, NoRevision, lock)
-    (*revmap)[id][name] = rev.Copy()
+    (*revmap)[id][name] = rev
     utils.Print("DATA", "JOIN key=%s index=%d id=%d",
         key, index, uint64(id))
     return index, rev, err
@@ -351,11 +351,13 @@ func (d *Data) SyncLeave(id EphemId, ns Namespace, key Key, name string) (Revisi
     }
 
     // Leave the key.
+    changed := false
     _, present := (*revmap)[id]
     if present {
         delete((*revmap)[id], name)
         if len((*revmap)[id]) == 0 {
             delete((*revmap), id)
+            changed = true
         }
     }
     if len(*revmap) == 0 {
@@ -364,7 +366,10 @@ func (d *Data) SyncLeave(id EphemId, ns Namespace, key Key, name string) (Revisi
 
     utils.Print("DATA", "LEAVE key=%s id=%d",
         key, uint64(id))
-    return d.doFire(ns, key, NoRevision, lock)
+    if changed {
+        return d.doFire(ns, key, NoRevision, lock)
+    }
+    return d.getSyncRev(ns, key), NotFound
 }
 
 func (d *Data) DataGet(ns Namespace, key Key) ([]byte, Revision, error) {
@@ -524,6 +529,7 @@ func (d *Data) doFire(ns Namespace, key Key, rev Revision, lock *Lock) (Revision
     // Broadcast.
     lock.notify()
 
+    utils.Print("DATA", "FIRED key=%s rev=%s", key, rev.String())
     return rev, nil
 }
 
