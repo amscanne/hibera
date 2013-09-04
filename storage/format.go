@@ -203,7 +203,8 @@ func deserialize(input *os.File, ent *entry) (uint64, uint64, error) {
     // Check if it's free space.
     if length <= 0 {
         // Skip ahead past the free space.
-        _, err = input.Seek(int64(-length)-4, 1)
+        length = -length
+        _, err = input.Seek(int64(length-4), 1)
         return uint64(0), uint64(length), err
     }
 

@@ -275,30 +275,30 @@ func (l *logManager) squashLogsUntil(limit uint64) error {
         }
 
         // Copy all logs down to the data layer.
-        orig_data, has_orig_data := l.data_records[key]
         ent, err := record.Copy(l.data)
         if err != nil {
             continue
         }
-        utils.Print("STORAGE", "Saved data record '%s'...", ent.key)
+        utils.Print("STORAGE", "New data record '%s'...", ent.key)
 
-        // Remove the original record if it exists.
+        // Remove the original record.
+        orig_data, has_orig_data := l.data_records[key]
         if has_orig_data {
             utils.Print("STORAGE", "Deleting original data record '%s'...", ent.key)
             orig_data.Delete()
         }
 
-        // Check for a delete.
-        if ent.value.data == nil && ent.value.metadata == nil {
-            // Delete this record also.
-            utils.Print("STORAGE", "Deleting saved record '%s'...", ent.key)
+        // Point the data record to the latest.
+        record.Grab()
+        l.data_records[key] = record
+    }
+
+    // Check for deleted records.
+    for key, record := range l.data_records {
+        _, is_present := l.records[key]
+        if !is_present {
             delete(l.data_records, key)
             record.Delete()
-        } else {
-            // The record now points to data.
-            utils.Print("STORAGE", "Leaving new record '%s'...", ent.key)
-            record.Grab()
-            l.data_records[key] = record
         }
     }
 
@@ -316,16 +316,22 @@ func (l *logManager) squashLogs() error {
 }
 
 func (l *logManager) writeEntry(ent *entry, logfile *logFile) error {
+
+    // Make sure the record is serialized.
     record, err := logfile.Write(ent)
     if err != nil {
         return err
     }
+    utils.Print("STORAGE", "New log record '%s'...", ent.key)
+
+    // Grab the original record.
     orig_rec, has_orig_rec := l.records[ent.key]
 
-    // Was this a delete? If so, forget our delete
-    // record and just store nothing. Otherwise, store
-    // the latest record.
+    // Was this a delete? If so, we keep the record in
+    // the log (so that we can be sure it will survive a
+    // crash) but we remove the key from the list of records.
     if ent.value.data == nil && ent.value.metadata == nil {
+        utils.Print("STORAGE", "Dropping record '%s'...", ent.key)
         delete(l.records, ent.key)
         record.Discard()
     } else {
@@ -334,6 +340,7 @@ func (l *logManager) writeEntry(ent *entry, logfile *logFile) error {
 
     // Discard the original reference.
     if has_orig_rec {
+        utils.Print("STORAGE", "Discarding original record '%s'...", ent.key)
         orig_rec.Discard()
     }
 

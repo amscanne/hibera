@@ -336,7 +336,8 @@ func (l *logFile) Load() ([]*logRecord, error) {
 
         // Return the read entry.
         records = append(records, l.NewRecord(uint64(offset)))
-        utils.Print("STORAGE", "Record @ %d (length: %d)", offset, record_size)
+        utils.Print("STORAGE", "Record for '%s' @ %d (length: %d)",
+            ent.key, offset, record_size)
     }
 
     return records, nil
