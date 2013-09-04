@@ -232,14 +232,14 @@ func (h *HiberaAPI) doRequest(method string, args httpArgs, hint string) ([]byte
                 }
             }
 
-            // Check for a permission problem (don't retry).
+            // Check for a permission problem..
             if resp.StatusCode == http.StatusForbidden {
-                err = os.ErrPermission
-                break
+                return nil, core.NoRevision, os.ErrPermission
             }
+
+            // Check for a temporary condition.
             if resp.StatusCode == http.StatusServiceUnavailable {
                 err = os.ErrInvalid
-                break
             }
 
             if resp.StatusCode == http.StatusOK {
@@ -254,7 +254,7 @@ func (h *HiberaAPI) doRequest(method string, args httpArgs, hint string) ([]byte
                 // Usually this is a quorum failure,
                 // which results from mulitple calls
                 // with set rev=0.
-                continue
+                break
 
             } else if resp.StatusCode == http.StatusMovedPermanently ||
                 resp.StatusCode == http.StatusFound ||
