@@ -305,6 +305,9 @@ func (h *HiberaAPI) doRequest(method string, args httpArgs, hint string) ([]byte
 func (h *HiberaAPI) Info() (*core.Info, core.Revision, error) {
     args := h.makeArgs("", "/v1.0/")
     content, rev, err := h.doRequest("GET", args, "")
+    if err != nil {
+        return nil, core.NoRevision, err
+    }
     info := core.NewInfo()
     err = json.Unmarshal(content, info)
     if err != nil {
@@ -481,6 +484,9 @@ func (h *HiberaAPI) NSDataList(ns core.Namespace) (map[core.Key]uint, error) {
     args := h.makeArgs(ns, "/v1.0/data")
     content, _, err := h.doRequest("GET", args, "")
     var items map[core.Key]uint
+    if err != nil {
+        return items, err
+    }
     err = json.Unmarshal(content, &items)
     if err != nil {
         return nil, err
