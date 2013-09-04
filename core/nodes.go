@@ -196,10 +196,6 @@ func (nodes *Nodes) Suspicious(rev Revision) []*Node {
     })
 }
 
-func (nodes *Nodes) HasSuspicious(rev Revision) bool {
-    return len(nodes.Suspicious(rev)) > 0
-}
-
 func (nodes *Nodes) Self() *Node {
     return nodes.self
 }
