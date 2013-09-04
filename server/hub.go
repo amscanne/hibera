@@ -12,6 +12,7 @@ import (
 )
 
 type ConnectionId uint64
+
 type Connection struct {
     // A reference to the associated core.
     *Hub
@@ -141,12 +142,15 @@ func (c *Hub) NewConnection(raw net.Conn) *Connection {
 
 func (c *Hub) FindConnection(id ConnectionId, userid UserId, notifier <-chan bool) *Connection {
     c.Mutex.Lock()
-    defer c.Mutex.Unlock()
-
     conn := c.connections[id]
+    c.Mutex.Unlock()
+
     if conn == nil {
         return nil
     }
+
+    conn.Mutex.Lock()
+    defer conn.Mutex.Unlock()
 
     if conn.inited {
         return conn
