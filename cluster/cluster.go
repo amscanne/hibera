@@ -59,6 +59,11 @@ type Cluster struct {
     clients     map[string]*client.HiberaAPI
     clientsLock sync.Mutex
 
+    // Whether or not we are executing a quorum function on the given key.
+    quorumInProgress map[core.Key]bool
+    quorumWaiters    map[core.Key]uint
+    quorumLock       *sync.Cond
+
     // Whether or not a synchronization is currently active.
     // This is guarded by syncLock, which is also held during
     // data synchronization (i.e. changing to a new revision).
@@ -558,6 +563,11 @@ func NewCluster(
     c.Data = core.NewData(store)
     c.ring = NewRing(2*c.N+1, c.Nodes)
     c.clients = make(map[string]*client.HiberaAPI)
+
+    // Initialize synchronization structures.
+    c.quorumLock = sync.NewCond(&sync.Mutex{})
+    c.quorumInProgress = make(map[core.Key]bool)
+    c.quorumWaiters = make(map[core.Key]uint)
 
     // Read cluster data.
     data, rev, err := c.Data.DataGet(RootNamespace, RootKey)

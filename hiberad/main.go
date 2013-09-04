@@ -11,12 +11,12 @@ import (
     "hibera/utils"
     "net"
     "os"
-    "path"
-    "syscall"
     "os/signal"
+    "path"
     "runtime"
     "runtime/pprof"
     "strings"
+    "syscall"
 )
 
 var root = cli.Flags.String("root", utils.DefaultBind, "The root authorization token.")

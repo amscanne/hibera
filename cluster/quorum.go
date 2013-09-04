@@ -86,6 +86,40 @@ func (c *Cluster) quorum(ring *ring, key core.Key, fn func(*core.Node, chan<- *Q
 
     utils.Print("QUORUM", "START '%s' (%d/%d)", key, len(nodes), ring.Size())
 
+    // Grab the quorum lock.
+    c.quorumLock.L.Lock()
+    if c.quorumInProgress[key] {
+        // Indicate that there are waiters.
+        c.quorumWaiters[key] = c.quorumWaiters[key] + 1
+
+        // Wait for the quorum to be finished on this key.
+        for c.quorumInProgress[key] {
+            c.quorumLock.Wait()
+        }
+
+        // Release our wait indication.
+        c.quorumWaiters[key] = c.quorumWaiters[key] - 1
+        if c.quorumWaiters[key] == 0 {
+            delete(c.quorumWaiters, key)
+        }
+    }
+
+    // Indicate that there is a quorum is progress.
+    c.quorumInProgress[key] = true
+    c.quorumLock.L.Unlock()
+
+    defer func() {
+        c.quorumLock.L.Lock()
+        // Indicate that there is no quorum in progress.
+        delete(c.quorumInProgress, key)
+
+        // If there are waiters for this key, notify.
+        if c.quorumWaiters[key] != 0 {
+            c.quorumLock.Broadcast()
+        }
+        c.quorumLock.L.Unlock()
+    }()
+
     // Setup all the requests.
     for _, node := range nodes {
         if node != real_self {
