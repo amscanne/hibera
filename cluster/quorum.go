@@ -171,7 +171,7 @@ func (c *Cluster) quorum(ring *ring, key core.Key, fn func(*core.Node, chan<- *Q
             do_self()
 
             // If it matches, we have quorum.
-            if self_qr != nil && self_qr.err == nil && self_qr.rev == rev {
+            if self_qr != nil && self_qr.err == nil && self_qr.rev.Equals(rev) {
                 utils.Print("QUORUM", "SUCCESS rev=%s", rev.String())
                 return self_qr, nil
             }
@@ -290,7 +290,6 @@ func (c *Cluster) allList(ns core.Namespace) (map[core.Key]uint, error) {
     }
 
     // Read all results.
-    var err error
     for i, _ := range nodes {
         res := <-reschan
         if res.items != nil {
@@ -301,10 +300,9 @@ func (c *Cluster) allList(ns core.Namespace) (map[core.Key]uint, error) {
         }
         if res.err != nil {
             utils.Print("QUORUM", "  %d %s", i, res.err)
-            err = res.err
         }
     }
 
     // Return our result.
-    return items, err
+    return items, nil
 }

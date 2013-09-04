@@ -108,16 +108,7 @@ func (c *Cluster) lockedEncode(next bool) ([]byte, error) {
     return buf.Bytes(), err
 }
 
-func (c *Cluster) lockedDecode(data []byte) (bool, error) {
-    info := core.NewInfo()
-
-    // Decode our nodes and tokens.
-    buf := bytes.NewBuffer(data)
-    dec := json.NewDecoder(buf)
-    err := dec.Decode(&info)
-    if err != nil {
-        return false, err
-    }
+func (c *Cluster) lockedDecodeInfo(info *core.Info) (bool, error) {
 
     // Do the decode from nodes.
     force, err := c.Nodes.Decode(info.Nodes)
@@ -135,10 +126,25 @@ func (c *Cluster) lockedDecode(data []byte) (bool, error) {
     // Reset our N value.
     if c.N != info.N {
         c.N = info.N
+        c.new_N = c.N
         force = true
     }
 
     return force, err
+}
+
+func (c *Cluster) lockedDecodeBytes(data []byte) (bool, error) {
+    info := core.NewInfo()
+
+    // Decode our nodes and tokens.
+    buf := bytes.NewBuffer(data)
+    dec := json.NewDecoder(buf)
+    err := dec.Decode(&info)
+    if err != nil {
+        return false, err
+    }
+
+    return c.lockedDecodeInfo(info)
 }
 
 func (c *Cluster) Active() bool {
@@ -149,7 +155,7 @@ func (c *Cluster) doActivate(N uint) (core.Revision, error) {
     c.Mutex.Lock()
     defer c.Mutex.Unlock()
 
-    // Always take this as the new replication factor.
+    // Always take this as the proposed replication.
     c.new_N = N
 
     // If we're already activated, we simply
@@ -170,6 +176,7 @@ func (c *Cluster) doActivate(N uint) (core.Revision, error) {
     }
 
     // Do an encoding of this cluster.
+    c.N = N
     data, err := c.lockedEncode(false)
     if err != nil {
         c.Nodes.Reset()
@@ -228,7 +235,7 @@ func (c *Cluster) doSync(addr *net.UDPAddr) error {
 
     // Pull the remote info from the node.
     cl := c.getClient(utils.AsURL(addr))
-    data, rev, err := cl.Info()
+    info, rev, err := cl.Info()
     if err != nil {
         c.doneSync()
         utils.Print("CLUSTER", "SYNC-CLIENT-ERROR %s", err.Error())
@@ -238,7 +245,7 @@ func (c *Cluster) doSync(addr *net.UDPAddr) error {
     c.Mutex.Lock()
 
     // Update our nodemap.
-    force, err := c.lockedDecode(data)
+    force, err := c.lockedDecodeInfo(info)
     if err != nil {
         utils.Print("CLUSTER", "SYNC-DATA-ERROR %s", err.Error())
         c.Mutex.Unlock()
@@ -271,9 +278,11 @@ func (c *Cluster) GossipUpdate(addr *net.UDPAddr, id string, rev core.Revision, 
     }
 }
 
-func (c *Cluster) syncData(old_ring *ring, namespace core.Namespace, key core.Key, notify chan bool) {
+func (c *Cluster) syncData(old_ring *ring, ns core.Namespace, key core.Key, notify chan bool) {
+    utils.Print("CLUSTER", "SYNC-START ns=%s key=%", ns, key)
+
     // Pull in the quorum value (from the old ring).
-    value, rev, err := c.quorumGet(old_ring, namespace, key)
+    value, rev, err := c.quorumGet(old_ring, ns, key)
     if err != nil {
         // It's possible that the quorumGet failed because we were in the middle
         // of some other quorumSet(). That's fine, whatever other quroumSet() will
@@ -284,7 +293,7 @@ func (c *Cluster) syncData(old_ring *ring, namespace core.Namespace, key core.Ke
     }
 
     // Set the full cluster.
-    rev, err = c.quorumSet(c.ring, namespace, key, rev, value)
+    rev, err = c.quorumSet(c.ring, ns, key, rev, value)
     if err != nil {
         // It's possible that the cluster has changed again by the time this
         // set has actually had a chance to run. That's okay, at some point
@@ -298,8 +307,9 @@ func (c *Cluster) syncData(old_ring *ring, namespace core.Namespace, key core.Ke
     notify <- true
 }
 
-func (c *Cluster) purgeData(namespace core.Namespace, key core.Key, notify chan bool) {
-    c.Data.DataRemove(namespace, key, core.NoRevision)
+func (c *Cluster) purgeData(ns core.Namespace, key core.Key, notify chan bool) {
+    utils.Print("CLUSTER", "PURGE ns=%s key=%s", ns, key)
+    c.Data.DataRemove(ns, key, core.NoRevision)
     notify <- true
 }
 
@@ -355,11 +365,10 @@ func (c *Cluster) lockedChangeRevision(rev core.Revision, force bool) (core.Revi
         for key, _ := range items {
 
             if c.Access.Has(ns) {
-                old_master := old_ring.IsMaster(key)
                 new_master := c.ring.IsMaster(key)
                 new_slave := c.ring.IsSlave(key)
 
-                if !old_master && new_master {
+                if new_master {
                     // We're the new master for this key.
                     // We unconditionally do a sync for this key
                     // in order to ensure that all the slaves have
@@ -419,7 +428,7 @@ func (c *Cluster) lockedChangeRevision(rev core.Revision, force bool) (core.Revi
     c.Mutex.Lock()
 
     // Update the revision.
-    c.rev = rev.Copy()
+    c.rev = rev
     c.Nodes.Heartbeat(c.Nodes.Self().Id(), c.rev)
 
     return c.rev, nil
@@ -440,7 +449,7 @@ func (c *Cluster) healthcheck() {
         // If we have unknowns, let's propose a change.
         master := c.ring.MasterFor(RootKey)
         is_master := (master == nil || master == c.Nodes.Self())
-        is_failover := (master == nil || !master.Alive()) && c.ring.IsFailover(RootKey)
+        is_failover := c.ring.IsFailover(RootKey)
 
         if is_master {
             utils.Print("CLUSTER", "HEALTHCHECK-MASTER")
@@ -450,7 +459,7 @@ func (c *Cluster) healthcheck() {
             utils.Print("CLUSTER", "HEALTHCHECK-SLAVE")
         }
 
-        if is_master || is_failover {
+        if is_master || (is_failover && !master.Alive()) {
             // Encode a cluster delta.
             bytes, err := c.lockedEncode(true)
 
@@ -477,7 +486,6 @@ func (c *Cluster) healthcheck() {
             }
 
             target_rev = new_target_rev.Next()
-            utils.Print("CLUSTER", "Updating target_rev to %s.", target_rev.String())
             continue
 
         } else {
@@ -500,8 +508,8 @@ func (c *Cluster) lockedClusterDataSet(bytes []byte, target_rev core.Revision) (
     // version number. Note that we must first successfully
     // contact a quorum of nodes to ensure that we're in the
     // majority still.
-    utils.Print("CLUSTER", "SET-CLUSTER")
-    rev, err := c.quorumSet(c.ring, RootNamespace, RootKey, target_rev, bytes)
+    rev, err := c.quorumSet(
+        c.ring, RootNamespace, RootKey, target_rev, bytes)
     c.Mutex.Lock()
     if err != nil {
         utils.Print("CLUSTER", "SET-CLUSTER-ERROR %s", err.Error())
@@ -517,8 +525,13 @@ func (c *Cluster) lockedClusterDataSet(bytes []byte, target_rev core.Revision) (
     }
 
     // Return the decode error.
-    _, err = c.lockedDecode(bytes)
-    return c.rev, err
+    force, err := c.lockedDecodeBytes(bytes)
+    if err != nil {
+        return c.rev, err
+    }
+
+    // Update our revision.
+    return c.lockedChangeRevision(rev, force)
 }
 
 func (c *Cluster) timedHealthcheck() {
@@ -552,9 +565,9 @@ func NewCluster(
         utils.Print("CLUSTER", "START-FOUND rev=%s", rev.String())
 
         // Load the existing cluster data.
-        force, err := c.lockedDecode(data)
+        c.Mutex.Lock()
+        force, err := c.lockedDecodeBytes(data)
         if err == nil {
-            c.Mutex.Lock()
             rev, err = c.lockedChangeRevision(rev, force)
             c.Mutex.Unlock()
             if err != nil {
@@ -563,6 +576,7 @@ func NewCluster(
                 utils.Print("CLUSTER", "START-OKAY rev=%s", rev.String())
             }
         } else {
+            c.Mutex.Unlock()
             c.Data.DataRemove(RootNamespace, RootKey, core.NoRevision)
         }
     } else {

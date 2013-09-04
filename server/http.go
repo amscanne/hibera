@@ -281,19 +281,6 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
                     break
                 }
                 break
-
-            case "nodes":
-                switch r.Method {
-                case "GET":
-                    var nodes []string
-                    active := s.boolParam(r, "active")
-                    nodes, rev, err = s.Cluster.NodeList(req, active)
-                    if err == nil {
-                        err = enc.Encode(nodes)
-                    }
-                    break
-                }
-                break
             }
 
         } else if len(parts) == 2 {
@@ -371,17 +358,6 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
                     write := s.boolParam(r, "write")
                     execute := s.boolParam(r, "execute")
                     rev, err = s.Cluster.AccessUpdate(req, auth, path, read, write, execute)
-                    break
-                }
-                break
-            case "nodes":
-                switch r.Method {
-                case "GET":
-                    var value *core.Node
-                    value, rev, err = s.Cluster.NodeGet(req, parts[1])
-                    if err == nil {
-                        err = enc.Encode(value)
-                    }
                     break
                 }
                 break

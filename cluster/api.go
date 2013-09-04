@@ -86,7 +86,8 @@ func (c *Cluster) Authorize(ns core.Namespace, auth core.Token, key core.Key, re
 func (c *Cluster) Info(req Request) ([]byte, core.Revision, error) {
     utils.Print("CLUSTER", "INFO")
 
-    err := c.Authorize(req.Namespace(), req.Auth(), RootKey, true, false, false)
+    // We always authorize INFO against the root namespace.
+    err := c.Authorize(RootNamespace, req.Auth(), RootKey, true, false, false)
     if err != nil {
         return nil, core.NoRevision, err
     }
@@ -104,7 +105,8 @@ func (c *Cluster) Info(req Request) ([]byte, core.Revision, error) {
 func (c *Cluster) Activate(req Request, N uint) (core.Revision, error) {
     utils.Print("CLUSTER", "ACTIVATE")
 
-    err := c.Authorize(req.Namespace(), req.Auth(), RootKey, true, true, false)
+    // We always authorize ACTIVATE against the root namepsace.
+    err := c.Authorize(RootNamespace, req.Auth(), RootKey, true, true, false)
     if err != nil {
         return c.rev, err
     }
@@ -126,7 +128,8 @@ func (c *Cluster) Activate(req Request, N uint) (core.Revision, error) {
 func (c *Cluster) Deactivate(req Request) (core.Revision, error) {
     utils.Print("CLUSTER", "DEACTIVATE")
 
-    err := c.Authorize(req.Namespace(), req.Auth(), RootKey, true, true, false)
+    // Same as activate, we authorize DEACTIVATE against the root namespace.
+    err := c.Authorize(RootNamespace, req.Auth(), RootKey, true, true, false)
     if err != nil {
         return c.rev, err
     }
@@ -140,40 +143,6 @@ func (c *Cluster) Deactivate(req Request) (core.Revision, error) {
 
 func (c *Cluster) Version() core.Revision {
     return c.rev
-}
-
-func (c *Cluster) NodeList(req Request, active bool) ([]string, core.Revision, error) {
-    utils.Print("CLUSTER", "NODE-LIST")
-
-    err := c.Authorize(req.Namespace(), req.Auth(), RootKey, true, false, false)
-    if err != nil {
-        return nil, c.rev, err
-    }
-
-    server, err := c.doRedirect(req, RootKey)
-    if err != nil || server {
-        return nil, c.rev, err
-    }
-
-    nodes, err := c.Nodes.List(active)
-    return nodes, c.rev, err
-}
-
-func (c *Cluster) NodeGet(req Request, id string) (*core.Node, core.Revision, error) {
-    utils.Print("CLUSTER", "NODE-LIST")
-
-    err := c.Authorize(req.Namespace(), req.Auth(), RootKey, true, false, false)
-    if err != nil {
-        return nil, c.rev, err
-    }
-
-    server, err := c.doRedirect(req, RootKey)
-    if err != nil || server {
-        return nil, c.rev, err
-    }
-
-    node, err := c.Nodes.Get(id)
-    return node, c.rev, err
 }
 
 func (c *Cluster) DataList(req Request) (map[core.Key]uint, core.Revision, error) {
@@ -193,7 +162,13 @@ func (c *Cluster) DataList(req Request) (map[core.Key]uint, core.Revision, error
         items, err := c.Data.DataList(req.Namespace())
         return items, c.rev, err
     }
+
     items, err := c.allList(req.Namespace())
+
+    // NOTE: The root keys are always filtered.
+    // See get() and set() where it is also handled specially.
+    delete(items, RootKey)
+
     return items, c.rev, err
 }
 
@@ -210,9 +185,12 @@ func (c *Cluster) DataGet(req Request, key core.Key, rev core.Revision, timeout 
         return nil, core.NoRevision, err
     }
 
+    // NOTE: We don't allow reading the root key.
+    // See also special behavior in set() and list().
     if !server && key == RootKey {
         return nil, core.NoRevision, &PermissionError{key}
     }
+
     valid := func() bool { return c.ring.IsMaster(key) }
     req.DisableTimeouts()
     return c.Data.DataWatch(req.EphemId(), req.Namespace(), key, rev, timeout, req.Notifier(), valid)
@@ -231,9 +209,18 @@ func (c *Cluster) DataSet(req Request, key core.Key, rev core.Revision, value []
         return core.NoRevision, err
     }
 
+    if rev.IsZero() {
+        // NOTE: Even if err != nil, the revision will be NoRevision.
+        _, rev, err = c.Data.DataGet(req.Namespace(), key)
+        rev = rev.Next()
+    }
+
     if server {
         return c.Data.DataSet(req.Namespace(), key, rev, value)
     }
+
+    // NOTE: We disallow clients setting the root keys.
+    // It is also filtered in get() and list().
     if key == RootKey {
         return core.NoRevision, &PermissionError{key}
     }

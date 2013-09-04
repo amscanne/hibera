@@ -20,9 +20,9 @@ type logFile struct {
 
     chunks []chunk
 
-    start   int64
-    refs    int32
-    number  uint64
+    start  int64
+    refs   int32
+    number uint64
 }
 
 type logRecord struct {

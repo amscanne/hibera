@@ -2,8 +2,8 @@ package storage
 
 import (
     "log"
-    "time"
     "sync/atomic"
+    "time"
 )
 
 // The log buffer.

@@ -70,8 +70,8 @@ func NewNode(addr string, keys []string, domain string) *Node {
     node.Domain = domain
     node.Active = false
     node.Dropped = 0
-    node.Current = NoRevision.Copy()
-    node.Modified = NoRevision.Copy()
+    node.Current = NoRevision
+    node.Modified = NoRevision
     return node
 }
 
@@ -96,7 +96,9 @@ func (nodes *Nodes) Heartbeat(id string, rev Revision) bool {
         // will be removed and replaced by other nodes,
         // but we allow that to happen organically.
         node.RstDropped()
-        node.Current = rev.Copy()
+        if rev.GreaterThan(node.Current) {
+            node.Current = rev
+        }
         return true
     }
 
@@ -127,8 +129,8 @@ func (nodes *Nodes) Activate(id string, rev Revision) error {
     // We activate this node.
     if !node.Active {
         node.Active = true
-        node.Modified = rev.Copy()
-        node.Current = rev.Copy()
+        node.Modified = rev
+        node.Current = rev
         node.RstDropped()
     }
 
@@ -196,6 +198,10 @@ func (nodes *Nodes) Suspicious(rev Revision) []*Node {
     })
 }
 
+func (nodes *Nodes) HasSuspicious(rev Revision) bool {
+    return len(nodes.Suspicious(rev)) > 0
+}
+
 func (nodes *Nodes) Self() *Node {
     return nodes.self
 }
@@ -237,8 +243,8 @@ func (nodes *Nodes) Encode(next bool, na NodeInfo, N uint) (bool, error) {
                 // Propose this as an active node.
                 domains[node.Domain] = true
                 na[id] = NewNode(node.Addr, node.Keys, node.Domain)
-                na[id].Active = node.Alive()
-                na[id].Modified = nodes.self.Current.Next()
+                na[id].Active = true
+                na[id].Modified = nodes.self.Current
                 changed = true
             }
 
@@ -251,15 +257,15 @@ func (nodes *Nodes) Encode(next bool, na NodeInfo, N uint) (bool, error) {
                 na[id].Active = false
                 na[id].Dropped = DropLimit
                 na[id].Current = node.Current
-                na[id].Modified = nodes.self.Current.Next()
+                na[id].Modified = nodes.self.Current
                 changed = true
             }
 
         } else {
             na[id] = NewNode(node.Addr, node.Keys, node.Domain)
             na[id].Active = node.Active
-            na[id].Current = node.Current.Copy()
-            na[id].Modified = node.Modified.Copy()
+            na[id].Current = node.Current
+            na[id].Modified = node.Modified
             na[id].Dropped = node.Dropped
         }
     }

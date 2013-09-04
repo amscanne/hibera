@@ -58,13 +58,6 @@ func noRedirect(req *http.Request, via []*http.Request) error {
     return skipRedirect
 }
 
-func boolToStr(val bool) string {
-    if val {
-        return "true"
-    }
-    return "false"
-}
-
 func NewHiberaAPI(
     urls []string,
     auth core.Token,
@@ -255,6 +248,14 @@ func (h *HiberaAPI) doRequest(method string, args httpArgs, hint string) ([]byte
                 rev, err := h.getRev(resp)
                 return content, rev, err
 
+            } else if resp.StatusCode == http.StatusInternalServerError {
+
+                // Temporary internal failure.
+                // Usually this is a quorum failure,
+                // which results from mulitple calls
+                // with set rev=0.
+                continue
+
             } else if resp.StatusCode == http.StatusMovedPermanently ||
                 resp.StatusCode == http.StatusFound ||
                 resp.StatusCode == http.StatusSeeOther ||
@@ -301,14 +302,20 @@ func (h *HiberaAPI) doRequest(method string, args httpArgs, hint string) ([]byte
     return nil, core.NoRevision, nil
 }
 
-func (h *HiberaAPI) Info() ([]byte, core.Revision, error) {
+func (h *HiberaAPI) Info() (*core.Info, core.Revision, error) {
     args := h.makeArgs("", "/v1.0/")
-    return h.doRequest("GET", args, "")
+    content, rev, err := h.doRequest("GET", args, "")
+    info := core.NewInfo()
+    err = json.Unmarshal(content, info)
+    if err != nil {
+        return nil, rev, err
+    }
+    return info, rev, err
 }
 
 func (h *HiberaAPI) Activate(replication uint) error {
     args := h.makeArgs("", "/v1.0/")
-    args.params["replication"] = string(replication)
+    args.params["replication"] = strconv.FormatUint(uint64(replication), 10)
     _, _, err := h.doRequest("POST", args, "")
     return err
 }
@@ -317,35 +324,6 @@ func (h *HiberaAPI) Deactivate() error {
     args := h.makeArgs("", "/v1.0/")
     _, _, err := h.doRequest("DELETE", args, "")
     return err
-}
-
-func (h *HiberaAPI) NodeList(active bool) ([]string, core.Revision, error) {
-    args := h.makeArgs("", "/v1.0/nodes")
-    args.params["active"] = boolToStr(active)
-    content, rev, err := h.doRequest("GET", args, "")
-    if err != nil {
-        return nil, rev, err
-    }
-    var nodes []string
-    err = json.Unmarshal(content, &nodes)
-    if err != nil {
-        return nil, rev, err
-    }
-    return nodes, rev, err
-}
-
-func (h *HiberaAPI) NodeGet(id string) (*core.Node, core.Revision, error) {
-    args := h.makeArgs("", fmt.Sprintf("/v1.0/nodes/%s", id))
-    content, rev, err := h.doRequest("GET", args, id)
-    if err != nil {
-        return nil, core.NoRevision, err
-    }
-    var node core.Node
-    err = json.Unmarshal(content, &node)
-    if err != nil {
-        return nil, rev, err
-    }
-    return &node, rev, err
 }
 
 func (h *HiberaAPI) AccessList() ([]string, core.Revision, error) {
@@ -373,9 +351,9 @@ func (h *HiberaAPI) AccessUpdate(auth string, path string, read bool, write bool
 func (h *HiberaAPI) NSAccessUpdate(ns core.Namespace, auth core.Token, path string, read bool, write bool, execute bool) (core.Revision, error) {
     args := h.makeArgs(ns, fmt.Sprintf("/v1.0/access/%s", string(auth)))
     args.params["path"] = path
-    args.params["read"] = boolToStr(read)
-    args.params["write"] = boolToStr(write)
-    args.params["execute"] = boolToStr(execute)
+    args.params["read"] = fmt.Sprintf("%t", read)
+    args.params["write"] = fmt.Sprintf("%t", write)
+    args.params["execute"] = fmt.Sprintf("%t", execute)
     _, rev, err := h.doRequest("POST", args, "")
     if err != nil {
         return core.NoRevision, err
@@ -515,17 +493,6 @@ func (h *HiberaAPI) DataSet(key string, rev core.Revision, value []byte) (core.R
 }
 
 func (h *HiberaAPI) NSDataSet(ns core.Namespace, key core.Key, rev core.Revision, value []byte) (core.Revision, error) {
-    if rev == core.NoRevision {
-        var err error
-        _, rev, err = h.NSDataGet(ns, key, rev, 0)
-        if err != nil {
-            return rev, err
-        }
-
-        // Try the next revision.
-        rev = rev.Next()
-    }
-
     args := h.makeArgs(ns, fmt.Sprintf("/v1.0/data/%s", string(key)))
     args.params["rev"] = rev.String()
     args.body = value

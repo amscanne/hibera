@@ -24,7 +24,8 @@ type GossipServer struct {
 }
 
 // The frequency (in ms) of heartbeats.
-var Heartbeat = 1000
+var MinHeartbeat = 100
+var MaxHeartbeat = 1000
 
 // The number of dead servers to encode in a heartbeat.
 var DeadServers = 5
@@ -110,8 +111,13 @@ func (s *GossipServer) heartbeat() {
 
 func (s *GossipServer) Sender() {
     for {
-        s.heartbeat()
-        time.Sleep(time.Duration(Heartbeat) * time.Millisecond)
+        if s.Cluster.HasSuspicious(s.Cluster.Version()) {
+            s.heartbeat()
+            time.Sleep(time.Duration(MinHeartbeat) * time.Millisecond)
+        } else {
+            s.heartbeat()
+            time.Sleep(time.Duration(MaxHeartbeat) * time.Millisecond)
+        }
     }
 }
 

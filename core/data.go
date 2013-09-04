@@ -195,7 +195,7 @@ func (d *Data) DataList(ns Namespace) (map[Key]uint, error) {
     utils.Print("DATA", "LIST namespace=%s", ns)
     for _, item := range items {
         item_ns, item_key := fromStoreKey(item)
-        if item_key != "" && item_ns == ns {
+        if item_ns == ns {
             keys[item_key] = 1
             utils.Print("DATA", "    %s", item_key)
         }

@@ -15,27 +15,6 @@ var perms = cli.Flags.String("perms", "rwx", "Permissions (combination of r,w,x)
 var cliInfo = cli.Cli{
     "Hibera cluster control tool.",
     map[string]cli.Command{
-        "list-nodes": cli.Command{
-            "List all nodes.",
-            "",
-            []string{},
-            []string{},
-            false,
-        },
-        "list-active": cli.Command{
-            "List all active nodes.",
-            "",
-            []string{},
-            []string{},
-            false,
-        },
-        "node-info": cli.Command{
-            "Show node info.",
-            "",
-            []string{"id"},
-            []string{},
-            false,
-        },
         "activate": cli.Command{
             "Activate the API target.",
             "",
@@ -45,6 +24,27 @@ var cliInfo = cli.Cli{
         },
         "deactivate": cli.Command{
             "Deactivate the API target.",
+            "",
+            []string{},
+            []string{},
+            false,
+        },
+        "nodes": cli.Command{
+            "List all nodes.",
+            "",
+            []string{},
+            []string{},
+            false,
+        },
+        "data": cli.Command{
+            "List all data and associated replication.",
+            "",
+            []string{},
+            []string{},
+            false,
+        },
+        "list-namespaces": cli.Command{
+            "List all namespaces.",
             "",
             []string{},
             []string{},
@@ -83,44 +83,50 @@ func cli_deactivate(c *client.HiberaAPI) error {
     return c.Deactivate()
 }
 
-func cli_list_nodes(c *client.HiberaAPI) error {
-    nodes, _, err := c.NodeList(false)
+func cli_nodes(c *client.HiberaAPI) error {
+    info, _, err := c.Info()
     if err != nil {
         return err
     }
-    for _, id := range nodes {
-        fmt.Printf("%s\n", id)
+
+    for id, node := range info.Nodes {
+        addr := fmt.Sprintf("addr=%s", node.Addr)
+        domain := fmt.Sprintf("domain=%s", node.Domain)
+        keys := fmt.Sprintf("keys=%d", len(node.Keys))
+        active := fmt.Sprintf("active=%t", node.Active)
+        modified := fmt.Sprintf("modified=%s", node.Modified.String())
+        current := fmt.Sprintf("current=%s", node.Current.String())
+        dropped := fmt.Sprintf("dropped=%d", node.Dropped)
+        fmt.Printf("%s %s %s %s %s %s %s %s\n",
+            id, addr, domain, keys, active, modified, current, dropped)
     }
+
     return nil
 }
 
-func cli_list_active(c *client.HiberaAPI) error {
-    nodes, _, err := c.NodeList(true)
+func cli_data(c *client.HiberaAPI) error {
+    items, err := c.DataList()
     if err != nil {
         return err
     }
-    for _, id := range nodes {
-        fmt.Printf("%s\n", id)
+
+    for key, count := range items {
+        fmt.Printf("%s %d\n", key, count)
     }
+
     return nil
 }
 
-func cli_node_info(c *client.HiberaAPI, id string) error {
-    node, _, err := c.NodeGet(id)
+func cli_list_namespaces(c *client.HiberaAPI) error {
+    info, _, err := c.Info()
     if err != nil {
         return err
     }
 
-    fmt.Printf("addr: %s\n", node.Addr)
-    fmt.Printf("domain: %s\n", node.Domain)
-    fmt.Printf("active: %t\n", node.Active)
-    fmt.Printf("modified: %d\n", node.Modified)
-    fmt.Printf("current: %d\n", node.Current)
-    fmt.Printf("dropped: %d\n", node.Dropped)
-    fmt.Printf("keys:\n")
-    for _, key := range node.Keys {
-        fmt.Printf("- %s\n", key)
+    for ns, _ := range info.Access {
+        fmt.Printf("%s\n", ns)
     }
+
     return nil
 }
 
@@ -173,12 +179,12 @@ func do_cli(command string, args []string) error {
         return cli_activate(client)
     case "deactivate":
         return cli_deactivate(client)
-    case "list-nodes":
-        return cli_list_nodes(client)
-    case "list-active":
-        return cli_list_active(client)
-    case "node-info":
-        return cli_node_info(client, args[0])
+    case "nodes":
+        return cli_nodes(client)
+    case "data":
+        return cli_data(client)
+    case "list-namespaces":
+        return cli_list_namespaces(client)
     case "list-tokens":
         return cli_list_tokens(client)
     case "show-token":
