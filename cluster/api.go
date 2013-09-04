@@ -176,7 +176,7 @@ func (c *Cluster) NodeGet(req Request, id string) (*core.Node, core.Revision, er
     return node, c.rev, err
 }
 
-func (c *Cluster) DataList(req Request) ([]core.Key, core.Revision, error) {
+func (c *Cluster) DataList(req Request) (map[core.Key]uint, core.Revision, error) {
     utils.Print("CLUSTER", "DATA-LIST")
 
     err := c.Authorize(req.Namespace(), req.Auth(), RootKey, true, false, false)

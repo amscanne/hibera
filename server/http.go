@@ -261,7 +261,7 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
             case "data":
                 switch r.Method {
                 case "GET":
-                    var items []core.Key
+                    var items map[core.Key]uint
                     items, rev, err = s.Cluster.DataList(req)
                     if err == nil {
                         err = enc.Encode(items)

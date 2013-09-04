@@ -487,14 +487,22 @@ func (h *HiberaAPI) NSDataGet(ns core.Namespace, key core.Key, rev core.Revision
     return h.doRequest("GET", args, string(key))
 }
 
-func (h *HiberaAPI) DataList() ([]string, error) {
-    return h.NSDataList(h.defaultNS)
+func (h *HiberaAPI) DataList() (map[string]uint, error) {
+    items, err := h.NSDataList(h.defaultNS)
+    if items == nil || err != nil {
+        return nil, err
+    }
+    keys := make(map[string]uint)
+    for item, count := range items {
+        keys[string(item)] = count
+    }
+    return keys, nil
 }
 
-func (h *HiberaAPI) NSDataList(ns core.Namespace) ([]string, error) {
+func (h *HiberaAPI) NSDataList(ns core.Namespace) (map[core.Key]uint, error) {
     args := h.makeArgs(ns, "/v1.0/data")
     content, _, err := h.doRequest("GET", args, "")
-    var items []string
+    var items map[core.Key]uint
     err = json.Unmarshal(content, &items)
     if err != nil {
         return nil, err

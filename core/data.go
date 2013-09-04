@@ -186,18 +186,18 @@ func (d *Data) DataNamespaces() ([]Namespace, error) {
     return namespaces, nil
 }
 
-func (d *Data) DataList(ns Namespace) ([]Key, error) {
+func (d *Data) DataList(ns Namespace) (map[Key]uint, error) {
     items, err := d.store.List()
     if err != nil {
         return nil, err
     }
-    keys := make([]Key, 0, 0)
+    keys := make(map[Key]uint)
     utils.Print("DATA", "LIST namespace=%s", ns)
     for _, item := range items {
         item_ns, item_key := fromStoreKey(item)
-        if item_ns == ns {
+        if item_key != "" && item_ns == ns {
+            keys[item_key] = 1
             utils.Print("DATA", "    %s", item_key)
-            keys = append(keys, item_key)
         }
     }
 

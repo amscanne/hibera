@@ -352,7 +352,7 @@ func (c *Cluster) lockedChangeRevision(rev core.Revision, force bool) (core.Revi
         }
 
         // Schedule updates for every key.
-        for _, key := range items {
+        for key, _ := range items {
 
             if c.Access.Has(ns) {
                 old_master := old_ring.IsMaster(key)

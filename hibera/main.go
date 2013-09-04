@@ -438,7 +438,7 @@ func cli_list(c *client.HiberaAPI) error {
     if err != nil {
         return err
     }
-    for _, item := range items {
+    for item, _ := range items {
         fmt.Printf("%s\n", item)
     }
     return nil

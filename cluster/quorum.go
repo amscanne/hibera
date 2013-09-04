@@ -258,11 +258,11 @@ func (c *Cluster) quorumRemove(ring *ring, ns core.Namespace, key core.Key, rev 
 }
 
 type ListResult struct {
-    items []core.Key
+    items map[core.Key]uint
     err   error
 }
 
-func (c *Cluster) doList(node *core.Node, ns core.Namespace) ([]core.Key, error) {
+func (c *Cluster) doList(node *core.Node, ns core.Namespace) (map[core.Key]uint, error) {
     if node == c.Nodes.Self() {
         utils.Print("QUORUM", "    LIST-LOCAL")
         return c.Data.DataList(ns)
@@ -270,20 +270,12 @@ func (c *Cluster) doList(node *core.Node, ns core.Namespace) ([]core.Key, error)
 
     utils.Print("QUORUM", "    LIST-REMOTE")
     cl := c.getClient(utils.MakeURL(node.Addr, "", nil))
-    items, err := cl.NSDataList(ns)
-    if items == nil || err != nil {
-        return nil, err
-    }
-    keys := make([]core.Key, len(items), len(items))
-    for i, item := range items {
-        keys[i] = core.Key(item)
-    }
-    return keys, nil
+    return cl.NSDataList(ns)
 }
 
-func (c *Cluster) allList(ns core.Namespace) ([]core.Key, error) {
+func (c *Cluster) allList(ns core.Namespace) (map[core.Key]uint, error) {
     nodes := c.Nodes.Inuse()
-    items := make(map[core.Key]bool)
+    items := make(map[core.Key]uint)
 
     utils.Print("QUORUM", "LIST %d", len(nodes))
 
@@ -303,12 +295,8 @@ func (c *Cluster) allList(ns core.Namespace) ([]core.Key, error) {
         res := <-reschan
         if res.items != nil {
             utils.Print("QUORUM", "  %d %d", i, len(res.items))
-            for _, item := range res.items {
-                // Accept only non-zero length items.
-                // (This excludes the special cluster key).
-                if len(item) > 0 {
-                    items[item] = true
-                }
+            for item, count := range res.items {
+                items[item] = items[item] + count
             }
         }
         if res.err != nil {
@@ -317,17 +305,6 @@ func (c *Cluster) allList(ns core.Namespace) ([]core.Key, error) {
         }
     }
 
-    // Build our result.
-    itemsarr := make([]core.Key, len(items), len(items))
-    i := 0
-    for item, _ := range items {
-        itemsarr[i] = item
-        i += 1
-    }
-
-    // Return the result.
-    if len(itemsarr) > 0 {
-        return itemsarr, nil
-    }
-    return itemsarr, err
+    // Return our result.
+    return items, err
 }
