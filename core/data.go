@@ -441,6 +441,10 @@ func (d *Data) DataModify(
 
 func (d *Data) DataSet(ns Namespace, key Key, rev Revision, value []byte) (Revision, error) {
 
+    if rev.IsZero() && value == nil {
+        return d.DataRemove(ns, key, rev)
+    }
+
     return d.DataModify(ns, key, rev, func(rev Revision) error {
         return d.store.Write(toStoreKey(ns, key), value, rev.Bytes())
     })
