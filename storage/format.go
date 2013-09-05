@@ -181,7 +181,8 @@ func clear(output *os.File, offset int64, length int32) (int64, error) {
 }
 
 func serialize(output *os.File, offset int64, dio *deferredIO) (int64, func() error, error) {
-    utils.Print("STORAGE", "Writing record: %s.", dio.String())
+    utils.Print("STORAGE", "Writing record: %s => %s @ %d",
+        dio.String(), output.Name(), offset)
 
     // Do the encoding.
     // NOTE: We see the size of the encoding buffer to
@@ -251,21 +252,29 @@ func serialize(output *os.File, offset int64, dio *deferredIO) (int64, func() er
     for n := 0; n < len(encoded.Bytes()); {
         written, err := output.Write(encoded.Bytes()[n:])
         if err != nil {
-            return end_offset, nop_io, err
+            offset, _ = output.Seek(offset, 0)
+            return offset, nop_io, err
         }
         n += written
     }
+    utils.Print("STORAGE", "   key+metadata = %d @ %d",
+        len(encoded.Bytes()), offset+int64(int32Size))
 
     // Encode the header.
     err = binary.Write(header, binary.LittleEndian, int32(length+padding))
     if err != nil {
-        return end_offset, nop_io, err
+        offset, _ = output.Seek(offset, 0)
+        return offset, nop_io, err
     }
     header_bytes := header.Bytes()
 
     // Get the current offset.
     header_offset := offset
     output_offset := offset + int64(int32Size) + int64(len(encoded.Bytes()))
+    utils.Print("STORAGE", "   header = %d @ %d",
+        len(header.Bytes()), header_offset)
+    utils.Print("STORAGE", "   data = %d @ %d",
+        dio.length, output_offset)
 
     // Generate a closure for actually writing the data.
     run := func() error {
@@ -302,7 +311,7 @@ func serialize(output *os.File, offset int64, dio *deferredIO) (int64, func() er
     }
 
     // Jump to the end of the record.
-    offset, err = output.Seek(offset+int64(length+padding), 0)
+    offset, err = output.Seek(end_offset, 0)
     return offset, run, err
 }
 
@@ -310,36 +319,36 @@ func generateSplice(input *os.File, length int32, input_offset *int64) func(*os.
 
     run := func(output *os.File, output_offset *int64) ([]byte, error) {
 
-        do_manual := false
+        // Need a least one pipe.
+        // Pipes should be specified without an offset,
+        // otherwise the splice will fail to proceed.
 
-        for n := 0; n < int(length); {
-            // Splice the two files.
-            done, err := syscall.Splice(
-                int(input.Fd()), input_offset,
-                int(output.Fd()), output_offset,
-                int(length-int32(n)), 0)
+        if input_offset == nil || output_offset == nil {
 
-            if (err == io.EOF || err == io.ErrUnexpectedEOF) && (int64(n)+done) == int64(length) {
-                // Everything has been sent.
-            } else if err != nil && n == 0 {
-                // Try a manual read/write below.
-                do_manual = true
-                break
-            } else if err != nil {
-                log.Printf("Error splicing data (%d/%d bytes): %s",
-                    int64(n)+done, length, err.Error())
-                return nil, err
+            for n := 0; n < int(length); {
+                // Splice the two files.
+                done, err := syscall.Splice(
+                    int(input.Fd()), input_offset,
+                    int(output.Fd()), output_offset,
+                    int(length-int32(n)), 0)
+
+                if (err == io.EOF || err == io.ErrUnexpectedEOF) && (int64(n)+done) == int64(length) {
+                    // Everything has been sent.
+                } else if err != nil {
+                    log.Printf("Error splicing data (%d/%d bytes): %s",
+                        int64(n)+done, length, err.Error())
+                    return nil, err
+                }
+                n += int(done)
             }
-            n += int(done)
-        }
 
-        // Okay, so at this point we've got a run() in the
-        // deferred IO object that will do a Splice given
-        // another file. Unfortunately, our other file is
-        // *not* a pipe -- so we need to do some manually
-        // copying of bytes here. This sucks, but again, I
-        // hope that this step is *not* in the critical path.
-        if do_manual {
+        } else {
+            // Okay, so at this point we've got a run() in the
+            // deferred IO object that will do a Splice given
+            // another file. Unfortunately, our other file is
+            // *not* a pipe -- so we need to do some manually
+            // copying of bytes here. This sucks, but again, I
+            // hope that this step is *not* in the critical path.
 
             // Calculate a good buffer size.
             buf_length := length
@@ -384,6 +393,7 @@ func generateSplice(input *os.File, length int32, input_offset *int64) func(*os.
 }
 
 func deserialize(input *os.File, start_offset int64) (int64, *deferredIO, error) {
+    utils.Print("STORAGE", "Reading record: %s @ %d", input.Name(), start_offset)
 
     // Read the header.
     length := int32(0)
@@ -392,14 +402,16 @@ func deserialize(input *os.File, start_offset int64) (int64, *deferredIO, error)
     if err != nil {
         return offset, newFreeSpace(0), err
     }
+    utils.Print("STORAGE", "   header = %d @ %d", length, offset)
     remaining := int32(length)
+    offset += int64(int32Size)
 
     // Check if it's free space.
     if length <= 0 {
         // Skip ahead past the free space.
         length = -length
         _, err = input.Seek(int64(length), 1)
-        return offset+int64(int32Size+length), newFreeSpace(length), freeSpace
+        return offset + int64(length), newFreeSpace(length), freeSpace
     }
 
     // Read the key.
@@ -411,6 +423,7 @@ func deserialize(input *os.File, start_offset int64) (int64, *deferredIO, error)
         offset, _ := input.Seek(start_offset, 0)
         return offset, newFreeSpace(0), err
     }
+    utils.Print("STORAGE", "   key = %d @ %d", key_length, offset)
     remaining -= int32Size
     offset += int64(int32Size)
 
@@ -439,6 +452,7 @@ func deserialize(input *os.File, start_offset int64) (int64, *deferredIO, error)
         offset, _ := input.Seek(start_offset, 0)
         return offset, newFreeSpace(0), err
     }
+    utils.Print("STORAGE", "   metadata = %d @ %d", metadata_length, offset)
     remaining -= int32Size
     offset += int64(int32Size)
 
@@ -473,6 +487,7 @@ func deserialize(input *os.File, start_offset int64) (int64, *deferredIO, error)
     offset += int64(int32Size)
 
     // Grab the current offset.
+    utils.Print("STORAGE", "   data = %d @ %d", data_length, offset)
     input_offset := offset
 
     // Construct our function for reading data.

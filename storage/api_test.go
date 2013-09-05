@@ -122,10 +122,10 @@ func doBenchmark(b *testing.B, workers int, ops int, unique bool, data_len int, 
                     b.Fail()
                 }
                 if bytes.Compare(last_data[i], store_data) != 0 {
-                    //b.Fail()
+                    b.Fail()
                 }
                 if bytes.Compare(last_metadata[i], store_metadata) != 0 {
-                    //b.Fail()
+                    b.Fail()
                 }
                 done <- true
             }(i)
@@ -136,7 +136,7 @@ func doBenchmark(b *testing.B, workers int, ops int, unique bool, data_len int, 
             <-done
         }
     } else {
-        found := true //false
+        found := false
         store_metadata, store_data, err := store.Read("a")
         if err != nil {
             b.Fail()

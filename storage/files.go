@@ -142,9 +142,8 @@ func (l *logFile) Write(dio *deferredIO) (*logRecord, error) {
     // and add the chunk to our list of chunks.
     if remaining > 0 {
         free_remaining := remaining - int64(int32Size)
-        free_offset := offset + int64(int32Size) + int64(required)
         clear(l.file, end_offset, int32(free_remaining))
-        l.chunks = append(l.chunks, chunk{free_offset, free_remaining})
+        l.chunks = append(l.chunks, chunk{end_offset, free_remaining})
     }
 
     // Do the actual write.
@@ -289,7 +288,7 @@ func (l *logRecord) Delete() error {
     // Merge it with any existing chunks by
     // popping them out of the list and keep going.
     data_length, padding := dio.usage()
-    free_length := data_length+padding
+    free_length := data_length + padding
     current := chunk{l.offset, int64(free_length)}
 
     for {

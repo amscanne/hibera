@@ -69,19 +69,19 @@ func (l *logManager) loadData() error {
 
         if metadata != nil {
             // Set the latest in the file.
-            utils.Print("STORAGE", "Loading data record '%s'...", key)
             l.data_records[key] = record
+            utils.Print("STORAGE", "Saved data record '%s'.", key)
         } else {
             // Clear the records.
-            utils.Print("STORAGE", "Deleting data record '%s'...", key)
             delete(l.data_records, key)
             record.Delete()
+            utils.Print("STORAGE", "Deleted data record '%s'.", key)
         }
 
         // Remove the "older" record (see above).
         if has_data_rec {
-            utils.Print("STORAGE", "Deleting original record '%s'...", key)
             orig_data_rec.Delete()
+            utils.Print("STORAGE", "Deleted original record '%s'.", key)
         }
     }
 

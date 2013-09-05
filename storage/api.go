@@ -37,8 +37,20 @@ func (s *Store) WritePromise(id string, input *os.File, metadata []byte, length 
     return <-upd.result
 }
 
-func (s *Store) ReadPromise(id string) ([]byte, int32, func(*os.File, *int64) error, func(), error) {
+func (s *Store) Read(id string) ([]byte, []byte, error) {
     utils.Print("STORAGE", "READ %s", id)
+
+    record, ok := s.logs.records[id]
+    if ok {
+        _, metadata, data, err := record.Read()
+        return metadata, data, err
+    }
+
+    return nil, nil, nil
+}
+
+func (s *Store) ReadPromise(id string) ([]byte, int32, func(*os.File, *int64) error, func(), error) {
+    utils.Print("STORAGE", "READPROMISE %s", id)
 
     record, ok := s.logs.records[id]
     if ok {
@@ -47,19 +59,6 @@ func (s *Store) ReadPromise(id string) ([]byte, int32, func(*os.File, *int64) er
     }
 
     return nil, 0, nop_read, nop_cancel, nil
-}
-
-func (s *Store) Read(id string) ([]byte, []byte, error) {
-    utils.Print("STORAGE", "READ %s", id)
-
-    record, ok := s.logs.records[id]
-    if ok {
-        _, metadata, data, err := record.Read()
-        utils.Print("STORAGE", "DATA length=%d", len(data))
-        return metadata, data, err
-    }
-
-    return nil, nil, nil
 }
 
 func (s *Store) Delete(id string) error {

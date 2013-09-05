@@ -7,10 +7,10 @@ import (
     "log"
     "math/rand"
     "os"
-    "sort"
-    "time"
     "runtime"
     "runtime/pprof"
+    "sort"
+    "time"
 )
 
 var Flags = flag.NewFlagSet("hibera", flag.ExitOnError)
