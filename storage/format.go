@@ -4,9 +4,12 @@ import (
     "bytes"
     "encoding/binary"
     "errors"
+    "fmt"
+    "hibera/utils"
     "io"
     "log"
     "os"
+    "syscall"
 )
 
 // Magic numbers.
@@ -19,7 +22,7 @@ var magic2 = int32(0x78cd3928)
 // prevent weird manipulations when using
 // the unsafe module. The size is 4 bytes,
 // it's not going to change.
-var int32_size = uint64(4)
+var int32_size = int32(4)
 
 // The alignment of the file.
 // We always ensure that records start and
@@ -30,7 +33,37 @@ var int32_size = uint64(4)
 // chunks than a single header being left.
 var alignment = int32_size
 
+// Error returned when free space is deserialized.
+var freeSpace = errors.New("free space")
+var lengthMismatch = errors.New("length mismatch")
+
+// I/O is deferred for data entries.
+type deferredIO struct {
+    // The key for this entry.
+    key string
+
+    // Metadata (is read/written directly).
+    metadata []byte
+
+    // The length of the data. Must be fixed.
+    length int32
+
+    // The function to read/write the data.
+    run func(*os.File, *int64) ([]byte, error)
+}
+
+func (dio *deferredIO) String() string {
+    return fmt.Sprintf("key=%s metadata=%d length=%d",
+        dio.key, len(dio.metadata), dio.length)
+}
+
+func newFreeSpace(length int32) *deferredIO {
+    return &deferredIO{"", nil, length, nop_run}
+}
+
 func writeMagic(output *os.File) (int64, error) {
+
+    // Write the magic numbers.
     err := binary.Write(output, binary.LittleEndian, magic1)
     if err != nil {
         return -1, err
@@ -45,8 +78,11 @@ func writeMagic(output *os.File) (int64, error) {
 }
 
 func readMagic(input *os.File) (int64, error) {
+
     var test_magic1 int32
     var test_magic2 int32
+
+    // Read the magic numbers.
     err := binary.Read(input, binary.LittleEndian, &test_magic1)
     if err != nil {
         return -1, err
@@ -65,39 +101,34 @@ func readMagic(input *os.File) (int64, error) {
     return input.Seek(0, 1)
 }
 
-func usage(ent *entry) uint64 {
+func (dio *deferredIO) usage() (int32, int32) {
 
     // NOTE: We encode nil as length -1.
     // So the usage is the same as a zero length
     // array, except it's a special encoding that
     // is used internally to signify a delete (as
     // opposed to just setting data to nil).
-    key_len := len([]byte(ent.key))
-    var data_len int
-    if ent.value.data == nil {
-        data_len = 0
-    } else {
-        data_len = len(ent.value.data)
-    }
+    key_len := len([]byte(dio.key))
     var metadata_len int
-    if ent.value.metadata == nil {
+    if dio.metadata == nil {
         metadata_len = 0
     } else {
-        metadata_len = len(ent.value.metadata)
+        metadata_len = len(dio.metadata)
     }
 
     // Compute the encoded size.
-    length := int32_size + uint64(key_len) +
-        int32_size + uint64(data_len) +
-        int32_size + uint64(metadata_len)
+    length := int32_size + int32(key_len) +
+        int32_size + int32(dio.length) +
+        int32_size + int32(metadata_len)
 
     // Adjust it to the alignment.
-    length += (alignment - (length % alignment)) % alignment
+    padding := (alignment - (length % alignment)) % alignment
 
-    return length
+    return length, padding
 }
 
-func clear(output *os.File, length uint64) error {
+func clear(output *os.File, length int32) error {
+    utils.Print("STORAGE", "Clearing record: %d bytes.", length)
 
     // Write our free space header.
     // Note that generally this space includes
@@ -107,126 +138,232 @@ func clear(output *os.File, length uint64) error {
     free_space := int32(-length)
     err := binary.Write(output, binary.LittleEndian, free_space)
     if err != nil {
-        log.Print("Error writing free space: ", err)
         return err
     }
 
     return nil
 }
 
-func serialize(output *os.File, ent *entry) error {
+func serialize(output *os.File, dio *deferredIO) (func() error, error) {
+    utils.Print("STORAGE", "Writing record: %s.", dio.String())
 
     // Get the current offset.
     offset, err := output.Seek(0, 1)
     if err != nil {
-        log.Print("Error seeking: ", err)
-        return err
+        return nop_io, err
     }
 
     // Do the encoding.
-    length := usage(ent)
-    encoded := bytes.NewBuffer(make([]byte, 0, length))
+    // NOTE: We see the size of the encoding buffer to
+    // the size of everything except the actual content.
+    length, padding := dio.usage()
+    encoded := bytes.NewBuffer(make([]byte, 0, length-dio.length))
+    header := bytes.NewBuffer(make([]byte, 0, int32_size))
 
-    doEncode := func(data []byte) error {
-        if data == nil {
-            // See NOTE above in usage().
-            // We encode nil as length -1.
-            return binary.Write(encoded, binary.LittleEndian, int32(-1))
-        }
-        err := binary.Write(encoded, binary.LittleEndian, int32(len(data)))
+    // Ensure that the file size is sufficient.
+    // We never shrink files. This ensures that we won't
+    // trip over anyones toes when we have multiple outstanding
+    // reads and writes to the underlying data store.
+    info, err := output.Stat()
+    if err != nil {
+        return nop_io, err
+    }
+    if offset+int64(int32_size)+int64(length)+int64(padding) < info.Size() {
+        err = output.Truncate(offset + int64(int32_size) + int64(length) + int64(padding))
         if err != nil {
-            log.Print("Error encoding length: ", err)
+            return nop_io, err
+        }
+    }
+
+    // Encode the key.
+    key_bytes := []byte(dio.key)
+    err = binary.Write(encoded, binary.LittleEndian, int32(len(key_bytes)))
+    if err != nil {
+        return nop_io, err
+    }
+    for n := 0; n < len(key_bytes); {
+        written, err := encoded.Write(key_bytes[n:])
+        if err != nil {
+            return nop_io, err
+        }
+        n += written
+    }
+
+    // Encode metadata.
+    if dio.metadata == nil {
+        // See NOTE above in usage().
+        // We encode nil as length -1.
+        err = binary.Write(encoded, binary.LittleEndian, int32(-1))
+    } else {
+        err = binary.Write(encoded, binary.LittleEndian, int32(len(dio.metadata)))
+    }
+    if err != nil {
+        return nop_io, err
+    }
+    for n := 0; n < len(dio.metadata); {
+        written, err := encoded.Write(dio.metadata[n:])
+        if err != nil {
+            return nop_io, err
+        }
+        n += written
+    }
+
+    // Encode data length.
+    // NOTE: This just encodes the data length,
+    // not the actual data. This is taken care of
+    // indirectly below (through sendfile).
+    err = binary.Write(encoded, binary.LittleEndian, int32(dio.length))
+    if err != nil {
+        return nop_io, err
+    }
+
+    // Simulate a cleared header.
+    // This is done first to avoid any race conditions.
+    err = clear(output, length+padding)
+    if err != nil {
+        return nop_io, err
+    }
+
+    // Write the full buffer.
+    // This includes key + metadata + (data length).
+    for n := 0; n < len(encoded.Bytes()); {
+        written, err := output.Write(encoded.Bytes()[n:])
+        if err != nil {
+            return nop_io, err
+        }
+        n += written
+    }
+
+    // Encode the header.
+    err = binary.Write(header, binary.LittleEndian, int32(length+padding))
+    if err != nil {
+        return nop_io, err
+    }
+    header_bytes := header.Bytes()
+
+    // Get the current offset.
+    header_offset := offset
+    output_offset := offset + int64(int32_size) + int64(len(encoded.Bytes()))
+
+    // Generate a closure for actually writing the data.
+    run := func() error {
+        data, err := dio.run(output, &output_offset)
+        if err != nil {
             return err
         }
-        for n := 0; n < len(data); {
-            written, err := encoded.Write(data[n:])
+
+        // Write the data if the run didn't handle it.
+        if data != nil {
+            if len(data) != int(dio.length) {
+                return lengthMismatch
+            }
+            for n := 0; n < len(data); {
+                written, err := syscall.Pwrite(int(output.Fd()), data[n:], output_offset)
+                if err != nil {
+                    return err
+                }
+                output_offset += int64(written)
+                n += written
+            }
+        }
+
+        // Write our real header.
+        for n := 0; n < len(header_bytes); {
+            written, err := syscall.Pwrite(int(output.Fd()), header_bytes[n:], header_offset)
             if err != nil {
-                log.Print("Error encoding data: ", err)
                 return err
             }
+            header_offset += int64(written)
             n += written
         }
         return nil
     }
 
-    err = doEncode([]byte(ent.key))
-    if err != nil {
-        return err
-    }
-
-    err = doEncode(ent.value.data)
-    if err != nil {
-        return err
-    }
-
-    err = doEncode(ent.value.metadata)
-    if err != nil {
-        return err
-    }
-
-    // Pad the rest of the data.
-    // NOTE: This is only necessary to ensure that the file
-    // is the appropriate length (including the entire record).
-    padding := make([]byte, length-uint64(len(encoded.Bytes())))
-    for n := 0; n < len(padding); {
-        written, err := encoded.Write(padding[n:])
-        if err != nil {
-            log.Print("Error padding data: ", err)
-            return err
-        }
-        n += written
-    }
-
-    // Simulate a cleared header.
-    // NOTE: Because usage() includes alignment,
-    // this will clear the pad byte at the end.
-    err = clear(output, length)
-    if err != nil {
-        return err
-    }
-
-    // Write the full buffer.
-    for n := 0; n < len(encoded.Bytes()); {
-        written, err := output.Write(encoded.Bytes()[n:])
-        if err != nil {
-            log.Print("Error writing full entry: ", err)
-            return err
-        }
-        n += written
-    }
-
-    // Return the original offset.
-    offset, err = output.Seek(offset, 0)
-    if err != nil {
-        log.Print("Error seeking: ", err)
-        return err
-    }
-
-    // Write our real header.
-    // NOTE: This includes the padding required for the entry.
-    // The encoded.Bytes() may be up to (alignment-1) bytes less.
-    err = binary.Write(output, binary.LittleEndian, int32(length))
-    if err != nil {
-        log.Print("Error writing entry length: ", err)
-        return err
-    }
-
-    // Go to the end of the record.
-    offset, err = output.Seek(int64(length), 1)
-    if err != nil {
-        log.Print("Error seeking: ", err)
-    }
-
-    return nil
+    // Jump to the end of the record.
+    _, err = output.Seek(offset+int64(length+padding), 0)
+    return run, err
 }
 
-func deserialize(input *os.File, ent *entry) (uint64, uint64, error) {
+func generateSplice(input *os.File, length int32, input_offset *int64) func(*os.File, *int64) ([]byte, error) {
+
+    run := func(output *os.File, output_offset *int64) ([]byte, error) {
+
+        do_manual := false
+
+        for n := 0; n < int(length); {
+            // Splice the two files.
+            done, err := syscall.Splice(
+                int(input.Fd()), input_offset,
+                int(output.Fd()), output_offset,
+                int(length-int32(n)), 0)
+
+            if (err == io.EOF || err == io.ErrUnexpectedEOF) && (int64(n)+done) == int64(length) {
+                // Everything has been sent.
+            } else if err != nil && n == 0 {
+                // Try a manual read/write below.
+                do_manual = true
+                break
+            } else if err != nil {
+                log.Printf("Error splicing data (%d/%d bytes): %s",
+                    int64(n)+done, length, err.Error())
+                return nil, err
+            }
+            n += int(done)
+        }
+
+        // Okay, so at this point we've got a run() in the
+        // deferred IO object that will do a Splice given
+        // another file. Unfortunately, our other file is
+        // *not* a pipe -- so we need to do some manually
+        // copying of bytes here. This sucks, but again, I
+        // hope that this step is *not* in the critical path.
+        if do_manual {
+
+            // Calculate a good buffer size.
+            buf_length := length
+            if buf_length >= 4096 {
+                buf_length = 4096
+            }
+            buffer := make([]byte, buf_length, buf_length)
+
+            for n := 0; n < int(length); {
+
+                // Read a page.
+                read, err := syscall.Pread(int(input.Fd()), buffer, *input_offset)
+                if (err == io.EOF || err == io.ErrUnexpectedEOF) && (n+read) == int(length) {
+                    // We're still okay, so long as we've got what we need.
+                } else if err != nil {
+                    return nil, err
+                }
+
+                // Write the page.
+                for m := 0; m < read; {
+                    written, err := syscall.Pwrite(int(output.Fd()), buffer[m:read], *output_offset)
+                    if err != nil {
+                        return nil, err
+                    }
+                    *output_offset += int64(written)
+                    m += written
+                }
+
+                *input_offset += int64(read)
+                n += read
+            }
+        }
+
+        return nil, nil
+    }
+
+    return run
+}
+
+func deserialize(input *os.File) (*deferredIO, error) {
 
     // Read the header.
     length := int32(0)
     err := binary.Read(input, binary.LittleEndian, &length)
     if err != nil {
-        return uint64(0), uint64(0), err
+        return newFreeSpace(0), err
     }
 
     // Check if it's free space.
@@ -234,71 +371,97 @@ func deserialize(input *os.File, ent *entry) (uint64, uint64, error) {
         // Skip ahead past the free space.
         length = -length
         _, err = input.Seek(int64(length), 1)
-        return uint64(0), uint64(length), err
+        return newFreeSpace(length), freeSpace
     }
 
-    // Read the object.
-    data := make([]byte, length, length)
-    n, err := io.ReadFull(input, data)
-    if (err == io.EOF || err == io.ErrUnexpectedEOF) && n == int(length) {
+    // Read the key.
+    var key_length int32
+    var key string
+
+    err = binary.Read(input, binary.LittleEndian, &key_length)
+    if err != nil {
+        return newFreeSpace(0), err
+    }
+
+    key_bytes := make([]byte, key_length, key_length)
+    n, err := io.ReadFull(input, key_bytes)
+    if (err == io.EOF || err == io.ErrUnexpectedEOF) && n == int(key_length) {
         // Perfect. We got exactly this object.
         err = nil
     } else if err == io.ErrUnexpectedEOF {
-        return uint64(length), uint64(0), io.EOF
+        return newFreeSpace(0), io.EOF
     } else if err != nil {
-        return uint64(length), uint64(0), err
+        return newFreeSpace(0), err
+    }
+    key = string(key_bytes)
+
+    // Read the metadata.
+    var metadata_length int32
+    var metadata []byte
+
+    err = binary.Read(input, binary.LittleEndian, &metadata_length)
+    if err != nil {
+        return newFreeSpace(0), err
     }
 
-    // Do the decoding.
-    encoded := bytes.NewBuffer(data)
-    doDecode := func() ([]byte, error) {
-        var length int32
-        err := binary.Read(encoded, binary.LittleEndian, &length)
-        if err == io.EOF {
-            // Okay. We still read the object,
-            // other it would be ErrUnexpectedEOF.
+    // See NOTE above in usage(). We encode nil as length -1.
+    if metadata_length == int32(-1) {
+        metadata = nil
+    } else {
+        metadata = make([]byte, metadata_length, metadata_length)
+        n, err := io.ReadFull(input, metadata)
+        if (err == io.EOF || err == io.ErrUnexpectedEOF) && n == int(metadata_length) {
+            // Perfect. We got exactly this object.
+            err = nil
+        } else if err == io.ErrUnexpectedEOF {
+            return newFreeSpace(0), io.EOF
         } else if err != nil {
-            log.Print("Error decoding length: ", err)
-            return nil, err
+            return newFreeSpace(0), err
         }
-        if length == int32(-1) {
-            // See NOTE above in usage().
-            // We encode nil as length -1.
-            return nil, nil
-        }
-        blob := make([]byte, length, length)
-        for n := 0; n < len(blob); {
-            read, err := encoded.Read(blob[n:])
-            if (err == io.EOF || err == io.ErrUnexpectedEOF) && (n+read) == int(length) {
-                // This is a really annoying way of passing EOF.
-                // Same as other two cases above, we've read the
-                // object we just happen to be at the end of file.
-            } else if err != nil {
-                log.Printf("Error decoding data (%d/%d bytes read): %s",
-                    n+read, length, err.Error())
-                return nil, err
+    }
+
+    // Read the data length.
+    var data_length int32
+    err = binary.Read(input, binary.LittleEndian, &data_length)
+    if err != nil {
+        return newFreeSpace(0), err
+    }
+
+    // Grab the current offset.
+    // This is required for generating the closure below.
+    input_offset, err := input.Seek(0, 1)
+    if err != nil {
+        return nil, err
+    }
+
+    // Construct our function for reading data.
+    run := func(output *os.File, output_offset *int64) ([]byte, error) {
+        if output == nil {
+            // Read the file directly.
+            data := make([]byte, data_length, data_length)
+            for n := 0; n < len(data); {
+                read, err := syscall.Pread(int(input.Fd()), data[n:], input_offset)
+                if (err == io.EOF || err == io.ErrUnexpectedEOF) && (n+read) == int(data_length) {
+                    // This is a really annoying way of passing EOF.
+                    // Same as other two cases above, we've read the
+                    // object we just happen to be at the end of file.
+                } else if err != nil {
+                    log.Printf("Error decoding data (%d/%d bytes read): %s",
+                        n+read, data_length, err.Error())
+                    return nil, err
+                }
+                input_offset += int64(read)
+                n += read
             }
-            n += read
+            return data, nil
+        } else {
+            // Use sendfile to send the file.
+            return generateSplice(input, data_length, &input_offset)(output, output_offset)
         }
-        return blob, nil
     }
 
-    key_bytes, err := doDecode()
-    if err != nil {
-        return uint64(length), uint64(0), err
-    }
-    ent.key = key(key_bytes)
-
-    ent.value.data, err = doDecode()
-    if err != nil {
-        return uint64(length), uint64(0), err
-    }
-
-    ent.value.metadata, err = doDecode()
-    if err != nil {
-        return uint64(length), uint64(0), err
-    }
-
-    // Return the final result.
-    return uint64(length), uint64(0), nil
+    // Construct our deferredio.
+    dio := &deferredIO{key, metadata, data_length, run}
+    utils.Print("STORAGE", "Loaded record: %s.", dio.String())
+    return dio, nil
 }

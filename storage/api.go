@@ -2,27 +2,56 @@ package storage
 
 import (
     "hibera/utils"
+    "os"
 )
 
-func (s *Store) Write(id string, data []byte, metadata []byte) error {
+func (s *Store) Write(id string, metadata []byte, data []byte) error {
     utils.Print("STORAGE", "WRITE %s (len %d)", id, len(data))
-    ent := entry{key(id), value{data, metadata}}
-    upd := &update{ent, make(chan error, 1)}
+
+    run := func(output *os.File, offset *int64) ([]byte, error) {
+        return data, nil
+    }
+
+    // Submit the request.
+    dio := &deferredIO{id, metadata, int32(len(data)), run}
+    upd := &update{dio, make(chan error, 1)}
     s.pending <- upd
     return <-upd.result
 }
 
+func (s *Store) WritePromise(id string, input *os.File, length int32, metadata []byte) error {
+    utils.Print("STORAGE", "WRITEPROMISE %s (len %d)", id, length)
+
+    run := generateSplice(input, length, nil)
+
+    // Submit the request.
+    dio := &deferredIO{id, metadata, length, run}
+    upd := &update{dio, make(chan error, 1)}
+    s.pending <- upd
+    return <-upd.result
+}
+
+func (s *Store) ReadPromise(id string) ([]byte, int32, func(*os.File, *int64) error, func(), error) {
+    utils.Print("STORAGE", "READ %s", id)
+
+    record, ok := s.logs.records[id]
+    if ok {
+        _, metadata, length, read, cancel, err := record.ReadFD()
+        return metadata, length, read, cancel, err
+    }
+
+    return nil, 0, nop_read, nop_cancel, nil
+}
+
 func (s *Store) Read(id string) ([]byte, []byte, error) {
     utils.Print("STORAGE", "READ %s", id)
-    record, ok := s.logs.records[key(id)]
+
+    record, ok := s.logs.records[id]
     if ok {
-        var ent entry
-        _, err := record.Read(&ent)
-        if err != nil {
-            return nil, nil, err
-        }
-        return ent.value.data, ent.value.metadata, nil
+        _, metadata, data, err := record.Read()
+        return metadata, data, err
     }
+
     return nil, nil, nil
 }
 

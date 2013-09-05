@@ -23,7 +23,7 @@ var Deadline = 50 * time.Millisecond
 
 // An update to the database.
 type update struct {
-    entry
+    dio    *deferredIO
     result chan error
 }
 
@@ -78,7 +78,7 @@ func (s *Store) flusher() error {
         atomic.AddUint64(&s.handled, 1)
 
         // Write out the data.
-        err := s.logs.writeEntry(&upd.entry, logfile)
+        err := s.logs.writeEntry(upd.dio, logfile)
 
         // Notify that an error occured.
         if err != nil {

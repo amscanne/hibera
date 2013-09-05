@@ -375,7 +375,7 @@ func (d *Data) SyncLeave(id EphemId, ns Namespace, key Key, name string) (Revisi
 
 func (d *Data) DataGet(ns Namespace, key Key) ([]byte, Revision, error) {
     // Read the local value available.
-    data, metadata, err := d.store.Read(toStoreKey(ns, key))
+    metadata, data, err := d.store.Read(toStoreKey(ns, key))
     if err != nil {
         return nil, NoRevision, err
     }
@@ -394,7 +394,7 @@ func (d *Data) DataWatch(
 
     if id > 0 {
         getrev := func() (Revision, error) {
-            _, metadata, err := d.store.Read(toStoreKey(ns, key))
+            metadata, _, err := d.store.Read(toStoreKey(ns, key))
             return RevisionFromBytes(metadata), err
         }
         rev, err := d.doWait(id, ns, key, lock, rev, timeout, getrev, notifier, valid)
@@ -419,7 +419,7 @@ func (d *Data) DataModify(
     }()
 
     // Read the existing data.
-    _, metadata, err := d.store.Read(toStoreKey(ns, key))
+    metadata, _, err := d.store.Read(toStoreKey(ns, key))
     if err != nil {
         return NoRevision, err
     }
@@ -446,7 +446,7 @@ func (d *Data) DataSet(ns Namespace, key Key, rev Revision, value []byte) (Revis
     }
 
     return d.DataModify(ns, key, rev, func(rev Revision) error {
-        return d.store.Write(toStoreKey(ns, key), value, rev.Bytes())
+        return d.store.Write(toStoreKey(ns, key), rev.Bytes(), value)
     })
 }
 

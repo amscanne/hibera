@@ -80,9 +80,9 @@ func doBenchmark(b *testing.B, workers int, ops int, unique bool, data_len int, 
 
                 if unique {
                     key := fmt.Sprintf("a.%d", i)
-                    store.Write(key, data, metadata)
+                    store.Write(key, metadata, data)
                 } else {
-                    store.Write("a", data, metadata)
+                    store.Write("a", metadata, data)
                 }
 
                 last_data[i] = data
@@ -116,7 +116,7 @@ func doBenchmark(b *testing.B, workers int, ops int, unique bool, data_len int, 
         for i := 0; i < workers; i += 1 {
             go func(i int) {
                 key := fmt.Sprintf("a.%d", i)
-                store_data, store_metadata, err := store.Read(key)
+                store_metadata, store_data, err := store.Read(key)
                 if err != nil {
                     b.Fail()
                 }
@@ -134,7 +134,7 @@ func doBenchmark(b *testing.B, workers int, ops int, unique bool, data_len int, 
         }
     } else {
         found := false
-        store_data, store_metadata, err := store.Read("a")
+        store_metadata, store_data, err := store.Read("a")
         if err != nil {
             b.Fail()
         } else {

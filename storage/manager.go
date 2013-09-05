@@ -22,12 +22,12 @@ type logManager struct {
     dataPath string
 
     data         *logFile
-    data_records map[key]*logRecord
+    data_records map[string]*logRecord
 
     log_size   int64
     log_number uint64
 
-    records map[key]*logRecord
+    records map[string]*logRecord
 }
 
 func (l *logManager) loadData() error {
@@ -42,12 +42,14 @@ func (l *logManager) loadData() error {
     }
 
     // Reset records.
-    l.data_records = make(map[key]*logRecord)
+    l.data_records = make(map[string]*logRecord)
 
     // Set just the data record.
     for _, record := range records {
-        var ent entry
-        _, err = record.ReadUnsafe(&ent)
+
+        // Do a full read, just to ensure sanity.
+        key, metadata, _, err := record.Read()
+
         if err != nil {
             utils.Print("STORAGE", "Skipping record: %s", err)
             continue
@@ -63,22 +65,22 @@ func (l *logManager) loadData() error {
         // and the Delete() in squashLogsUntil(). We know then,
         // that the original log with the new record is still
         // around and we will read it shortly.
-        orig_data_rec, has_data_rec := l.data_records[ent.key]
+        orig_data_rec, has_data_rec := l.data_records[key]
 
-        if ent.value.data != nil || ent.value.metadata != nil {
+        if metadata != nil {
             // Set the latest in the file.
-            utils.Print("STORAGE", "Loading data record '%s'...", ent.key)
-            l.data_records[ent.key] = record
+            utils.Print("STORAGE", "Loading data record '%s'...", key)
+            l.data_records[key] = record
         } else {
             // Clear the records.
-            utils.Print("STORAGE", "Deleting data record '%s'...", ent.key)
-            delete(l.data_records, ent.key)
+            utils.Print("STORAGE", "Deleting data record '%s'...", key)
+            delete(l.data_records, key)
             record.Delete()
         }
 
         // Remove the "older" record (see above).
         if has_data_rec {
-            utils.Print("STORAGE", "Deleting original record '%s'...", ent.key)
+            utils.Print("STORAGE", "Deleting original record '%s'...", key)
             orig_data_rec.Delete()
         }
     }
@@ -162,8 +164,8 @@ func (l *logManager) loadLogs() error {
 
         // Set the current record.
         for _, record := range records {
-            var ent entry
-            _, err = record.ReadUnsafe(&ent)
+            // Do a full read, just to ensure sanity.
+            key, _, _, err := record.Read()
 
             // The end of the file may have
             // been corrupted, so we let invalid
@@ -173,10 +175,10 @@ func (l *logManager) loadLogs() error {
                 continue
             }
 
-            orig_rec, has_orig_rec := l.records[ent.key]
+            orig_rec, has_orig_rec := l.records[key]
 
             // Save the new record.
-            l.records[ent.key] = record
+            l.records[key] = record
 
             // If there was an original record,
             // unlike the data case we don't delete it.
@@ -275,16 +277,16 @@ func (l *logManager) squashLogsUntil(limit uint64) error {
         }
 
         // Copy all logs down to the data layer.
-        ent, err := record.Copy(l.data)
+        err := record.Copy(l.data)
         if err != nil {
             continue
         }
-        utils.Print("STORAGE", "New data record '%s'...", ent.key)
+        utils.Print("STORAGE", "New data record '%s'...", key)
 
         // Remove the original record.
         orig_data, has_orig_data := l.data_records[key]
         if has_orig_data {
-            utils.Print("STORAGE", "Deleting original data record '%s'...", ent.key)
+            utils.Print("STORAGE", "Deleting original data record '%s'...", key)
             orig_data.Delete()
         }
 
@@ -315,32 +317,34 @@ func (l *logManager) squashLogs() error {
     return l.squashLogsUntil(limit)
 }
 
-func (l *logManager) writeEntry(ent *entry, logfile *logFile) error {
+func (l *logManager) writeEntry(io *deferredIO, logfile *logFile) error {
 
     // Make sure the record is serialized.
-    record, err := logfile.Write(ent)
+    record, err := logfile.Write(io)
     if err != nil {
+        utils.Print("STORAGE", "Error logging record '%s': %s",
+            io.key, err.Error())
         return err
     }
-    utils.Print("STORAGE", "New log record '%s'...", ent.key)
+    utils.Print("STORAGE", "New log record '%s'...", io.key)
 
     // Grab the original record.
-    orig_rec, has_orig_rec := l.records[ent.key]
+    orig_rec, has_orig_rec := l.records[io.key]
 
     // Was this a delete? If so, we keep the record in
     // the log (so that we can be sure it will survive a
     // crash) but we remove the key from the list of records.
-    if ent.value.data == nil && ent.value.metadata == nil {
-        utils.Print("STORAGE", "Dropping record '%s'...", ent.key)
-        delete(l.records, ent.key)
+    if io.metadata == nil {
+        utils.Print("STORAGE", "Dropping record '%s'...", io.key)
+        delete(l.records, io.key)
         record.Discard()
     } else {
-        l.records[ent.key] = record
+        l.records[io.key] = record
     }
 
     // Discard the original reference.
     if has_orig_rec {
-        utils.Print("STORAGE", "Discarding original record '%s'...", ent.key)
+        utils.Print("STORAGE", "Discarding original record '%s'...", io.key)
         orig_rec.Discard()
     }
 
@@ -351,8 +355,8 @@ func NewLogManager(logPath string, dataPath string) (*logManager, error) {
     l := new(logManager)
     l.logPath = logPath
     l.dataPath = dataPath
-    l.records = make(map[key]*logRecord)
-    l.data_records = make(map[key]*logRecord)
+    l.records = make(map[string]*logRecord)
+    l.data_records = make(map[string]*logRecord)
 
     // Create the directories.
     err := os.MkdirAll(l.dataPath, 0644)
