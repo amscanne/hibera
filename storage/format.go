@@ -45,7 +45,31 @@ var lengthMismatch = errors.New("length mismatch")
 // Error returned when magic number doesn't match.
 var invalidMagic = errors.New("invalid magic number")
 
-// I/O is deferred for data entries.
+// Generated function that performs real I/O.
+type IOFunc func(*os.File, *int64) ([]byte, error)
+func IOFuncNOP(*os.File, *int64) ([]byte, error) {
+    return nil, nil
+}
+
+// Generated function to be called to do given work.
+type IOWork func() error
+func IOWorkNOP() error {
+    return nil
+}
+
+// I/O can be deferred for data entries.
+//
+// Instead of performing real operations in the
+// storage engine, we generally return a function
+// that allows the user to perform real I/O at a
+// later point. This is done so that the server 
+// (for example) could efficiently implement HEAD.
+//
+// Also, I/O is done efficiently by accessing the
+// underlying socket once headers have been pushed
+// out. And it happens when no critical locks are
+// held.
+
 type deferredIO struct {
     // The key for this entry.
     key string
@@ -57,7 +81,7 @@ type deferredIO struct {
     length int32
 
     // The function to read/write the data.
-    run func(*os.File, *int64) ([]byte, error)
+    run IOFunc
 }
 
 func (dio *deferredIO) String() string {
@@ -67,7 +91,7 @@ func (dio *deferredIO) String() string {
 }
 
 func newFreeSpace(length int32) *deferredIO {
-    return &deferredIO{"", nil, length, nop_run}
+    return &deferredIO{"", nil, length, IOFuncNOP}
 }
 
 func writeMagic(output *os.File) (int64, error) {
@@ -180,7 +204,7 @@ func clear(output *os.File, offset int64, length int32) (int64, error) {
     return offset, nil
 }
 
-func serialize(output *os.File, offset int64, dio *deferredIO) (int64, func() error, error) {
+func serialize(output *os.File, offset int64, dio *deferredIO) (int64, IOWork, error) {
     utils.Print("STORAGE", "Writing record: %s => %s @ %d",
         dio.String(), output.Name(), offset)
 
@@ -195,12 +219,12 @@ func serialize(output *os.File, offset int64, dio *deferredIO) (int64, func() er
     key_bytes := []byte(dio.key)
     err := binary.Write(encoded, binary.LittleEndian, int32(len(key_bytes)))
     if err != nil {
-        return offset, nop_io, err
+        return offset, IOWorkNOP, err
     }
     for n := 0; n < len(key_bytes); {
         written, err := encoded.Write(key_bytes[n:])
         if err != nil {
-            return offset, nop_io, err
+            return offset, IOWorkNOP, err
         }
         n += written
     }
@@ -214,12 +238,12 @@ func serialize(output *os.File, offset int64, dio *deferredIO) (int64, func() er
         err = binary.Write(encoded, binary.LittleEndian, int32(len(dio.metadata)))
     }
     if err != nil {
-        return offset, nop_io, err
+        return offset, IOWorkNOP, err
     }
     for n := 0; n < len(dio.metadata); {
         written, err := encoded.Write(dio.metadata[n:])
         if err != nil {
-            return offset, nop_io, err
+            return offset, IOWorkNOP, err
         }
         n += written
     }
@@ -230,21 +254,21 @@ func serialize(output *os.File, offset int64, dio *deferredIO) (int64, func() er
     // indirectly below (through sendfile).
     err = binary.Write(encoded, binary.LittleEndian, int32(dio.length))
     if err != nil {
-        return offset, nop_io, err
+        return offset, IOWorkNOP, err
     }
 
     // Simulate a cleared header.
     // This is done first to avoid any race conditions.
     end_offset, err := clear(output, offset, int32(length+padding))
     if err != nil {
-        return end_offset, nop_io, err
+        return end_offset, IOWorkNOP, err
     }
 
     // Seek back to the start.
     _, err = output.Seek(offset+int64(int32Size), 0)
     if err != nil {
         offset, _ = output.Seek(offset, 0)
-        return offset, nop_io, err
+        return offset, IOWorkNOP, err
     }
 
     // Write the full buffer.
@@ -253,7 +277,7 @@ func serialize(output *os.File, offset int64, dio *deferredIO) (int64, func() er
         written, err := output.Write(encoded.Bytes()[n:])
         if err != nil {
             offset, _ = output.Seek(offset, 0)
-            return offset, nop_io, err
+            return offset, IOWorkNOP, err
         }
         n += written
     }
@@ -264,7 +288,7 @@ func serialize(output *os.File, offset int64, dio *deferredIO) (int64, func() er
     err = binary.Write(header, binary.LittleEndian, int32(length+padding))
     if err != nil {
         offset, _ = output.Seek(offset, 0)
-        return offset, nop_io, err
+        return offset, IOWorkNOP, err
     }
     header_bytes := header.Bytes()
 
@@ -315,7 +339,7 @@ func serialize(output *os.File, offset int64, dio *deferredIO) (int64, func() er
     return offset, run, err
 }
 
-func generateSplice(input *os.File, length int32, input_offset *int64) func(*os.File, *int64) ([]byte, error) {
+func generateSplice(input *os.File, length int32, input_offset *int64) IOFunc {
 
     run := func(output *os.File, output_offset *int64) ([]byte, error) {
 

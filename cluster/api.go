@@ -210,13 +210,7 @@ func (c *Cluster) DataSet(req Request, key core.Key, rev core.Revision, value []
     }
 
     if server {
-        return c.Data.DataSet(req.Namespace(), key, rev, value)
-    }
-
-    if rev.IsZero() {
-        // NOTE: Even if err != nil, the revision will be NoRevision.
-        _, rev, err = c.Data.DataGet(req.Namespace(), key)
-        rev = rev.Next()
+        return c.Data.DataSet(req.Namespace(), key, length, input, offset, rev, value)
     }
 
     // NOTE: We disallow clients setting the root keys.
@@ -224,7 +218,31 @@ func (c *Cluster) DataSet(req Request, key core.Key, rev core.Revision, value []
     if key == RootKey {
         return core.NoRevision, &PermissionError{key}
     }
-    return c.quorumSet(c.ring, req.Namespace(), key, rev, value)
+
+    if rev.IsZero() {
+        // NOTE: Even if err != nil, the revision will be NoRevision.
+        // We will try this only once. It's quite possible that this
+        // will conflict with some other client. However, clients that
+        // do not succeed will get a server error and will retry. So
+        // if you keep posting will 0, eventually you will set some key
+        // to whatever value you wanted.
+        _, _, done, rev, err = c.Data.DataGet(req.Namespace(), key)
+        if err != nil {
+            return core.NoRevision, err
+        }
+
+        // Cancel immediately, we only read the head.
+        done()
+
+        // Use the next given reivsion.
+        rev = rev.Next()
+    }
+
+    // Because quorum is going to open connections to multiple
+    // servers, it has to be capable of sending the value many
+    // times.  We can't splice() the socket, so we allow the
+    // quorum functions to use a cache as necessary to send data.
+    return c.quorumSet(c.ring, req.Namespace(), key, length, input, offset, rev, value)
 }
 
 func (c *Cluster) DataRemove(req Request, key core.Key, rev core.Revision) (core.Revision, error) {

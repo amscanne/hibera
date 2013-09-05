@@ -9,11 +9,14 @@ import (
     "sync/atomic"
 )
 
+// A chunk of free space within a log file.
 type chunk struct {
     offset int64
     length int64
 }
 
+// A logfile is simply a collection of chunks.
+// (Some of the chunks are free space and others are records).
 type logFile struct {
     file *os.File
     sync.Mutex
@@ -25,6 +28,13 @@ type logFile struct {
     number uint64
 }
 
+// Generated function to be called when I/O is done.
+type IODone func()
+func IODoneNOP() {
+}
+
+// A represents a piece of a logfile.
+// Active records maintain references on the logfile.
 type logRecord struct {
     log *logFile
     sync.RWMutex
@@ -153,6 +163,10 @@ func (l *logFile) Write(dio *deferredIO) (*logRecord, error) {
     l.Mutex.Unlock()
     err = run()
     if err != nil {
+        l.Mutex.Lock()
+        // We've already created this chunk so return it to the pool.
+        l.chunks = append(l.chunks, chunk{offset, int64(required)+int64(remaining)})
+        l.Mutex.Unlock()
         return nil, err
     }
 
@@ -169,7 +183,7 @@ func (l *logFile) Open() {
     atomic.AddInt32(&l.refs, 1)
 }
 
-func (l *logRecord) readGuarded() (*deferredIO, func(), error) {
+func (l *logRecord) readGuarded() (*deferredIO, IODone, error) {
     // Lock the file to guard for the seek().
     l.log.Mutex.Lock()
     defer l.log.Mutex.Unlock()
@@ -178,14 +192,14 @@ func (l *logRecord) readGuarded() (*deferredIO, func(), error) {
     offset, err := l.log.file.Seek(int64(l.offset), 0)
     if err != nil {
         utils.Print("STORAGE", "read seek (%d) failed?!: %s", l.offset, err.Error())
-        return nil, nop_cancel, err
+        return nil, IODoneNOP, err
     }
 
     // Deserialize the record.
     _, dio, err := deserialize(l.log.file, offset)
     if err != nil {
         utils.Print("STORAGE", "deserialize failed?!: %s", err.Error())
-        return nil, nop_cancel, err
+        return nil, IODoneNOP, err
     }
 
     // Guard the logfile against closing.
@@ -204,32 +218,31 @@ func (l *logRecord) readGuarded() (*deferredIO, func(), error) {
     return dio, finished, err
 }
 
-func (l *logRecord) ReadFD() (string, []byte, int32, func(*os.File, *int64) error, func(), error) {
+func (l *logRecord) ReadFile(output *os.File, offset *int64) (string, []byte, int32, IOWork, IODone, error) {
     l.RWMutex.RLock()
 
     // Get our deferred functions.
     dio, finished, err := l.readGuarded()
     if err != nil {
         l.RWMutex.Unlock()
-        return "", nil, 0, nop_read, nop_cancel, err
+        return "", nil, 0, IOWorkNOP, IODoneNOP, err
     }
 
     // Wrap the read function.
-    // NOTE: We cleverly use the closure here
+    // NOTE: We take advantage of the closure here
     // in order to protect users from doing mulitple
     // cancellations. This is because sometimes it's
     // difficult to know when you should (i.e. what
     // has gone wrong!). So you can do it all the time.
-    yes_done := false
+    done_did := false
     done := func() {
-        if !yes_done {
-            yes_done = true
+        if !done_did {
+            done_did = true
             l.RWMutex.RUnlock()
             finished()
         }
     }
-    read := func(output *os.File, offset *int64) error {
-        defer done()
+    read := func() error {
         _, err := dio.run(output, offset)
         return err
     }
