@@ -27,7 +27,7 @@ type logFile struct {
 
 type logRecord struct {
     log *logFile
-    sync.Mutex
+    sync.RWMutex
 
     offset int64
 }
@@ -85,7 +85,6 @@ func (l *logFile) Sync() {
 
 func (l *logFile) Write(dio *deferredIO) (*logRecord, error) {
     l.Mutex.Lock()
-    defer l.Mutex.Unlock()
 
     // Find a free chunk.
     var offset int64
@@ -110,6 +109,7 @@ func (l *logFile) Write(dio *deferredIO) (*logRecord, error) {
         var err error
         offset, err = l.file.Seek(offset, 0)
         if err != nil {
+            l.Mutex.Unlock()
             return nil, err
         }
 
@@ -126,33 +126,35 @@ func (l *logFile) Write(dio *deferredIO) (*logRecord, error) {
         var err error
         offset, err = l.file.Seek(0, 2)
         if err != nil {
+            l.Mutex.Unlock()
             return nil, err
         }
     }
 
     // Serialize the entry.
-    run, err := serialize(l.file, dio)
+    end_offset, run, err := serialize(l.file, offset, dio)
     if err != nil {
-        return nil, err
-    }
-
-    // Do the actual write.
-    // NOTE: The reason for this structure,
-    // should be obvious by looking at the locking.
-    l.Mutex.Unlock()
-    err = run()
-    l.Mutex.Lock()
-    if err != nil {
+        l.Mutex.Unlock()
         return nil, err
     }
 
     // Mark any remaining space as still free,
     // and add the chunk to our list of chunks.
     if remaining > 0 {
-        free_remaining := remaining - int64(int32_size)
-        free_offset := offset + int64(int32_size) + int64(required)
-        clear(l.file, int32(free_remaining))
+        free_remaining := remaining - int64(int32Size)
+        free_offset := offset + int64(int32Size) + int64(required)
+        clear(l.file, end_offset, int32(free_remaining))
         l.chunks = append(l.chunks, chunk{free_offset, free_remaining})
+    }
+
+    // Do the actual write.
+    // We do this unlocked, as the lock only gates
+    // finding chunks, clearing headers, etc. There
+    // is no need to have the lock gate the actual IO.
+    l.Mutex.Unlock()
+    err = run()
+    if err != nil {
+        return nil, err
     }
 
     return l.NewRecord(offset), nil
@@ -174,14 +176,16 @@ func (l *logRecord) readGuarded() (*deferredIO, func(), error) {
     defer l.log.Mutex.Unlock()
 
     // Seek to the appropriate offset.
-    _, err := l.log.file.Seek(int64(l.offset), 0)
+    offset, err := l.log.file.Seek(int64(l.offset), 0)
     if err != nil {
+        utils.Print("STORAGE", "read seek (%d) failed?!: %s", l.offset, err.Error())
         return nil, nop_cancel, err
     }
 
     // Deserialize the record.
-    dio, err := deserialize(l.log.file)
+    _, dio, err := deserialize(l.log.file, offset)
     if err != nil {
+        utils.Print("STORAGE", "deserialize failed?!: %s", err.Error())
         return nil, nop_cancel, err
     }
 
@@ -197,16 +201,17 @@ func (l *logRecord) readGuarded() (*deferredIO, func(), error) {
     finished := func() {
         this_log.Close()
     }
+
     return dio, finished, err
 }
 
 func (l *logRecord) ReadFD() (string, []byte, int32, func(*os.File, *int64) error, func(), error) {
-    l.Mutex.Lock()
+    l.RWMutex.RLock()
 
     // Get our deferred functions.
     dio, finished, err := l.readGuarded()
     if err != nil {
-        l.Mutex.Unlock()
+        l.RWMutex.Unlock()
         return "", nil, 0, nop_read, nop_cancel, err
     }
 
@@ -220,7 +225,7 @@ func (l *logRecord) ReadFD() (string, []byte, int32, func(*os.File, *int64) erro
     done := func() {
         if !yes_done {
             yes_done = true
-            l.Mutex.Unlock()
+            l.RWMutex.RUnlock()
             finished()
         }
     }
@@ -234,8 +239,8 @@ func (l *logRecord) ReadFD() (string, []byte, int32, func(*os.File, *int64) erro
 }
 
 func (l *logRecord) Read() (string, []byte, []byte, error) {
-    l.Mutex.Lock()
-    defer l.Mutex.Unlock()
+    l.RWMutex.RLock()
+    defer l.RWMutex.RUnlock()
 
     // Get our deferred functions.
     dio, finished, err := l.readGuarded()
@@ -261,8 +266,8 @@ func (l *logRecord) Delete() error {
     // This is to maximize performance. We can't
     // really do the same for delete(), since some
     // other thread could be reading here.
-    l.Mutex.Lock()
-    defer l.Mutex.Unlock()
+    l.RWMutex.Lock()
+    defer l.RWMutex.Unlock()
 
     // Read the original record.
     dio, finished, err := l.readGuarded()
@@ -283,7 +288,9 @@ func (l *logRecord) Delete() error {
 
     // Merge it with any existing chunks by
     // popping them out of the list and keep going.
-    current := chunk{l.offset, int64(dio.length)}
+    data_length, padding := dio.usage()
+    free_length := data_length+padding
+    current := chunk{l.offset, int64(free_length)}
 
     for {
         merged := false
@@ -292,18 +299,18 @@ func (l *logRecord) Delete() error {
         var index int
         var other chunk
         for index, other = range l.log.chunks {
-            if other.offset+int64(int32_size)+other.length == current.offset {
+            if other.offset+int64(int32Size)+other.length == current.offset {
                 // Update our current chunk.
                 // NOTE: We lose one header, so this is added to the length.
                 current.offset = other.offset
-                current.length = other.length + int64(int32_size) + current.length
+                current.length = other.length + int64(int32Size) + current.length
                 merged = true
                 break
             }
-            if current.offset+int64(int32_size)+current.length == other.offset {
+            if current.offset+int64(int32Size)+current.length == other.offset {
                 // Update our current chunk.
                 // NOTE: As per above, we are down one header, so it's added.
-                current.length = current.length + int64(int32_size) + other.length
+                current.length = current.length + int64(int32Size) + other.length
                 merged = true
                 break
             }
@@ -323,13 +330,13 @@ func (l *logRecord) Delete() error {
     }
 
     // Seek to the appropriate offset.
-    _, err = l.log.file.Seek(int64(current.offset), 0)
+    _, err = l.log.file.Seek(current.offset, 0)
     if err != nil {
         return err
     }
 
     // Clear our the record in the underlying file.
-    err = clear(l.log.file, int32(current.length))
+    _, err = clear(l.log.file, current.offset, int32(current.length))
     if err != nil {
         return err
     }
@@ -345,8 +352,13 @@ func (l *logRecord) Delete() error {
 }
 
 func (l *logRecord) Copy(output *logFile) error {
-    l.Mutex.Lock()
-    defer l.Mutex.Unlock()
+    l.RWMutex.Lock()
+    defer l.RWMutex.Unlock()
+
+    // Check if it's already here.
+    if l.log == output {
+        return nil
+    }
 
     // Read the original record.
     dio, finished, err := l.readGuarded()
@@ -381,8 +393,8 @@ func (l *logRecord) Discard() {
     // These are protected by the lock,
     // but it's not strictly necessary to
     // protect Grab() in the same way.
-    l.Mutex.Lock()
-    defer l.Mutex.Unlock()
+    l.RWMutex.Lock()
+    defer l.RWMutex.Unlock()
 
     // Drop our reference.
     l.log.Close()
@@ -401,6 +413,7 @@ func (l *logFile) Load() ([]*logRecord, error) {
     records := make([]*logRecord, 0)
 
     // Reset the pointer.
+    offset := l.start
     _, err := l.file.Seek(l.start, 0)
     if err != nil {
         log.Print("Error during seek: ", err)
@@ -411,30 +424,30 @@ func (l *logFile) Load() ([]*logRecord, error) {
     l.chunks = make([]chunk, 0)
 
     for {
-        // Get the current offset.
-        offset, err := l.file.Seek(0, 1)
-        if err != nil {
-            log.Print("Error reading offset: ", err)
-            continue
-        }
-
         // Deserialize this entry.
-        dio, err := deserialize(l.file)
+        end_offset, dio, err := deserialize(l.file, offset)
+
         if err == io.EOF || err == io.ErrUnexpectedEOF {
-            break
+            // Normal.
+            return records, nil
+
         } else if err == freeSpace {
             // Save it as a free chunk.
             l.chunks = append(l.chunks, chunk{offset, int64(dio.length)})
             utils.Print("STORAGE", "Free space @ %d (length: %d)", offset, dio.length)
+            offset = end_offset
             continue
+
         } else if err != nil {
+            // Not normal.
+            utils.Print("STORAGE", "Loading stopped: %s", err.Error())
             return records, err
         }
 
         // Return the read entry.
+        utils.Print("STORAGE", "Record @ %d (length: %d)", offset, dio.length)
         records = append(records, l.NewRecord(offset))
-        utils.Print("STORAGE", "Record for '%s' @ %d (length: %d)",
-            dio.key, offset, dio.length)
+        offset = end_offset
     }
 
     return records, nil

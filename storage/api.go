@@ -6,22 +6,28 @@ import (
 )
 
 func (s *Store) Write(id string, metadata []byte, data []byte) error {
-    utils.Print("STORAGE", "WRITE %s (len %d)", id, len(data))
+    length := nilLength
+    if data != nil {
+        length = int32(len(data))
+    }
+    utils.Print("STORAGE", "WRITE %s (len %d)", id, length)
 
+    // Just return the data directly.
     run := func(output *os.File, offset *int64) ([]byte, error) {
         return data, nil
     }
 
     // Submit the request.
-    dio := &deferredIO{id, metadata, int32(len(data)), run}
+    dio := &deferredIO{id, metadata, length, run}
     upd := &update{dio, make(chan error, 1)}
     s.pending <- upd
     return <-upd.result
 }
 
-func (s *Store) WritePromise(id string, input *os.File, length int32, metadata []byte) error {
+func (s *Store) WritePromise(id string, input *os.File, metadata []byte, length int32) error {
     utils.Print("STORAGE", "WRITEPROMISE %s (len %d)", id, length)
 
+    // Generate a splice function.
     run := generateSplice(input, length, nil)
 
     // Submit the request.
@@ -49,6 +55,7 @@ func (s *Store) Read(id string) ([]byte, []byte, error) {
     record, ok := s.logs.records[id]
     if ok {
         _, metadata, data, err := record.Read()
+        utils.Print("STORAGE", "DATA length=%d", len(data))
         return metadata, data, err
     }
 
@@ -78,4 +85,6 @@ func (s *Store) Run() error {
 func (s *Store) Stop() {
     s.pending <- nil
     <-s.stopped
+    s.logs.squashLogs()
+    s.logs.close()
 }

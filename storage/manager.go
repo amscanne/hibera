@@ -269,6 +269,8 @@ func (l *logManager) squashLogsUntil(limit uint64) error {
     // method in the underlying logRecord. This ensures that
     // the write operation is atomic.
 
+    utils.Print("STORAGE", "Squashing logs...")
+
     for key, record := range l.records {
 
         // Ignore this record if it's the data record.
@@ -279,9 +281,9 @@ func (l *logManager) squashLogsUntil(limit uint64) error {
         // Copy all logs down to the data layer.
         err := record.Copy(l.data)
         if err != nil {
+            utils.Print("STORAGE", "Error squashing '%s': %s", key, err.Error())
             continue
         }
-        utils.Print("STORAGE", "New data record '%s'...", key)
 
         // Remove the original record.
         orig_data, has_orig_data := l.data_records[key]
@@ -355,28 +357,32 @@ func NewLogManager(logPath string, dataPath string) (*logManager, error) {
     l := new(logManager)
     l.logPath = logPath
     l.dataPath = dataPath
-    l.records = make(map[string]*logRecord)
-    l.data_records = make(map[string]*logRecord)
+    l.close()
+
+    return l, l.open()
+}
+
+func (l *logManager) open() error {
 
     // Create the directories.
     err := os.MkdirAll(l.dataPath, 0644)
     if err != nil {
         log.Print("Error initializing data: ", err)
-        return nil, err
+        return err
     }
 
     // Open our files.
     l.data, err = OpenLog(path.Join(l.dataPath, "data.0"), 0, true)
     if err != nil {
         log.Print("Error initializing data file: ", err)
-        return nil, err
+        return err
     }
     err = l.loadData()
     if err != nil {
         l.data.Close()
         l.data = nil
         log.Print("Error loading data file: ", err)
-        return nil, err
+        return err
     }
 
     // Load log files.
@@ -387,7 +393,7 @@ func NewLogManager(logPath string, dataPath string) (*logManager, error) {
         l.data.Close()
         l.data = nil
         log.Print("Unable to load initial log files: ", err)
-        return nil, err
+        return err
     }
 
     // Clean old log files.
@@ -396,8 +402,28 @@ func NewLogManager(logPath string, dataPath string) (*logManager, error) {
         l.data.Close()
         l.data = nil
         log.Print("Unable to clean squash log files: ", err)
-        return nil, err
+        return err
     }
 
-    return l, nil
+    return nil
+}
+
+func (l *logManager) close() {
+
+    // Close our data file.
+    if l.data != nil {
+        l.data.Close()
+        l.data = nil
+    }
+
+    // Clear existing records.
+    for _, record := range l.data_records {
+        record.Discard()
+    }
+    for _, record := range l.records {
+        record.Discard()
+    }
+
+    l.data_records = make(map[string]*logRecord)
+    l.records = make(map[string]*logRecord)
 }

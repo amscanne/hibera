@@ -2,7 +2,6 @@ package storage
 
 import (
     "log"
-    "sync/atomic"
     "time"
 )
 
@@ -13,7 +12,7 @@ import (
 // thread and the write() callers. It's more efficient
 // if the flusher thread can process as many outstanding
 // requests in a single CPU burst.
-var LogBuffer = 1024
+var Buffer = 1024
 
 // The timeout deadline.
 // We aggressively batch updates. We don't flush the
@@ -50,10 +49,10 @@ func NewStore(logPath string, dataPath string) (*Store, error) {
     // Create our backend.
     s := new(Store)
     s.logs = logs
-    s.pending = make(chan *update, LogBuffer)
+    s.pending = make(chan *update, Buffer)
     s.stopped = make(chan bool, 1)
 
-    return s, nil
+    return s, s.logs.open()
 }
 
 func (s *Store) flusher() error {
@@ -75,7 +74,7 @@ func (s *Store) flusher() error {
 
     process := func(upd *update) {
         // Track stats.
-        atomic.AddUint64(&s.handled, 1)
+        s.handled += 1
 
         // Write out the data.
         err := s.logs.writeEntry(upd.dio, logfile)

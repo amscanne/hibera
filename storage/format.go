@@ -22,7 +22,7 @@ var magic2 = int32(0x78cd3928)
 // prevent weird manipulations when using
 // the unsafe module. The size is 4 bytes,
 // it's not going to change.
-var int32_size = int32(4)
+var int32Size = int32(4)
 
 // The alignment of the file.
 // We always ensure that records start and
@@ -31,11 +31,19 @@ var int32_size = int32(4)
 // NOTE: This also should be the same same
 // as the header, as it will prevent smaller
 // chunks than a single header being left.
-var alignment = int32_size
+var alignment = int32Size
+
+// The length used to encode a nil.
+var nilLength = int32(-1)
 
 // Error returned when free space is deserialized.
 var freeSpace = errors.New("free space")
+
+// Error returned when length doesn't match expected.
 var lengthMismatch = errors.New("length mismatch")
+
+// Error returned when magic number doesn't match.
+var invalidMagic = errors.New("invalid magic number")
 
 // I/O is deferred for data entries.
 type deferredIO struct {
@@ -53,8 +61,9 @@ type deferredIO struct {
 }
 
 func (dio *deferredIO) String() string {
-    return fmt.Sprintf("key=%s metadata=%d length=%d",
-        dio.key, len(dio.metadata), dio.length)
+    length, padding := dio.usage()
+    return fmt.Sprintf("key=%s metadata=%d data_length=%d length=%d padding=%d",
+        dio.key, len(dio.metadata), dio.length, length, padding)
 }
 
 func newFreeSpace(length int32) *deferredIO {
@@ -66,11 +75,11 @@ func writeMagic(output *os.File) (int64, error) {
     // Write the magic numbers.
     err := binary.Write(output, binary.LittleEndian, magic1)
     if err != nil {
-        return -1, err
+        return int64(0), err
     }
     err = binary.Write(output, binary.LittleEndian, magic2)
     if err != nil {
-        return -1, err
+        return int64(0), err
     }
 
     // Grab the current offset.
@@ -85,16 +94,16 @@ func readMagic(input *os.File) (int64, error) {
     // Read the magic numbers.
     err := binary.Read(input, binary.LittleEndian, &test_magic1)
     if err != nil {
-        return -1, err
+        return int64(0), err
     }
     err = binary.Read(input, binary.LittleEndian, &test_magic2)
     if err != nil {
-        return -1, err
+        return int64(0), err
     }
 
     // Ensure that our magic numbers match.
     if test_magic1 != magic1 || test_magic2 != magic2 {
-        return -1, errors.New("invalid magic number")
+        return int64(0), invalidMagic
     }
 
     // Grab the current offset.
@@ -117,9 +126,9 @@ func (dio *deferredIO) usage() (int32, int32) {
     }
 
     // Compute the encoded size.
-    length := int32_size + int32(key_len) +
-        int32_size + int32(dio.length) +
-        int32_size + int32(metadata_len)
+    length := int32Size + int32(key_len) +
+        int32Size + int32(dio.length) +
+        int32Size + int32(metadata_len)
 
     // Adjust it to the alignment.
     padding := (alignment - (length % alignment)) % alignment
@@ -127,7 +136,7 @@ func (dio *deferredIO) usage() (int32, int32) {
     return length, padding
 }
 
-func clear(output *os.File, length int32) error {
+func clear(output *os.File, offset int64, length int32) (int64, error) {
     utils.Print("STORAGE", "Clearing record: %d bytes.", length)
 
     // Write our free space header.
@@ -138,53 +147,59 @@ func clear(output *os.File, length int32) error {
     free_space := int32(-length)
     err := binary.Write(output, binary.LittleEndian, free_space)
     if err != nil {
-        return err
+        return offset, err
     }
 
-    return nil
+    if length > 0 {
+        // Ensure that the file size is sufficient.
+        // We never shrink files. This ensures that we won't
+        // trip over anyones toes when we have multiple outstanding
+        // reads and writes to the underlying data store.
+        _, err := output.Seek(int64(length)-1, 1)
+        if err != nil {
+            offset, _ := output.Seek(offset, 0)
+            return offset, err
+        }
+
+        // Write a single byte.
+        zero := make([]byte, 1, 1)
+        n, err := output.Write(zero)
+        if err != nil {
+            offset, _ := output.Seek(offset, 0)
+            return offset, err
+        } else if n == 0 {
+            offset, _ := output.Seek(offset, 0)
+            return offset, io.ErrUnexpectedEOF
+        }
+    }
+
+    // Account for the header.
+    offset += int64(int32Size)
+    offset += int64(length)
+
+    return offset, nil
 }
 
-func serialize(output *os.File, dio *deferredIO) (func() error, error) {
+func serialize(output *os.File, offset int64, dio *deferredIO) (int64, func() error, error) {
     utils.Print("STORAGE", "Writing record: %s.", dio.String())
-
-    // Get the current offset.
-    offset, err := output.Seek(0, 1)
-    if err != nil {
-        return nop_io, err
-    }
 
     // Do the encoding.
     // NOTE: We see the size of the encoding buffer to
     // the size of everything except the actual content.
     length, padding := dio.usage()
     encoded := bytes.NewBuffer(make([]byte, 0, length-dio.length))
-    header := bytes.NewBuffer(make([]byte, 0, int32_size))
-
-    // Ensure that the file size is sufficient.
-    // We never shrink files. This ensures that we won't
-    // trip over anyones toes when we have multiple outstanding
-    // reads and writes to the underlying data store.
-    info, err := output.Stat()
-    if err != nil {
-        return nop_io, err
-    }
-    if offset+int64(int32_size)+int64(length)+int64(padding) < info.Size() {
-        err = output.Truncate(offset + int64(int32_size) + int64(length) + int64(padding))
-        if err != nil {
-            return nop_io, err
-        }
-    }
+    header := bytes.NewBuffer(make([]byte, 0, int32Size))
 
     // Encode the key.
     key_bytes := []byte(dio.key)
-    err = binary.Write(encoded, binary.LittleEndian, int32(len(key_bytes)))
+    err := binary.Write(encoded, binary.LittleEndian, int32(len(key_bytes)))
     if err != nil {
-        return nop_io, err
+        return offset, nop_io, err
     }
     for n := 0; n < len(key_bytes); {
         written, err := encoded.Write(key_bytes[n:])
         if err != nil {
-            return nop_io, err
+            return offset, nop_io, err
         }
         n += written
     }
@@ -193,17 +208,17 @@ func serialize(output *os.File, dio *deferredIO) (func() error, error) {
     if dio.metadata == nil {
         // See NOTE above in usage().
         // We encode nil as length -1.
-        err = binary.Write(encoded, binary.LittleEndian, int32(-1))
+        err = binary.Write(encoded, binary.LittleEndian, nilLength)
     } else {
         err = binary.Write(encoded, binary.LittleEndian, int32(len(dio.metadata)))
     }
     if err != nil {
-        return nop_io, err
+        return offset, nop_io, err
     }
     for n := 0; n < len(dio.metadata); {
         written, err := encoded.Write(dio.metadata[n:])
         if err != nil {
-            return nop_io, err
+            return offset, nop_io, err
         }
         n += written
     }
@@ -214,14 +229,21 @@ func serialize(output *os.File, dio *deferredIO) (func() error, error) {
     // indirectly below (through sendfile).
     err = binary.Write(encoded, binary.LittleEndian, int32(dio.length))
     if err != nil {
-        return nop_io, err
+        return offset, nop_io, err
     }
 
     // Simulate a cleared header.
     // This is done first to avoid any race conditions.
-    err = clear(output, length+padding)
+    end_offset, err := clear(output, offset, int32(length+padding))
     if err != nil {
-        return nop_io, err
+        return end_offset, nop_io, err
+    }
+
+    // Seek back to the start.
+    _, err = output.Seek(offset+int64(int32Size), 0)
+    if err != nil {
+        offset, _ = output.Seek(offset, 0)
+        return offset, nop_io, err
     }
 
     // Write the full buffer.
@@ -229,7 +251,7 @@ func serialize(output *os.File, dio *deferredIO) (func() error, error) {
     for n := 0; n < len(encoded.Bytes()); {
         written, err := output.Write(encoded.Bytes()[n:])
         if err != nil {
-            return nop_io, err
+            return end_offset, nop_io, err
         }
         n += written
     }
@@ -237,13 +259,13 @@ func serialize(output *os.File, dio *deferredIO) (func() error, error) {
     // Encode the header.
     err = binary.Write(header, binary.LittleEndian, int32(length+padding))
     if err != nil {
-        return nop_io, err
+        return end_offset, nop_io, err
     }
     header_bytes := header.Bytes()
 
     // Get the current offset.
     header_offset := offset
-    output_offset := offset + int64(int32_size) + int64(len(encoded.Bytes()))
+    output_offset := offset + int64(int32Size) + int64(len(encoded.Bytes()))
 
     // Generate a closure for actually writing the data.
     run := func() error {
@@ -280,8 +302,8 @@ func serialize(output *os.File, dio *deferredIO) (func() error, error) {
     }
 
     // Jump to the end of the record.
-    _, err = output.Seek(offset+int64(length+padding), 0)
-    return run, err
+    offset, err = output.Seek(offset+int64(length+padding), 0)
+    return offset, run, err
 }
 
 func generateSplice(input *os.File, length int32, input_offset *int64) func(*os.File, *int64) ([]byte, error) {
@@ -332,8 +354,12 @@ func generateSplice(input *os.File, length int32, input_offset *int64) func(*os.
                 read, err := syscall.Pread(int(input.Fd()), buffer, *input_offset)
                 if (err == io.EOF || err == io.ErrUnexpectedEOF) && (n+read) == int(length) {
                     // We're still okay, so long as we've got what we need.
+                    break
                 } else if err != nil {
                     return nil, err
+                } else if read == 0 {
+                    // Uh-oh, a genuine EOF!
+                    return nil, io.ErrUnexpectedEOF
                 }
 
                 // Write the page.
@@ -357,21 +383,23 @@ func generateSplice(input *os.File, length int32, input_offset *int64) func(*os.
     return run
 }
 
-func deserialize(input *os.File) (*deferredIO, error) {
+func deserialize(input *os.File, start_offset int64) (int64, *deferredIO, error) {
 
     // Read the header.
     length := int32(0)
+    offset := start_offset
     err := binary.Read(input, binary.LittleEndian, &length)
     if err != nil {
-        return newFreeSpace(0), err
+        return offset, newFreeSpace(0), err
     }
+    remaining := int32(length)
 
     // Check if it's free space.
     if length <= 0 {
         // Skip ahead past the free space.
         length = -length
         _, err = input.Seek(int64(length), 1)
-        return newFreeSpace(length), freeSpace
+        return offset+int64(int32Size+length), newFreeSpace(length), freeSpace
     }
 
     // Read the key.
@@ -380,8 +408,11 @@ func deserialize(input *os.File) (*deferredIO, error) {
 
     err = binary.Read(input, binary.LittleEndian, &key_length)
     if err != nil {
-        return newFreeSpace(0), err
+        offset, _ := input.Seek(start_offset, 0)
+        return offset, newFreeSpace(0), err
     }
+    remaining -= int32Size
+    offset += int64(int32Size)
 
     key_bytes := make([]byte, key_length, key_length)
     n, err := io.ReadFull(input, key_bytes)
@@ -389,11 +420,15 @@ func deserialize(input *os.File) (*deferredIO, error) {
         // Perfect. We got exactly this object.
         err = nil
     } else if err == io.ErrUnexpectedEOF {
-        return newFreeSpace(0), io.EOF
+        offset, _ := input.Seek(start_offset, 0)
+        return offset, newFreeSpace(0), io.EOF
     } else if err != nil {
-        return newFreeSpace(0), err
+        offset, _ := input.Seek(start_offset, 0)
+        return offset, newFreeSpace(0), err
     }
     key = string(key_bytes)
+    remaining -= key_length
+    offset += int64(key_length)
 
     // Read the metadata.
     var metadata_length int32
@@ -401,11 +436,14 @@ func deserialize(input *os.File) (*deferredIO, error) {
 
     err = binary.Read(input, binary.LittleEndian, &metadata_length)
     if err != nil {
-        return newFreeSpace(0), err
+        offset, _ := input.Seek(start_offset, 0)
+        return offset, newFreeSpace(0), err
     }
+    remaining -= int32Size
+    offset += int64(int32Size)
 
     // See NOTE above in usage(). We encode nil as length -1.
-    if metadata_length == int32(-1) {
+    if metadata_length == nilLength {
         metadata = nil
     } else {
         metadata = make([]byte, metadata_length, metadata_length)
@@ -414,25 +452,28 @@ func deserialize(input *os.File) (*deferredIO, error) {
             // Perfect. We got exactly this object.
             err = nil
         } else if err == io.ErrUnexpectedEOF {
-            return newFreeSpace(0), io.EOF
+            offset, _ := input.Seek(start_offset, 0)
+            return offset, newFreeSpace(0), io.EOF
         } else if err != nil {
-            return newFreeSpace(0), err
+            offset, _ := input.Seek(start_offset, 0)
+            return offset, newFreeSpace(0), err
         }
+        remaining -= metadata_length
+        offset += int64(metadata_length)
     }
 
     // Read the data length.
     var data_length int32
     err = binary.Read(input, binary.LittleEndian, &data_length)
     if err != nil {
-        return newFreeSpace(0), err
+        offset, _ := input.Seek(start_offset, 0)
+        return offset, newFreeSpace(0), err
     }
+    remaining -= int32Size
+    offset += int64(int32Size)
 
     // Grab the current offset.
-    // This is required for generating the closure below.
-    input_offset, err := input.Seek(0, 1)
-    if err != nil {
-        return nil, err
-    }
+    input_offset := offset
 
     // Construct our function for reading data.
     run := func(output *os.File, output_offset *int64) ([]byte, error) {
@@ -460,8 +501,16 @@ func deserialize(input *os.File) (*deferredIO, error) {
         }
     }
 
+    // Seek to the end of the record.
+    _, err = input.Seek(int64(remaining), 1)
+    if err != nil {
+        offset, _ := input.Seek(start_offset, 0)
+        return offset, nil, err
+    }
+    offset += int64(remaining)
+
     // Construct our deferredio.
     dio := &deferredIO{key, metadata, data_length, run}
     utils.Print("STORAGE", "Loaded record: %s.", dio.String())
-    return dio, nil
+    return offset, dio, nil
 }
