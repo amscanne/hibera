@@ -209,14 +209,14 @@ func (c *Cluster) DataSet(req Request, key core.Key, rev core.Revision, value []
         return core.NoRevision, err
     }
 
+    if server {
+        return c.Data.DataSet(req.Namespace(), key, rev, value)
+    }
+
     if rev.IsZero() {
         // NOTE: Even if err != nil, the revision will be NoRevision.
         _, rev, err = c.Data.DataGet(req.Namespace(), key)
         rev = rev.Next()
-    }
-
-    if server {
-        return c.Data.DataSet(req.Namespace(), key, rev, value)
     }
 
     // NOTE: We disallow clients setting the root keys.
