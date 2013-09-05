@@ -9,6 +9,8 @@ import (
     "os"
     "sort"
     "time"
+    "runtime"
+    "runtime/pprof"
 )
 
 var Flags = flag.NewFlagSet("hibera", flag.ExitOnError)
@@ -30,6 +32,8 @@ type Cli struct {
 // Universal debug flag.
 // This is available to all programs.
 var debug = Flags.Bool("debug", false, "Enable all debugging.")
+var cpuprofile = Flags.String("cpuprofile", "", "Enabling CPU profiling and write to file.")
+var memprofile = Flags.String("memprofile", "", "Enabling memory profiling and write to file.")
 
 // Universal help command.
 // This is available to all programs.
@@ -141,6 +145,28 @@ func Main(cli Cli, run func(command string, args []string) error) {
     // Enable debugging, if it's been specified.
     if *debug {
         utils.EnableDebugging()
+    }
+
+    // Crank up processors.
+    runtime.GOMAXPROCS(4)
+
+    // Turn on CPU profiling.
+    if *cpuprofile != "" {
+        f, err := os.OpenFile(*cpuprofile, os.O_RDWR|os.O_CREATE, 0644)
+        if err != nil {
+            log.Fatal("CPU profiling: ", err)
+        }
+        pprof.StartCPUProfile(f)
+        defer pprof.StopCPUProfile()
+    }
+
+    // Turn on memory profiling.
+    if *memprofile != "" {
+        f, err := os.Create(*memprofile)
+        if err != nil {
+            log.Fatal("Memory profiling: ", err)
+        }
+        defer pprof.WriteHeapProfile(f)
     }
 
     // Run the given function.

@@ -13,8 +13,6 @@ import (
     "os"
     "os/signal"
     "path"
-    "runtime"
-    "runtime/pprof"
     "strings"
     "syscall"
 )
@@ -28,7 +26,6 @@ var domain = cli.Flags.String("domain", utils.DefaultDomain, "Failure domain for
 var keys = cli.Flags.Uint("keys", utils.DefaultKeys, "The number of keys for this node (weight).")
 var seeds = cli.Flags.String("seeds", utils.DefaultSeeds, "Seeds for joining the cluster.")
 var active = cli.Flags.Uint("active", utils.DefaultActive, "Maximum active simutaneous clients.")
-var profile = cli.Flags.String("profile", "", "Enabling profiling and write to file.")
 
 func discoverAddress() string {
     addrs, _ := net.InterfaceAddrs()
@@ -60,7 +57,7 @@ var cliInfo = cli.Cli{
                 "keys",
                 "seeds",
                 "active",
-                "profile"},
+            },
             false,
         },
     },
@@ -78,19 +75,6 @@ func cli_run() error {
     }
     if *port == 0 {
         errors.New("Sorry, port can't be 0.")
-    }
-
-    // Crank up processors.
-    runtime.GOMAXPROCS(4)
-
-    // Turn on profiling.
-    if *profile != "" {
-        f, err := os.OpenFile(*profile, os.O_RDWR|os.O_CREATE, 0644)
-        if err != nil {
-            return err
-        }
-        pprof.StartCPUProfile(f)
-        defer pprof.StopCPUProfile()
     }
 
     // Initialize our storage.
