@@ -21,6 +21,15 @@ var magic2 = int32(0x78cd3928)
 // it's not going to change.
 var int32_size = uint64(4)
 
+// The alignment of the file.
+// We always ensure that records start and
+// stop at these boundaries. This is done
+// by seeking for the start of each record.
+// NOTE: This also should be the same same
+// as the header, as it will prevent smaller
+// chunks than a single header being left.
+var alignment = int32_size
+
 func writeMagic(output *os.File) (int64, error) {
     err := binary.Write(output, binary.LittleEndian, magic1)
     if err != nil {
@@ -57,23 +66,19 @@ func readMagic(input *os.File) (int64, error) {
 }
 
 func usage(ent *entry) uint64 {
-    // Return the length including header.
-    if ent == nil {
-        return int32_size
-    }
 
     // NOTE: We encode nil as length -1.
     // So the usage is the same as a zero length
     // array, except it's a special encoding that
     // is used internally to signify a delete (as
     // opposed to just setting data to nil).
+    key_len := len([]byte(ent.key))
     var data_len int
     if ent.value.data == nil {
         data_len = 0
     } else {
         data_len = len(ent.value.data)
     }
-
     var metadata_len int
     if ent.value.metadata == nil {
         metadata_len = 0
@@ -81,10 +86,15 @@ func usage(ent *entry) uint64 {
         metadata_len = len(ent.value.metadata)
     }
 
-    return (int32_size +
-        int32_size + uint64(len([]byte(ent.key))) +
+    // Compute the encoded size.
+    length := int32_size + uint64(key_len) +
         int32_size + uint64(data_len) +
-        int32_size + uint64(metadata_len))
+        int32_size + uint64(metadata_len)
+
+    // Adjust it to the alignment.
+    length += (alignment - (length % alignment)) % alignment
+
+    return length
 }
 
 func clear(output *os.File, length uint64) error {
@@ -92,7 +102,7 @@ func clear(output *os.File, length uint64) error {
     // Write our free space header.
     // Note that generally this space includes
     // the bytes required to write this header.
-    // Callers are expected to use Usage() when
+    // Callers are expected to use usage() when
     // calculating how to clear() a section.
     free_space := int32(-length)
     err := binary.Write(output, binary.LittleEndian, free_space)
@@ -114,7 +124,8 @@ func serialize(output *os.File, ent *entry) error {
     }
 
     // Do the encoding.
-    encoded := bytes.NewBuffer(make([]byte, 0))
+    length := usage(ent)
+    encoded := bytes.NewBuffer(make([]byte, 0, length))
 
     doEncode := func(data []byte) error {
         if data == nil {
@@ -153,8 +164,23 @@ func serialize(output *os.File, ent *entry) error {
         return err
     }
 
+    // Pad the rest of the data.
+    // NOTE: This is only necessary to ensure that the file
+    // is the appropriate length (including the entire record).
+    padding := make([]byte, length-uint64(len(encoded.Bytes())))
+    for n := 0; n < len(padding); {
+        written, err := encoded.Write(padding[n:])
+        if err != nil {
+            log.Print("Error padding data: ", err)
+            return err
+        }
+        n += written
+    }
+
     // Simulate a cleared header.
-    err = clear(output, usage(ent))
+    // NOTE: Because usage() includes alignment,
+    // this will clear the pad byte at the end.
+    err = clear(output, length)
     if err != nil {
         return err
     }
@@ -177,18 +203,21 @@ func serialize(output *os.File, ent *entry) error {
     }
 
     // Write our real header.
-    err = binary.Write(output, binary.LittleEndian, int32(encoded.Len()))
+    // NOTE: This includes the padding required for the entry.
+    // The encoded.Bytes() may be up to (alignment-1) bytes less.
+    err = binary.Write(output, binary.LittleEndian, int32(length))
     if err != nil {
         log.Print("Error writing entry length: ", err)
         return err
     }
 
     // Go to the end of the record.
-    offset, err = output.Seek(int64(encoded.Len()), 1)
+    offset, err = output.Seek(int64(length), 1)
     if err != nil {
         log.Print("Error seeking: ", err)
     }
-    return err
+
+    return nil
 }
 
 func deserialize(input *os.File, ent *entry) (uint64, uint64, error) {
@@ -204,7 +233,7 @@ func deserialize(input *os.File, ent *entry) (uint64, uint64, error) {
     if length <= 0 {
         // Skip ahead past the free space.
         length = -length
-        _, err = input.Seek(int64(length-4), 1)
+        _, err = input.Seek(int64(length), 1)
         return uint64(0), uint64(length), err
     }
 
@@ -270,5 +299,6 @@ func deserialize(input *os.File, ent *entry) (uint64, uint64, error) {
         return uint64(length), uint64(0), err
     }
 
+    // Return the final result.
     return uint64(length), uint64(0), nil
 }

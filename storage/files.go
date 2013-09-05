@@ -90,19 +90,16 @@ func (l *logFile) Write(ent *entry) (*logRecord, error) {
     // Find a free chunk.
     var offset int64
     required := usage(ent)
-    min_required := usage(nil)
     remaining := uint64(0)
     found := false
 
     var index int
     var chk chunk
     for index, chk = range l.chunks {
-        if chk.length >= required &&
-            ((chk.length-required) == 0 ||
-                (chk.length-required) >= min_required) {
+        if chk.length >= required {
             found = true
             offset = int64(chk.offset)
-            remaining = (chk.length - required)
+            remaining = chk.length - required
             break
         }
     }
@@ -141,8 +138,10 @@ func (l *logFile) Write(ent *entry) (*logRecord, error) {
     // Mark any remaining space as still free,
     // and add the chunk to our list of chunks.
     if remaining > 0 {
+        free_remaining := remaining-int32_size
+        free_offset := uint64(offset)+int32_size+required
         clear(l.file, remaining)
-        l.chunks = append(l.chunks, chunk{uint64(offset) + required, remaining})
+        l.chunks = append(l.chunks, chunk{free_offset, free_remaining})
     }
 
     return l.NewRecord(uint64(offset)), nil
@@ -207,16 +206,18 @@ func (l *logRecord) Delete() error {
         var index int
         var other chunk
         for index, other = range l.log.chunks {
-            if other.offset+other.length == current.offset {
+            if other.offset+int32_size+other.length == current.offset {
                 // Update our current chunk.
+                // NOTE: We lose one header, so this is added to the length.
                 current.offset = other.offset
-                current.length = other.length + current.length
+                current.length = other.length+int32_size+current.length
                 merged = true
                 break
             }
-            if current.offset+current.length == other.offset {
+            if current.offset+int32_size+current.length == other.offset {
                 // Update our current chunk.
-                current.length = current.length + other.length
+                // NOTE: As per above, we are down one header, so it's added.
+                current.length = current.length+int32_size+other.length
                 merged = true
                 break
             }
