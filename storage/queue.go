@@ -22,7 +22,7 @@ var Deadline = 50 * time.Millisecond
 
 // An update to the database.
 type update struct {
-    dio    *deferredIO
+    dio *deferredIO
     result chan error
 }
 
@@ -71,33 +71,57 @@ func (s *Store) flusher() error {
 
     // See NOTE about the Deadline at the top.
     ready_to_flush := false
+    writes := make(chan *update)
+    outstanding := 0
 
     process := func(upd *update) {
         // Track stats.
         s.handled += 1
 
-        // Write out the data.
-        err := s.logs.writeEntry(upd.dio, logfile)
+        // Add it to our list of done.
+        finished = append(finished, upd)
 
-        // Notify that an error occured.
-        if err != nil {
-            upd.result <- err
-        } else {
-            // Add it to our list of done.
-            finished = append(finished, upd)
-        }
+        // Mark a new function as outstanding.
+        outstanding += 1
+
+        // Write out the data.
+        go func(upd *update, logfile *logFile, writes chan<- *update) {
+            err := s.logs.writeEntry(upd.dio, logfile)
+            if err != nil {
+                // Mark out the error immediately.
+                // We send back a nil over the channel.
+                upd.result<- err
+                writes<- nil
+            } else {
+                // Send back the update to wait for the flush.
+                writes<- upd
+            }
+        }(upd, logfile, writes)
     }
 
-    sync := func(logfile *logFile, finished []*update) {
+    sync := func(logfile *logFile, outstanding int, finished []*update, writes <-chan *update) {
+
+        // Clear the array.
+        finished = finished[:0]
+
+        // Ensure we have no outstanding writes.
+        for outstanding > 0 {
+            outstanding -= 1
+            upd := <-writes
+            if upd != nil {
+                finished = append(finished, upd)
+            }
+        }
+
         // Sync the log.
         s.logs.closeLog(logfile)
 
         // Allow other flushes.
-        flush_chan <- true
+        flush_chan<- true
 
         // Notify waiters.
         for _, upd := range finished {
-            upd.result <- nil
+            upd.result<- nil
         }
 
         // Squash the log.
@@ -114,17 +138,25 @@ func (s *Store) flusher() error {
     }
 
     complete := func() {
-        // Run the sync.
-        go sync(logfile, finished)
+
+        // Run the sync() asycnhronously.
+        go sync(logfile, outstanding, finished, writes)
+
+        // Drop this logfile.
+        logfile = nil
+
+        // Reset our state.
+        ready_to_flush = false
+        writes = make(chan *update)
+        outstanding = 0
 
         // Reset our buffers.
-        logfile = nil
-        finished = nil
+        finished = make([]*update, 0, Buffer)
     }
 
     for {
 
-        if finished == nil {
+        if logfile == nil {
 
             // Nothing in the queue?
             // Block indefinitely.
@@ -144,11 +176,7 @@ func (s *Store) flusher() error {
                     continue
                 }
 
-                // Create our queue.
-                finished = make([]*update, 0, 0)
-
-                // This is the first request, create our deadline.
-                ready_to_flush = false
+                // Set the deadline.
                 timeout = time.After(Deadline)
 
                 // Process normally.

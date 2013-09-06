@@ -24,11 +24,11 @@ func (s *Store) Write(id string, metadata []byte, data []byte) error {
     return <-upd.result
 }
 
-func (s *Store) WritePromise(id string, input *os.File, metadata []byte, length int32) error {
-    utils.Print("STORAGE", "WRITEPROMISE %s (len %d)", id, length)
+func (s *Store) WriteFile(id string, metadata []byte, length int32, input *os.File, offset *int64) error {
+    utils.Print("STORAGE", "WRITEFILE %s (len %d)", id, length)
 
     // Generate a splice function.
-    run := generateSplice(input, length, nil)
+    run := generateSplice(input, length, offset)
 
     // Submit the request.
     dio := &deferredIO{id, metadata, length, run}
@@ -49,16 +49,16 @@ func (s *Store) Read(id string) ([]byte, []byte, error) {
     return nil, nil, nil
 }
 
-func (s *Store) ReadPromise(id string) ([]byte, int32, func(*os.File, *int64) error, func(), error) {
-    utils.Print("STORAGE", "READPROMISE %s", id)
+func (s *Store) ReadFile(id string, output *os.File, offset *int64) ([]byte, int32, IOWork, IODone, error) {
+    utils.Print("STORAGE", "READFILE %s", id)
 
     record, ok := s.logs.records[id]
     if ok {
-        _, metadata, length, read, cancel, err := record.ReadFD()
-        return metadata, length, read, cancel, err
+        _, metadata, length, read, done, err := record.ReadFile(output, offset)
+        return metadata, length, read, done, err
     }
 
-    return nil, 0, nop_read, nop_cancel, nil
+    return nil, 0, IOWorkNOP, IODoneNOP, nil
 }
 
 func (s *Store) Delete(id string) error {
