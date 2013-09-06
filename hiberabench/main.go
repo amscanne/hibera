@@ -67,11 +67,27 @@ func do_worker(
     }
 }
 
+var dataMap = make(map[string][]byte)
+
+func genData(id string, size uint) []byte {
+    data, ok := dataMap[id]
+    if !ok {
+        id_bytes := []byte(id)
+        data = make([]byte, size, size)
+        for i := 0; i < int(size); i++ {
+            data[i] = id_bytes[i%len(id_bytes)]
+        }
+        dataMap[id] = data
+    }
+    return data
+}
+
 func do_bench(
     c *client.HiberaAPI,
     duration float64,
     workers uint,
     keys []string,
+    size uint,
     work func(key string) (uint64, error)) (float64, float64, error) {
 
     // Create an error channel.
@@ -84,6 +100,11 @@ func do_bench(
 
     // Start our clock.
     duration_ns := time.Duration(uint64(duration * float64(time.Second)))
+
+    // Make sure all data exists.
+    for _, id := range keys {
+        genData(id, size)
+    }
 
     // Start all the workers.
     for i := 0; i < int(workers); i += 1 {
@@ -107,17 +128,11 @@ func do_bench(
 }
 
 func cli_write(c *client.HiberaAPI, duration float64, size uint, workers uint, keys []string) error {
-    data_seed := 0
     work_fn := func(key string) (uint64, error) {
-        data := make([]byte, size, size)
-        for i := 0; i < int(size); i++ {
-            data_seed += 1
-            data[i] = byte(data_seed % 256)
-        }
-        _, err := c.DataSet(key, core.NoRevision, data)
+        _, err := c.DataSet(key, core.NoRevision, genData(key, size))
         return uint64(size), err
     }
-    ops_per_second, throughput_mb, err := do_bench(c, duration, workers, keys, work_fn)
+    ops_per_second, throughput_mb, err := do_bench(c, duration, workers, keys, size, work_fn)
     if err != nil {
         return err
     }
@@ -136,7 +151,7 @@ func cli_read(c *client.HiberaAPI, duration float64, workers uint, keys []string
         value, _, err := c.DataGet(key, core.NoRevision, 0)
         return uint64(len(value)), err
     }
-    ops_per_second, throughput_mb, err := do_bench(c, duration, workers, keys, work_fn)
+    ops_per_second, throughput_mb, err := do_bench(c, duration, workers, keys, 0, work_fn)
     if err != nil {
         return err
     }
@@ -150,21 +165,15 @@ func cli_read(c *client.HiberaAPI, duration float64, workers uint, keys []string
 }
 
 func cli_mixed(c *client.HiberaAPI, duration float64, size uint, workers uint, ratio float64, keys []string) error {
-    data_seed := 0
     work_fn := func(key string) (uint64, error) {
         if rand.Float64() < ratio {
             value, _, err := c.DataGet(key, core.NoRevision, 0)
             return uint64(len(value)), err
         }
-        data := make([]byte, size, size)
-        for i := 0; i < int(size); i++ {
-            data_seed += 1
-            data[i] = byte(data_seed % 256)
-        }
-        _, err := c.DataSet(key, core.NoRevision, data)
+        _, err := c.DataSet(key, core.NoRevision, genData(key, size))
         return uint64(size), err
     }
-    ops_per_second, throughput_mb, err := do_bench(c, duration, workers, keys, work_fn)
+    ops_per_second, throughput_mb, err := do_bench(c, duration, workers, keys, size, work_fn)
     if err != nil {
         return err
     }
