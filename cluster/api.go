@@ -265,6 +265,18 @@ func (c *Cluster) DataRemove(req Request, key core.Key, rev core.Revision) (core
     if key == RootKey {
         return c.rev, &PermissionError{key}
     }
+
+    if rev.IsZero() {
+        // NOTE: See above in DataGet().
+        _, rev, err = c.Data.DataGet(req.Namespace(), key)
+        if err != nil {
+            return core.NoRevision, err
+        }
+
+        // Use the next given reivsion.
+        rev = rev.Next()
+    }
+
     return c.quorumRemove(c.ring, req.Namespace(), key, rev)
 }
 
