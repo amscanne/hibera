@@ -265,6 +265,18 @@ func (c *Cluster) DataRemove(req Request, key core.Key, rev core.Revision) (core
     if key == RootKey {
         return c.rev, &PermissionError{key}
     }
+
+    if rev.IsZero() {
+        // NOTE: See above in DataGet().
+        _, rev, err = c.Data.DataGet(req.Namespace(), key)
+        if err != nil {
+            return core.NoRevision, err
+        }
+
+        // Use the next given reivsion.
+        rev = rev.Next()
+    }
+
     return c.quorumRemove(c.ring, req.Namespace(), key, rev)
 }
 
@@ -393,7 +405,15 @@ func (c *Cluster) AccessGet(req Request, auth core.Token) (*core.Permissions, co
 func (c *Cluster) AccessUpdate(req Request, auth core.Token, key core.Key, read bool, write bool, execute bool) (core.Revision, error) {
     utils.Print("CLUSTER", "ACCESS-UPDATE auth=%s key=%s", auth, key)
 
-    err := c.Authorize(req.Namespace(), req.Auth(), RootKey, false, true, false)
+    // If the namespace doesn't exist yet, then we
+    // authorize against the root namespace. This allows
+    // access in the root namespace to create new ones.
+    ns := req.Namespace()
+    if !c.Access.Has(ns) {
+        ns = RootNamespace
+    }
+
+    err := c.Authorize(ns, req.Auth(), RootKey, false, true, false)
     if err != nil {
         return c.rev, err
     }

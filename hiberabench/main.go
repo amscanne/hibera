@@ -67,8 +67,9 @@ func do_worker(
     }
 }
 
-var dataMap = map[string][]byte
-func genData(id string, size int) {
+var dataMap = make(map[string][]byte)
+
+func genData(id string, size uint) []byte {
     data, ok := dataMap[id]
     if !ok {
         id_bytes := []byte(id)
@@ -86,7 +87,7 @@ func do_bench(
     duration float64,
     workers uint,
     keys []string,
-    size int,
+    size uint,
     work func(key string) (uint64, error)) (float64, float64, error) {
 
     // Create an error channel.
@@ -127,9 +128,8 @@ func do_bench(
 }
 
 func cli_write(c *client.HiberaAPI, duration float64, size uint, workers uint, keys []string) error {
-    data_seed := 0
     work_fn := func(key string) (uint64, error) {
-        _, err := c.DataSet(key, core.NoRevision, genData(key))
+        _, err := c.DataSet(key, core.NoRevision, genData(key, size))
         return uint64(size), err
     }
     ops_per_second, throughput_mb, err := do_bench(c, duration, workers, keys, size, work_fn)
@@ -151,7 +151,7 @@ func cli_read(c *client.HiberaAPI, duration float64, workers uint, keys []string
         value, _, err := c.DataGet(key, core.NoRevision, 0)
         return uint64(len(value)), err
     }
-    ops_per_second, throughput_mb, err := do_bench(c, duration, workers, keys, size, work_fn)
+    ops_per_second, throughput_mb, err := do_bench(c, duration, workers, keys, 0, work_fn)
     if err != nil {
         return err
     }
@@ -165,13 +165,12 @@ func cli_read(c *client.HiberaAPI, duration float64, workers uint, keys []string
 }
 
 func cli_mixed(c *client.HiberaAPI, duration float64, size uint, workers uint, ratio float64, keys []string) error {
-    data_seed := 0
     work_fn := func(key string) (uint64, error) {
         if rand.Float64() < ratio {
             value, _, err := c.DataGet(key, core.NoRevision, 0)
             return uint64(len(value)), err
         }
-        _, err := c.DataSet(key, core.NoRevision, genData(key))
+        _, err := c.DataSet(key, core.NoRevision, genData(key, size))
         return uint64(size), err
     }
     ops_per_second, throughput_mb, err := do_bench(c, duration, workers, keys, size, work_fn)

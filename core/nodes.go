@@ -213,6 +213,7 @@ func (nodes *Nodes) Encode(next bool, na NodeInfo, N uint) (bool, error) {
     // Create a list of nodes modified after rev.
     changed := false
     addokay := true
+    notcurrent := uint(0)
     domains := make(map[string]bool)
 
     // Check that we are allowed to add nodes.
@@ -225,10 +226,13 @@ func (nodes *Nodes) Encode(next bool, na NodeInfo, N uint) (bool, error) {
     if next {
         for _, node := range nodes.all {
             if node.Active && node.Alive() && nodes.self.Current.GreaterThan(node.Current) {
-                addokay = false
-                break
+                notcurrent += 1
             }
         }
+    }
+
+    if notcurrent >= N {
+        addokay = false
     }
 
     for id, node := range nodes.all {

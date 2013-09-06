@@ -61,8 +61,8 @@ func (l *Lock) wait(timeout bool, duration time.Duration, notifier <-chan bool) 
     rval := true
 
     select {
-    case <-wakeupchan:
-        rval = true
+    case alive := <-wakeupchan:
+        rval = alive
         break
 
     case <-timeoutchan:
@@ -77,10 +77,10 @@ func (l *Lock) wait(timeout bool, duration time.Duration, notifier <-chan bool) 
     return rval
 }
 
-func (l *Lock) notify() {
+func (l *Lock) notify(alive bool) {
     // Send all application notifications.
     for _, wakechan := range l.waiters {
-        wakechan <- true
+        wakechan <- alive
     }
 
     // Reset our waiter list.
@@ -104,6 +104,10 @@ type Data struct {
     locks map[Namespace]map[Key]*Lock
     revs  map[Namespace]RevisionMap
     *sync.Cond
+
+    // Whether or not this has been flushed.
+    // No waits proceed if it has been flushed.
+    flushed bool
 
     // In-memory ephemera.
     // (Kept synchronized by other modules).
@@ -417,7 +421,7 @@ func (d *Data) DataModify(
 
     lock := d.lock(ns, key)
     defer func() {
-        lock.notify()
+        lock.notify(true)
         lock.unlock()
     }()
 
@@ -483,13 +487,18 @@ func (d *Data) doWait(
             break
         }
 
+        // Check that this is a valid wait.
+        if !valid() || d.flushed {
+            break
+        }
+
         // Wait for a change.
         now := time.Now()
         if timeout > 0 && now.After(end) {
-            return currev, nil
+            break
         }
-        if !lock.wait(timeout > 0, end.Sub(now), notifier) || !valid() {
-            return currev, nil
+        if !lock.wait(timeout > 0, end.Sub(now), notifier) || !valid() || d.flushed {
+            break
         }
     }
 
@@ -531,7 +540,7 @@ func (d *Data) doFire(ns Namespace, key Key, rev Revision, lock *Lock) (Revision
     d.setSyncRev(ns, key, rev)
 
     // Broadcast.
-    lock.notify()
+    lock.notify(true)
 
     utils.Print("DATA", "FIRED key=%s rev=%s", key, rev.String())
     return rev, nil
@@ -574,6 +583,21 @@ func (d *Data) Purge(id EphemId) {
     }
 }
 
+func (d *Data) Flush() {
+    d.Cond.L.Lock()
+    defer d.Cond.L.Unlock()
+
+    // Disable any additional waits.
+    d.flushed = true
+
+    // Fire events on all locks.
+    for _, locks := range d.locks {
+        for _, lock := range locks {
+            lock.notify(false)
+        }
+    }
+}
+
 func NewData(store *storage.Store) *Data {
     d := new(Data)
     d.Cond = sync.NewCond(new(sync.Mutex))
@@ -581,5 +605,6 @@ func NewData(store *storage.Store) *Data {
     d.locks = make(map[Namespace]map[Key]*Lock)
     d.revs = make(map[Namespace]RevisionMap)
     d.sync = make(map[Namespace]map[Key]*EphemeralSet)
+    d.flushed = false
     return d
 }

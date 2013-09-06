@@ -7,6 +7,7 @@ import (
     "os"
     "sync"
     "sync/atomic"
+    "syscall"
 )
 
 // A chunk of free space within a log file.
@@ -50,7 +51,7 @@ func OpenLog(path string, number uint64, create bool) (*logFile, error) {
     var offset int64
     var err error
     if create {
-        logfile, err = os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0644)
+        logfile, err = os.OpenFile(path, os.O_RDWR|os.O_CREATE|syscall.O_CLOEXEC, 0644)
         if err != nil {
             return nil, err
         }
@@ -60,7 +61,7 @@ func OpenLog(path string, number uint64, create bool) (*logFile, error) {
             return nil, err
         }
     } else {
-        logfile, err = os.OpenFile(path, os.O_RDONLY, 0)
+        logfile, err = os.OpenFile(path, os.O_RDONLY|syscall.O_CLOEXEC, 0)
         if err != nil {
             return nil, err
         }

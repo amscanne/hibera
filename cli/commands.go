@@ -10,6 +10,7 @@ import (
     "runtime"
     "runtime/pprof"
     "sort"
+    "syscall"
     "time"
 )
 
@@ -90,19 +91,23 @@ func command_help(cli Cli, arg0 string, command string, spec Command) {
     fmt.Printf("\n")
 }
 
+var arg0 string
+var command string
+var args []string
+
 func Main(cli Cli, run func(command string, args []string) error) {
     // Seed the random number generator.
     rand.Seed(time.Now().UTC().UnixNano())
 
     // Parse flags.
-    arg0 := os.Args[0]
+    arg0 = os.Args[0]
     usage := func() {
         top_usage(cli, arg0)
         command_list(cli, arg0)
     }
     Flags.Usage = usage
     Flags.Parse(os.Args[1:])
-    args := Flags.Args()
+    args = Flags.Args()
 
     // Pull out our arguments.
     if len(args) == 0 {
@@ -113,7 +118,7 @@ func Main(cli Cli, run func(command string, args []string) error) {
 
     // Pull out the command.
     // (and reparse, we support options before and after).
-    command := args[0]
+    command = args[0]
     args = args[1:]
     Flags.Parse(args)
     args = Flags.Args()
@@ -152,7 +157,7 @@ func Main(cli Cli, run func(command string, args []string) error) {
 
     // Turn on CPU profiling.
     if *cpuprofile != "" {
-        f, err := os.OpenFile(*cpuprofile, os.O_RDWR|os.O_CREATE, 0644)
+        f, err := os.OpenFile(*cpuprofile, os.O_RDWR|os.O_CREATE|syscall.O_CLOEXEC, 0644)
         if err != nil {
             log.Fatal("CPU profiling: ", err)
         }
@@ -162,7 +167,7 @@ func Main(cli Cli, run func(command string, args []string) error) {
 
     // Turn on memory profiling.
     if *memprofile != "" {
-        f, err := os.Create(*memprofile)
+        f, err := os.OpenFile(*memprofile, os.O_RDWR|os.O_CREATE|syscall.O_CLOEXEC, 0644)
         if err != nil {
             log.Fatal("Memory profiling: ", err)
         }
@@ -191,4 +196,34 @@ func Main(cli Cli, run func(command string, args []string) error) {
             log.Fatal("Error: ", err)
         }
     }
+}
+
+func Restart(files []*os.File) error {
+
+    // Make our new arguments.
+    new_args := make([]string, 0)
+    new_args = append(new_args, arg0)
+    new_args = append(new_args, command)
+    Flags.Visit(func(flag *flag.Flag) {
+        new_args = append(new_args, fmt.Sprintf("-%s=%s", flag.Name, flag.Value))
+    })
+    for _, arg := range args {
+        new_args = append(new_args, arg)
+    }
+
+    // Start the new process.
+    fmt.Print("Running:")
+    for _, arg := range new_args {
+        fmt.Printf(" %s", arg)
+    }
+    fmt.Print("\n")
+
+    _, err := os.StartProcess(arg0, new_args, &os.ProcAttr{"", nil, files, nil})
+    if err != nil {
+        return err
+    }
+
+    // Done!
+    os.Exit(0)
+    return nil
 }
