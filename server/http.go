@@ -11,6 +11,7 @@ import (
     "io"
     "net"
     "net/http"
+    "os"
     "strconv"
     "strings"
 )
@@ -19,7 +20,8 @@ var UnhandledRequest = errors.New("Unhandled request")
 
 type Listener struct {
     net.Listener
-    avail chan bool
+    active uint
+    avail  chan bool
     *Hub
 }
 
@@ -53,6 +55,23 @@ func (l Listener) Accept() (net.Conn, error) {
     }
 
     return HTTPConnection{c, &l, l.Hub.NewConnection(c)}, nil
+}
+
+func (l Listener) Close() error {
+    // Close the listen socket.
+    err := l.Listener.Close()
+    if err != nil {
+        return err
+    }
+
+    return nil
+}
+
+func (l Listener) Drain() {
+    // Drain the connection pool.
+    for i := 0; i < int(l.active); i += 1 {
+        <-l.avail
+    }
 }
 
 func (c HTTPConnection) RemoteAddr() net.Addr {
@@ -432,17 +451,27 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
     }
 }
 
-func NewHTTPServer(cluster *cluster.Cluster, addr string, port uint, active uint) (*HTTPServer, error) {
-    // Create our object.
-    server := new(HTTPServer)
+func NewHTTPServer(cluster *cluster.Cluster, restart int, addr string, port uint, active uint) (*HTTPServer, error) {
 
-    // Create our hooked listener.
-    ln, err := net.Listen("tcp", fmt.Sprintf("%s:%d", addr, port))
+    // Bind our port.
+    var ln net.Listener
+    var err error
+
+    if restart < 0 {
+        // Create our hooked listener.
+        ln, err = net.Listen("tcp", fmt.Sprintf("%s:%d", addr, port))
+    } else {
+        // Create a server wrapped around the fd.
+        ln, err = net.FileListener(os.NewFile(uintptr(restart), fmt.Sprintf("%s:%d", addr, port)))
+    }
     if err != nil {
         return nil, err
     }
+
+    // Create our object.
+    server := new(HTTPServer)
     server.Hub = NewHub(cluster)
-    server.Listener = &Listener{ln, make(chan bool, active), server.Hub}
+    server.Listener = &Listener{ln, active, make(chan bool, active), server.Hub}
     server.Cluster = cluster
 
     // Fill the available channel slots.
@@ -467,4 +496,32 @@ func NewHTTPServer(cluster *cluster.Cluster, addr string, port uint, active uint
 
 func (s *HTTPServer) Run() {
     s.Serve(s.Listener)
+}
+
+func (s *HTTPServer) Stop() {
+    // Stop accepting new connections.
+    s.Listener.Close()
+
+    // Fire off all existing connections.
+    s.Cluster.Data.Flush()
+
+    // Drain existing connections.
+    s.Listener.Drain()
+}
+
+func (s *HTTPServer) Restart() *os.File {
+    // Ensure it's a TCP socket.
+    tcp_ln, ok := s.Listener.Listener.(*net.TCPListener)
+    if !ok {
+        return nil
+    }
+
+    // Grab our restart handle.
+    file, err := tcp_ln.File()
+    if err != nil {
+        return nil
+    }
+
+    // Return the Fd.
+    return file
 }

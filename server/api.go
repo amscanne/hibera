@@ -10,8 +10,8 @@ type Server struct {
     *GossipServer
 }
 
-func NewServer(c *cluster.Cluster, addr string, port uint, seeds []string, active uint) (*Server, error) {
-    http, err := NewHTTPServer(c, addr, port, active)
+func NewServer(c *cluster.Cluster, restart int, addr string, port uint, seeds []string, active uint) (*Server, error) {
+    http, err := NewHTTPServer(c, restart, addr, port, active)
     if err != nil {
         return nil, err
     }
