@@ -22,7 +22,7 @@ var Deadline = 50 * time.Millisecond
 
 // An update to the database.
 type update struct {
-    dio *deferredIO
+    dio    *deferredIO
     result chan error
 }
 
@@ -90,11 +90,11 @@ func (s *Store) flusher() error {
             if err != nil {
                 // Mark out the error immediately.
                 // We send back a nil over the channel.
-                upd.result<- err
-                writes<- nil
+                upd.result <- err
+                writes <- nil
             } else {
                 // Send back the update to wait for the flush.
-                writes<- upd
+                writes <- upd
             }
         }(upd, logfile, writes)
     }
@@ -117,11 +117,11 @@ func (s *Store) flusher() error {
         s.logs.closeLog(logfile)
 
         // Allow other flushes.
-        flush_chan<- true
+        flush_chan <- true
 
         // Notify waiters.
         for _, upd := range finished {
-            upd.result<- nil
+            upd.result <- nil
         }
 
         // Squash the log.

@@ -8,8 +8,12 @@ import (
     "strings"
     "sync"
     "sync/atomic"
+    "syscall"
     "time"
 )
+
+// The timeout for broken connections.
+var EphemeralTimeout = time.Second
 
 type ConnectionId uint64
 
@@ -33,10 +37,6 @@ type Connection struct {
     // This will be looked up on the first if
     // the user provided a generated ConnectionId.
     client *Client
-
-    // The notification channel if the underlying
-    // connection drops.
-    notifier *<-chan bool
 
     // Whether this connection has been initialized
     // with a client (above). Client may stil be nil.
@@ -110,11 +110,54 @@ func (c *Connection) EphemId() core.EphemId {
     return core.EphemId(c.ConnectionId)
 }
 
-func (c *Connection) Notifier() <-chan bool {
-    if c.notifier != nil {
-        return *c.notifier
+func (c *Connection) Notifier() (<-chan bool, func()) {
+
+    // NOTE: This function should only be called from
+    // contexts where we are not expecting anything to
+    // be read from the socket. i.e. from within the
+    // request handler itself. If it is called from other
+    // places, there is the possibility that it will eat
+    // actual useful input from the user.
+    //
+    // We return two channels. To disable the timer,
+    // simply write to the stop channel, and read the
+    // final value from the notify channel.
+    //
+    // To turn off the notifier, simply send something
+    // to the channel and the this will stop polling.
+
+    notifier := make(chan bool, 1)
+    socket_copy, err := c.raw.File()
+    if err != nil {
+        // Notify immediately.
+        notifier <- true
+        return notifier, func() {}
     }
-    return make(chan bool)
+
+    // Stop polling on the socket.
+    stop := func() {
+        socket_copy.Close()
+    }
+
+    go func() {
+        zero := make([]byte, 1, 1)
+        for {
+            // This is a duplicate socket, and we're simply peeking.
+            // So there's no harm done. We'll generate an error whenever
+            // the socket_copy() is closed from above, so this is a clean
+            // way of keeping tabs. Not sure about the map onto goroutines
+            // though, seems like this may be a long running system call..
+            utils.Print("HUB", "WAITING conn=%d", c.ConnectionId)
+            n, _, err := syscall.Recvfrom(int(socket_copy.Fd()), zero, syscall.MSG_PEEK)
+            if n == 0 || err != nil {
+                utils.Print("HUB", "DROPPED conn=%d", c.ConnectionId)
+                notifier <- true
+                return
+            }
+        }
+    }()
+
+    return notifier, stop
 }
 
 func (c *Hub) genid() uint64 {
@@ -126,11 +169,11 @@ func (c *Hub) NewConnection(raw net.Conn) *Connection {
     // The user can associate the appropriate conn-id with their
     // active connection once they send the first headers along.
     addr := raw.RemoteAddr().String()
-    conn := &Connection{c, raw, ConnectionId(c.genid()), addr, nil, nil, false}
+    conn := &Connection{c, raw, ConnectionId(c.genid()), addr, nil, false}
 
-    // Set an initial read deadline on the connection.
-    raw.SetReadDeadline(time.Now().Add(time.Second))
-    raw.SetWriteDeadline(time.Now().Add(time.Second))
+    // Disable the timeout.
+    raw.SetReadDeadline(time.Time{})
+    raw.SetWriteDeadline(time.Time{})
 
     c.Mutex.Lock()
     defer c.Mutex.Unlock()
@@ -141,7 +184,7 @@ func (c *Hub) NewConnection(raw net.Conn) *Connection {
     return conn
 }
 
-func (c *Hub) FindConnection(id ConnectionId, userid UserId, notifier <-chan bool) *Connection {
+func (c *Hub) FindConnection(id ConnectionId, userid UserId) *Connection {
     c.Mutex.Lock()
     defer c.Mutex.Unlock()
 
@@ -154,9 +197,6 @@ func (c *Hub) FindConnection(id ConnectionId, userid UserId, notifier <-chan boo
     if conn.inited {
         return conn
     }
-
-    // Save the notification channel.
-    conn.notifier = &notifier
 
     // Create the user if it doesnt exist.
     // NOTE: There are some race conditions here between the
@@ -197,7 +237,7 @@ func (c *Hub) RemoveClient(client *Client) {
     // is lost. This is a distinct advantage over systems
     // that rely only on the TCP connection as the "alive"
     // indicator -- we could adjust this as we see fit.
-    time.Sleep(time.Second)
+    time.Sleep(EphemeralTimeout)
 
     c.Mutex.Lock()
     defer c.Mutex.Unlock()
@@ -235,12 +275,6 @@ func (c *Hub) DropConnection(conn *Connection) {
 
 func (c *Connection) Drop() {
     c.Hub.DropConnection(c)
-}
-
-func (c *Connection) DisableTimeouts() {
-    // Disable the timeout.
-    c.raw.SetReadDeadline(time.Time{})
-    c.raw.SetWriteDeadline(time.Time{})
 }
 
 func (c *Hub) dumpHub() {

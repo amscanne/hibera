@@ -30,6 +30,12 @@ func (access *Access) Check(ns Namespace, auth Token, key Key, read bool, write 
     }
 
     // Disallow access to unconfigured namespaces.
+    _, exists := access.all[ns]
+    if !exists {
+        return false
+    }
+
+    // Grab the token.
     token, exists := access.all[ns][auth]
     if !exists {
         return false

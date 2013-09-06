@@ -47,12 +47,14 @@ var invalidMagic = errors.New("invalid magic number")
 
 // Generated function that performs real I/O.
 type IOFunc func(*os.File, *int64) ([]byte, error)
+
 func IOFuncNOP(*os.File, *int64) ([]byte, error) {
     return nil, nil
 }
 
 // Generated function to be called to do given work.
 type IOWork func() error
+
 func IOWorkNOP() error {
     return nil
 }
@@ -62,7 +64,7 @@ func IOWorkNOP() error {
 // Instead of performing real operations in the
 // storage engine, we generally return a function
 // that allows the user to perform real I/O at a
-// later point. This is done so that the server 
+// later point. This is done so that the server
 // (for example) could efficiently implement HEAD.
 //
 // Also, I/O is done efficiently by accessing the

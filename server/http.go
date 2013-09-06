@@ -137,7 +137,7 @@ func (s *HTTPServer) getContent(r *http.Request) ([]byte, error) {
     return buf, nil
 }
 
-func (s *HTTPServer) getConnection(r *http.Request, notifier <-chan bool) *Connection {
+func (s *HTTPServer) getConnection(r *http.Request) *Connection {
     // Pull out the relevant req.
     // NOTE: This is a hack. The underlying connection is our
     // special connection object -- and we return a string which
@@ -151,19 +151,19 @@ func (s *HTTPServer) getConnection(r *http.Request, notifier <-chan bool) *Conne
     if len(r.Header["X-Client-Id"]) > 0 {
         // Return a connection with the asssociate req.
         return s.Hub.FindConnection(ConnectionId(id),
-            UserId(r.Header["X-Client-Id"][0]), notifier)
+            UserId(r.Header["X-Client-Id"][0]))
     }
 
     // Return a connection with no associated req.
-    return s.Hub.FindConnection(ConnectionId(id), "", notifier)
+    return s.Hub.FindConnection(ConnectionId(id), "")
 }
 
-func (s *HTTPServer) getRequest(r *http.Request, notifier <-chan bool) *Request {
+func (s *HTTPServer) getRequest(r *http.Request) *Request {
     var auth string
     var ns string
 
     // Grab the connection.
-    conn := s.getConnection(r, notifier)
+    conn := s.getConnection(r)
     if conn == nil {
         return nil
     }
@@ -195,14 +195,6 @@ func (s *HTTPServer) getRequest(r *http.Request, notifier <-chan bool) *Request 
 
 func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
 
-    // Pull out a connection (with the close notifiers).
-    closeNotifier, ok := w.(http.CloseNotifier)
-    if !ok {
-        // Something is very wrong -- no close notifier?
-        http.Error(w, "", http.StatusInternalServerError)
-        return
-    }
-
     // Fully read the content.
     content, err := s.getContent(r)
     if err != nil {
@@ -211,7 +203,7 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
     }
 
     // Grab the connection object.
-    req := s.getRequest(r, closeNotifier.CloseNotify())
+    req := s.getRequest(r)
     if req == nil {
         http.Error(w, "", http.StatusNotFound)
         return

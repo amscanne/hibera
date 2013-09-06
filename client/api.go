@@ -89,8 +89,8 @@ func NewHiberaAPI(
     // Nothing really special about this, but we may want
     // to tune parameters for idling connections, etc.
     tr := &http.Transport{
-        TLSClientConfig:   &tls.Config{InsecureSkipVerify: true},
-        DisableKeepAlives: true,
+        TLSClientConfig:     &tls.Config{InsecureSkipVerify: true},
+        MaxIdleConnsPerHost: 1,
     }
     api.Client = &http.Client{Transport: tr, CheckRedirect: noRedirect}
 

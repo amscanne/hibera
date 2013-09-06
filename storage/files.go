@@ -30,6 +30,7 @@ type logFile struct {
 
 // Generated function to be called when I/O is done.
 type IODone func()
+
 func IODoneNOP() {
 }
 
@@ -165,7 +166,7 @@ func (l *logFile) Write(dio *deferredIO) (*logRecord, error) {
     if err != nil {
         l.Mutex.Lock()
         // We've already created this chunk so return it to the pool.
-        l.chunks = append(l.chunks, chunk{offset, int64(required)+int64(remaining)})
+        l.chunks = append(l.chunks, chunk{offset, int64(required) + int64(remaining)})
         l.Mutex.Unlock()
         return nil, err
     }

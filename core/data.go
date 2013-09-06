@@ -62,10 +62,10 @@ func (l *Lock) wait(timeout bool, duration time.Duration, notifier <-chan bool) 
 
     select {
     case <-wakeupchan:
-    case <-timeoutchan:
         rval = true
         break
 
+    case <-timeoutchan:
     case <-notifier:
         rval = false
         break
@@ -374,11 +374,13 @@ func (d *Data) SyncLeave(id EphemId, ns Namespace, key Key, name string) (Revisi
 }
 
 func (d *Data) DataGet(ns Namespace, key Key) ([]byte, Revision, error) {
+
     // Read the local value available.
     metadata, data, err := d.store.Read(toStoreKey(ns, key))
     if err != nil {
         return nil, NoRevision, err
     }
+
     return data, RevisionFromBytes(metadata), err
 }
 
@@ -394,7 +396,8 @@ func (d *Data) DataWatch(
 
     if id > 0 {
         getrev := func() (Revision, error) {
-            metadata, _, err := d.store.Read(toStoreKey(ns, key))
+            metadata, _, _, done, err := d.store.ReadFile(toStoreKey(ns, key), nil, nil)
+            done() // Release all locks, we only care about revision.
             return RevisionFromBytes(metadata), err
         }
         rev, err := d.doWait(id, ns, key, lock, rev, timeout, getrev, notifier, valid)
@@ -440,10 +443,6 @@ func (d *Data) DataModify(
 }
 
 func (d *Data) DataSet(ns Namespace, key Key, rev Revision, value []byte) (Revision, error) {
-
-    if rev.IsZero() && value == nil {
-        return d.DataRemove(ns, key, rev)
-    }
 
     return d.DataModify(ns, key, rev, func(rev Revision) error {
         return d.store.Write(toStoreKey(ns, key), rev.Bytes(), value)

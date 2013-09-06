@@ -32,12 +32,9 @@ type Request interface {
     // The server id of the request.
     ServerId() string
 
-    // Disable timeouts on the connection.
-    DisableTimeouts()
-
     // A channel which will be activated when the
     // unerlying connection drops.
-    Notifier() <-chan bool
+    Notifier() (<-chan bool, func())
 
     // Return the ephemeral id of this request.
     EphemId() core.EphemId
@@ -173,6 +170,7 @@ func (c *Cluster) DataList(req Request) (map[core.Key]uint, core.Revision, error
 }
 
 func (c *Cluster) DataGet(req Request, key core.Key, rev core.Revision, timeout uint) ([]byte, core.Revision, error) {
+
     utils.Print("CLUSTER", "DATA-GET key=%s", key)
 
     err := c.Authorize(req.Namespace(), req.Auth(), key, true, false, false)
@@ -192,12 +190,18 @@ func (c *Cluster) DataGet(req Request, key core.Key, rev core.Revision, timeout 
     }
 
     valid := func() bool { return c.ring.IsMaster(key) }
-    req.DisableTimeouts()
-    return c.Data.DataWatch(req.EphemId(), req.Namespace(), key, rev, timeout, req.Notifier(), valid)
+    notifier, stop := req.Notifier()
+    defer stop()
+
+    return c.Data.DataWatch(
+        req.EphemId(),
+        req.Namespace(), key,
+        rev, timeout,
+        notifier, valid)
 }
 
 func (c *Cluster) DataSet(req Request, key core.Key, rev core.Revision, value []byte) (core.Revision, error) {
-    utils.Print("CLUSTER", "DATA-SET key=%s len(value)=%d rev=%s", key, len(value), rev.String())
+    utils.Print("CLUSTER", "DATA-SET key=%s length=%d rev=%s", key, len(value), rev.String())
 
     err := c.Authorize(req.Namespace(), req.Auth(), key, false, true, false)
     if err != nil {
@@ -210,7 +214,7 @@ func (c *Cluster) DataSet(req Request, key core.Key, rev core.Revision, value []
     }
 
     if server {
-        return c.Data.DataSet(req.Namespace(), key, length, input, offset, rev, value)
+        return c.Data.DataSet(req.Namespace(), key, rev, value)
     }
 
     // NOTE: We disallow clients setting the root keys.
@@ -226,13 +230,10 @@ func (c *Cluster) DataSet(req Request, key core.Key, rev core.Revision, value []
         // do not succeed will get a server error and will retry. So
         // if you keep posting will 0, eventually you will set some key
         // to whatever value you wanted.
-        _, _, done, rev, err = c.Data.DataGet(req.Namespace(), key)
+        _, rev, err = c.Data.DataGet(req.Namespace(), key)
         if err != nil {
             return core.NoRevision, err
         }
-
-        // Cancel immediately, we only read the head.
-        done()
 
         // Use the next given reivsion.
         rev = rev.Next()
@@ -242,7 +243,7 @@ func (c *Cluster) DataSet(req Request, key core.Key, rev core.Revision, value []
     // servers, it has to be capable of sending the value many
     // times.  We can't splice() the socket, so we allow the
     // quorum functions to use a cache as necessary to send data.
-    return c.quorumSet(c.ring, req.Namespace(), key, length, input, offset, rev, value)
+    return c.quorumSet(c.ring, req.Namespace(), key, rev, value)
 }
 
 func (c *Cluster) DataRemove(req Request, key core.Key, rev core.Revision) (core.Revision, error) {
@@ -297,8 +298,10 @@ func (c *Cluster) SyncJoin(req Request, key core.Key, name string, limit uint, t
     }
 
     valid := func() bool { return c.ring.IsMaster(key) }
-    req.DisableTimeouts()
-    return c.Data.SyncJoin(req.EphemId(), req.Namespace(), key, name, limit, timeout, req.Notifier(), valid)
+    notifier, stop := req.Notifier()
+    defer stop()
+
+    return c.Data.SyncJoin(req.EphemId(), req.Namespace(), key, name, limit, timeout, notifier, valid)
 }
 
 func (c *Cluster) SyncLeave(req Request, key core.Key, name string) (core.Revision, error) {
@@ -331,8 +334,10 @@ func (c *Cluster) EventWait(req Request, key core.Key, rev core.Revision, timeou
     }
 
     valid := func() bool { return c.ring.IsMaster(key) }
-    req.DisableTimeouts()
-    return c.Data.EventWait(req.EphemId(), req.Namespace(), key, rev, timeout, req.Notifier(), valid)
+    notifier, stop := req.Notifier()
+    defer stop()
+
+    return c.Data.EventWait(req.EphemId(), req.Namespace(), key, rev, timeout, notifier, valid)
 }
 
 func (c *Cluster) EventFire(req Request, key core.Key, rev core.Revision) (core.Revision, error) {
