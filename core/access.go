@@ -45,7 +45,7 @@ func (access *Access) Check(ns Namespace, auth Token, key Key, read bool, write 
     for _, perms := range token {
         // Check the specific operations.
         if perms.re != nil && perms.re.Match([]byte(key)) {
-            if (!read || perms.Read) && (!write || perms.Write) || (!execute || perms.Execute) {
+            if (!read || perms.Read) && (!write || perms.Write) && (!execute || perms.Execute) {
                 return true
             }
         }
