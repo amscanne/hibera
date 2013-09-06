@@ -22,17 +22,23 @@ func (access *Access) Check(ns Namespace, auth Token, key Key, read bool, write 
     access.allLock.RLock()
     defer access.allLock.RUnlock()
 
+    // Disallow access to unconfigured namespaces.
+    // This is because we delete keys in all namespace
+    // that don't exist in order to prevent lost data.
+    // You can always create the namespace with zero
+    // permission bits on some dumb token.
+    if ns != Namespace("") {
+        _, exists := access.all[ns]
+        if !exists {
+            return false
+        }
+    }
+
     // Check for the root token.
     // This is the only way that new namespaces
     // can be created and destroyed.
     if auth == access.root {
         return true
-    }
-
-    // Disallow access to unconfigured namespaces.
-    _, exists := access.all[ns]
-    if !exists {
-        return false
     }
 
     // Grab the token.
