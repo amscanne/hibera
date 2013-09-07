@@ -196,15 +196,14 @@ func (nodes *Nodes) Suspicious() []*Node {
     rev := nodes.self.Current
     return nodes.filter(func(node *Node) bool {
         return (node.Active &&
-            node.Alive &&
+            node.Alive() &&
             node != nodes.self &&
             (node.Dropped > 0 || rev.GreaterThan(node.Current)))
     })
 }
 
 func (nodes *Nodes) HasSuspicious() bool {
-    rev := nodes.self.Current
-    return len(nodes.Suspicious(rev)) > 0
+    return len(nodes.Suspicious()) > 0
 }
 
 func (nodes *Nodes) Self() *Node {
@@ -303,6 +302,18 @@ func (nodes *Nodes) Decode(na NodeInfo) (bool, error) {
         if orig_active != now_active {
             changed = true
         }
+    }
+
+    // Forget about non-active nodes with Current < node.Self.Current.
+    rev := nodes.self.Current
+    to_remove := make([]string, 0)
+    for id, node := range na {
+        if !node.Active && rev.GreaterThan(node.Current.Next()) {
+            to_remove = append(to_remove, id)
+        }
+    }
+    for _, id := range to_remove {
+        delete(na, id)
     }
 
     return changed, nil
