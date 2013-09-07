@@ -76,8 +76,8 @@ func (s *GossipServer) heartbeat() {
     // the seeds is to ensure that at cluster creation time, we
     // don't end up with two split clusters.
     var nodes []*core.Node
-    if s.Cluster.Nodes.Self().Active {
-        nodes = s.Cluster.Suspicious(s.Cluster.Version())
+    if s.Cluster.HasSuspicious() {
+        nodes = s.Cluster.Suspicious()
     }
     if nodes == nil || len(nodes) == 0 {
         nodes = s.Cluster.Others()
@@ -111,7 +111,7 @@ func (s *GossipServer) heartbeat() {
 
 func (s *GossipServer) Sender() {
     for {
-        if s.Cluster.HasSuspicious(s.Cluster.Version()) {
+        if s.Cluster.HasSuspicious() {
             s.heartbeat()
             time.Sleep(time.Duration(MinHeartbeat) * time.Millisecond)
         } else {

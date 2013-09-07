@@ -192,13 +192,18 @@ func (nodes *Nodes) Others() []*Node {
     })
 }
 
-func (nodes *Nodes) Suspicious(rev Revision) []*Node {
+func (nodes *Nodes) Suspicious() []*Node {
+    rev := nodes.self.Current
     return nodes.filter(func(node *Node) bool {
-        return node.Active && node != nodes.self && (node.Dropped > 0 || rev.GreaterThan(node.Current))
+        return (node.Active &&
+            node.Alive &&
+            node != nodes.self &&
+            (node.Dropped > 0 || rev.GreaterThan(node.Current)))
     })
 }
 
-func (nodes *Nodes) HasSuspicious(rev Revision) bool {
+func (nodes *Nodes) HasSuspicious() bool {
+    rev := nodes.self.Current
     return len(nodes.Suspicious(rev)) > 0
 }
 

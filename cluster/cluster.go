@@ -25,6 +25,9 @@ type Cluster struct {
     // The updated replication factor.
     new_N uint
 
+    // Whether or not we will force an encode.
+    force bool
+
     // The cluster revision.
     // When the cluster has not yet been activated (i.e.
     // we've just started and not yet seen any active nodes
@@ -100,7 +103,7 @@ func (c *Cluster) lockedEncode(next bool) ([]byte, error) {
     }
 
     // Check if we're encoding anything interesting.
-    if next && (info.N == c.N) && !nodes_changed && !access_changed {
+    if next && !c.force && (info.N == c.N) && !nodes_changed && !access_changed {
         utils.Print("CLUSTER", "NOTHING-DOING")
         return nil, nil
     }
@@ -159,6 +162,9 @@ func (c *Cluster) Active() bool {
 func (c *Cluster) doActivate(N uint) (core.Revision, error) {
     c.Mutex.Lock()
     defer c.Mutex.Unlock()
+
+    // Always force an encode.
+    c.force = true
 
     // Always take this as the proposed replication.
     c.new_N = N
@@ -433,6 +439,7 @@ func (c *Cluster) lockedChangeRevision(rev core.Revision, force bool) (core.Revi
     c.Mutex.Lock()
 
     // Update the revision.
+    c.force = false
     c.rev = rev
     c.Nodes.Heartbeat(c.Nodes.Self().Id(), c.rev)
 
