@@ -26,6 +26,7 @@ var output = cli.Flags.String("output", "", "Output file for sync.")
 var data = cli.Flags.Bool("data", false, "Use the synchronization group data mapping.")
 var path = cli.Flags.String("path", ".*", "The path for a given token (regular expression).")
 var perms = cli.Flags.String("perms", "rwx", "Permissions (combination of r,w,x).")
+var rev = cli.Flags.String("rev", "0", "Revision (for data, watching, etc.).")
 
 var cliInfo = cli.Cli{
     "Hibera command line client.",
@@ -79,13 +80,13 @@ var cliInfo = cli.Cli{
             "Get the contents of the key.",
             "",
             []string{"key"},
-            []string{},
+            []string{"rev"},
             false,
         },
         "set": cli.Command{"Set the contents of the key.",
             "",
             []string{"key"},
-            []string{},
+            []string{"rev"},
             true,
         },
         "push": cli.Command{
@@ -105,7 +106,7 @@ var cliInfo = cli.Cli{
             "Remove the given key.",
             "",
             []string{"key"},
-            []string{},
+            []string{"rev"},
             false,
         },
         "sync": cli.Command{"Synchronize a key.",
@@ -118,14 +119,14 @@ var cliInfo = cli.Cli{
             "Wait for an update of the key.",
             "",
             []string{"key"},
-            []string{"timeout"},
+            []string{"timeout", "rev"},
             false,
         },
         "fire": cli.Command{
             "Notify all waiters on a key.",
             "",
             []string{"key"},
-            []string{},
+            []string{"rev"},
             false,
         },
     },
@@ -304,14 +305,13 @@ func cli_run(
 }
 
 func cli_members(c *client.HiberaAPI, key string, name string, limit uint) error {
-    index, members, _, err := c.SyncMembers(key, name, limit)
+    index, members, rev, err := c.SyncMembers(key, name, limit)
     if err != nil {
         return err
     }
-    if len(members) > 0 {
-        // Output all members.
-        fmt.Printf("%d\n%s\n", index, strings.Join(members, "\n"))
-    }
+    // Output all members.
+    os.Stdout.Write([]byte(fmt.Sprintf("%d\n%s\n", index, strings.Join(members, "\n"))))
+    os.Stderr.Write([]byte(fmt.Sprintf("%s\n", rev.String())))
     return nil
 }
 
@@ -321,11 +321,12 @@ func cli_in(c *client.HiberaAPI, key string, name string, limit uint) (bool, err
         return false, err
     }
     if index >= 0 {
-        value, _, err := c.DataGet(
+        value, rev, err := c.DataGet(
             fmt.Sprintf("%s.%d", key, index),
             core.NoRevision, 0)
         if err == nil {
             os.Stdout.Write(value)
+            os.Stderr.Write([]byte(fmt.Sprintf("%s\n", rev.String())))
         }
         return true, nil
     }
@@ -333,7 +334,7 @@ func cli_in(c *client.HiberaAPI, key string, name string, limit uint) (bool, err
 }
 
 func cli_out(c *client.HiberaAPI, key string, value *string, name string, limit uint) (bool, error) {
-    index, _, _, err := c.SyncMembers(key, name, limit)
+    index, _, rev, err := c.SyncMembers(key, name, limit)
     if err != nil {
         return false, err
     }
@@ -343,27 +344,31 @@ func cli_out(c *client.HiberaAPI, key string, value *string, name string, limit 
             // Fully read input.
             buf := new(bytes.Buffer)
             io.Copy(buf, os.Stdin)
-            _, err = c.DataSet(
+            rev, err = c.DataSet(
                 fmt.Sprintf("%s.%d", key, index),
                 core.NoRevision, buf.Bytes())
         } else {
             // Use the given string.
-            _, err = c.DataSet(
+            rev, err = c.DataSet(
                 fmt.Sprintf("%s.%d", key, index),
                 core.NoRevision, []byte(*value))
+        }
+        if err == nil {
+            os.Stderr.Write([]byte(fmt.Sprintf("%s\n", rev.String())))
         }
         return true, err
     }
     return false, err
 }
 
-func cli_get(c *client.HiberaAPI, key string) error {
-    value, _, err := c.DataGet(key, core.NoRevision, 0)
+func cli_get(c *client.HiberaAPI, key string, rev core.Revision) error {
+    value, rev, err := c.DataGet(key, rev, 0)
     if err != nil {
         return err
     }
     // Output the string.
-    fmt.Printf("%s", value)
+    os.Stdout.Write([]byte(fmt.Sprintf("%s\n", value)))
+    os.Stderr.Write([]byte(fmt.Sprintf("%s\n", rev.String())))
     return nil
 }
 
@@ -385,6 +390,7 @@ func cli_push(c *client.HiberaAPI, key string) error {
         if err != nil {
             return err
         }
+        os.Stderr.Write([]byte(fmt.Sprintf("%s\n", rev.String())))
     }
 
     return nil
@@ -401,6 +407,7 @@ func cli_pull(c *client.HiberaAPI, key string) error {
         if err != nil {
             return err
         }
+        os.Stderr.Write([]byte(fmt.Sprintf("%s\n", rev.String())))
 
         // Write the data.
         _, err = os.Stdout.Write(value)
@@ -414,22 +421,28 @@ func cli_pull(c *client.HiberaAPI, key string) error {
     return nil
 }
 
-func cli_set(c *client.HiberaAPI, key string, value *string) error {
+func cli_set(c *client.HiberaAPI, key string, value *string, rev core.Revision) error {
     var err error
     if value == nil {
         // Fully read input.
         buf := new(bytes.Buffer)
         io.Copy(buf, os.Stdin)
-        _, err = c.DataSet(key, core.NoRevision, buf.Bytes())
+        rev, err = c.DataSet(key, rev, buf.Bytes())
     } else {
         // Use the given string.
-        _, err = c.DataSet(key, core.NoRevision, []byte(*value))
+        rev, err = c.DataSet(key, rev, []byte(*value))
+    }
+    if err == nil {
+        os.Stderr.Write([]byte(fmt.Sprintf("%s\n", rev.String())))
     }
     return err
 }
 
-func cli_remove(c *client.HiberaAPI, key string) error {
-    _, err := c.DataRemove(key, core.NoRevision)
+func cli_remove(c *client.HiberaAPI, key string, rev core.Revision) error {
+    rev, err := c.DataRemove(key, rev)
+    if err == nil {
+        os.Stderr.Write([]byte(fmt.Sprintf("%s\n", rev.String())))
+    }
     return err
 }
 
@@ -439,7 +452,7 @@ func cli_list(c *client.HiberaAPI) error {
         return err
     }
     for item, _ := range items {
-        fmt.Printf("%s\n", item)
+        os.Stdout.Write([]byte(fmt.Sprintf("%s\n", item)))
     }
     return nil
 }
@@ -457,6 +470,7 @@ func cli_sync(c *client.HiberaAPI, key string, output string, cmd []string, time
         if err != nil {
             return err
         }
+        os.Stderr.Write([]byte(fmt.Sprintf("%s\n", rev.String())))
 
         if output != "" {
             // Copy the output to the file.
@@ -475,13 +489,20 @@ func cli_sync(c *client.HiberaAPI, key string, output string, cmd []string, time
     return nil
 }
 
-func cli_watch(c *client.HiberaAPI, key string, timeout uint) error {
-    _, err := c.EventWait(key, core.NoRevision, timeout)
+func cli_watch(c *client.HiberaAPI, key string, timeout uint, rev core.Revision) error {
+    rev, err := c.EventWait(key, rev, timeout)
+    if err == nil {
+        os.Stdout.Write([]byte(fmt.Sprintf("%s\n", rev.String())))
+        os.Stderr.Write([]byte(fmt.Sprintf("%s\n", rev.String())))
+    }
     return err
 }
 
-func cli_fire(c *client.HiberaAPI, key string) error {
-    _, err := c.EventFire(key, core.NoRevision)
+func cli_fire(c *client.HiberaAPI, key string, rev core.Revision) error {
+    rev, err := c.EventFire(key, rev)
+    if err == nil {
+        os.Stderr.Write([]byte(fmt.Sprintf("%s\n", rev.String())))
+    }
     return err
 }
 
@@ -512,6 +533,10 @@ func make_command(args ...string) []string {
 func do_cli(command string, args []string) error {
 
     client := cli.Client()
+    crev, err := core.RevisionFromString(*rev)
+    if err != nil {
+        return err
+    }
 
     switch command {
     case "run":
@@ -541,7 +566,7 @@ func do_cli(command string, args []string) error {
         }
         return err
     case "get":
-        return cli_get(client, args[0])
+        return cli_get(client, args[0], crev)
     case "push":
         return cli_push(client, args[0])
     case "pull":
@@ -549,20 +574,20 @@ func do_cli(command string, args []string) error {
     case "set":
         if len(args) > 1 {
             value := strings.Join(args[1:], " ")
-            return cli_set(client, args[0], &value)
+            return cli_set(client, args[0], &value, crev)
         }
-        return cli_set(client, args[0], nil)
+        return cli_set(client, args[0], nil, crev)
     case "remove":
-        return cli_remove(client, args[0])
+        return cli_remove(client, args[0], crev)
     case "list":
         return cli_list(client)
     case "sync":
         cmd := make_command(args[1:]...)
         return cli_sync(client, args[0], *output, cmd, *timeout)
     case "watch":
-        return cli_watch(client, args[0], *timeout)
+        return cli_watch(client, args[0], *timeout, crev)
     case "fire":
-        return cli_fire(client, args[0])
+        return cli_fire(client, args[0], crev)
     }
 
     return nil
