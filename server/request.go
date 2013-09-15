@@ -7,12 +7,13 @@ import (
 type Request struct {
     *Connection
 
-    auth core.Token
-    ns   core.Namespace
+    auth     core.Token
+    ns       core.Namespace
+    notifier <-chan bool
 }
 
-func NewRequest(conn *Connection, auth core.Token, ns core.Namespace) *Request {
-    return &Request{conn, auth, ns}
+func NewRequest(conn *Connection, auth core.Token, ns core.Namespace, notify <-chan bool) *Request {
+    return &Request{conn, auth, ns, notify}
 }
 
 func (r *Request) Auth() core.Token {
@@ -21,4 +22,8 @@ func (r *Request) Auth() core.Token {
 
 func (r *Request) Namespace() core.Namespace {
     return r.ns
+}
+
+func (r *Request) Notifier() <-chan bool {
+    return r.notifier
 }

@@ -177,13 +177,19 @@ func (s *HTTPServer) getConnection(r *http.Request) *Connection {
     return s.Hub.FindConnection(ConnectionId(id), "")
 }
 
-func (s *HTTPServer) getRequest(r *http.Request) *Request {
+func (s *HTTPServer) getRequest(w http.ResponseWriter, r *http.Request) *Request {
     var auth string
     var ns string
 
     // Grab the connection.
     conn := s.getConnection(r)
     if conn == nil {
+        return nil
+    }
+
+    // Get the close notifier.
+    cn, ok := w.(http.CloseNotifier)
+    if !ok {
         return nil
     }
 
@@ -209,7 +215,7 @@ func (s *HTTPServer) getRequest(r *http.Request) *Request {
         }
     }
 
-    return NewRequest(conn, core.Token(auth), core.Namespace(ns))
+    return NewRequest(conn, core.Token(auth), core.Namespace(ns), cn.CloseNotify())
 }
 
 func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
@@ -222,7 +228,7 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
     }
 
     // Grab the connection object.
-    req := s.getRequest(r)
+    req := s.getRequest(w, r)
     if req == nil {
         http.Error(w, "", http.StatusNotFound)
         return

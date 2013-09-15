@@ -8,7 +8,6 @@ import (
     "strings"
     "sync"
     "sync/atomic"
-    "syscall"
     "time"
 )
 
@@ -108,56 +107,6 @@ func (c *Connection) EphemId() core.EphemId {
         return core.EphemId(c.client.ClientId)
     }
     return core.EphemId(c.ConnectionId)
-}
-
-func (c *Connection) Notifier() (<-chan bool, func()) {
-
-    // NOTE: This function should only be called from
-    // contexts where we are not expecting anything to
-    // be read from the socket. i.e. from within the
-    // request handler itself. If it is called from other
-    // places, there is the possibility that it will eat
-    // actual useful input from the user.
-    //
-    // We return two channels. To disable the timer,
-    // simply write to the stop channel, and read the
-    // final value from the notify channel.
-    //
-    // To turn off the notifier, simply send something
-    // to the channel and the this will stop polling.
-
-    notifier := make(chan bool, 1)
-    socket_copy, err := c.raw.File()
-    if err != nil {
-        // Notify immediately.
-        notifier <- true
-        return notifier, func() {}
-    }
-
-    // Stop polling on the socket.
-    stop := func() {
-        socket_copy.Close()
-    }
-
-    go func() {
-        zero := make([]byte, 1, 1)
-        for {
-            // This is a duplicate socket, and we're simply peeking.
-            // So there's no harm done. We'll generate an error whenever
-            // the socket_copy() is closed from above, so this is a clean
-            // way of keeping tabs. Not sure about the map onto goroutines
-            // though, seems like this may be a long running system call..
-            utils.Print("HUB", "WAITING conn=%d", c.ConnectionId)
-            n, _, err := syscall.Recvfrom(int(socket_copy.Fd()), zero, syscall.MSG_PEEK)
-            if n == 0 || err != nil {
-                utils.Print("HUB", "DROPPED conn=%d", c.ConnectionId)
-                notifier <- true
-                return
-            }
-        }
-    }()
-
-    return notifier, stop
 }
 
 func (c *Hub) genid() uint64 {

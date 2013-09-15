@@ -34,7 +34,7 @@ type Request interface {
 
     // A channel which will be activated when the
     // unerlying connection drops.
-    Notifier() (<-chan bool, func())
+    Notifier() <-chan bool
 
     // Return the ephemeral id of this request.
     EphemId() core.EphemId
@@ -190,8 +190,7 @@ func (c *Cluster) DataGet(req Request, key core.Key, rev core.Revision, timeout 
     }
 
     valid := func() bool { return c.ring.IsMaster(key) }
-    notifier, stop := req.Notifier()
-    defer stop()
+    notifier := req.Notifier()
 
     return c.Data.DataWatch(
         req.EphemId(),
@@ -310,8 +309,7 @@ func (c *Cluster) SyncJoin(req Request, key core.Key, name string, limit uint, t
     }
 
     valid := func() bool { return c.ring.IsMaster(key) }
-    notifier, stop := req.Notifier()
-    defer stop()
+    notifier := req.Notifier()
 
     return c.Data.SyncJoin(req.EphemId(), req.Namespace(), key, name, limit, timeout, notifier, valid)
 }
@@ -346,8 +344,7 @@ func (c *Cluster) EventWait(req Request, key core.Key, rev core.Revision, timeou
     }
 
     valid := func() bool { return c.ring.IsMaster(key) }
-    notifier, stop := req.Notifier()
-    defer stop()
+    notifier := req.Notifier()
 
     return c.Data.EventWait(req.EphemId(), req.Namespace(), key, rev, timeout, notifier, valid)
 }

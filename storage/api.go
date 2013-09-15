@@ -1,3 +1,41 @@
+// Le storage.
+//
+// This submodule implements a simple storage system based
+// around a very simple log database. It is structured as follows:
+//
+// logFile -- This type represents a log file. It allows for
+//            reading/writing/erasing of logRecords. A logRecord
+//            is a basic type which encapsulates the state for
+//            a given position in the file. 
+//
+// logRecord -- A record for an entry in a logFile. When you read()
+//              a record, you will get back functions that allow for
+//              arbitrary I/O at a later point. This record is safe
+//              from modification and deletion until you release it.
+//
+// logManager -- The high-level manager which controls the records
+//               being serialized, etc. The storage API is essentially
+//               the logManager.
+// 
+// There is a single thread which controls scheduling of I/O. This
+// is found in queue.go. (It makes use of goroutines whenever possible,
+// but it's careful about limiting sync() calls, etc.).
+//
+// The on disk storage strategy is as follows:
+//
+// 1) A data directory contains a file data.0,
+//    which is a log file but written in a non-linear fashion.
+//    This stores all the data keys, and log files are frequently
+//    flattened into this file (asynchronously).
+//
+// 2) A series of log.* files in the log directory.
+//    Writes are batched and written to a log file. The log file
+//    will be sync()'ed when, a) the deadline expires (50ms) for
+//    the oldest write in progress or b) there are no pending writes.
+//    The write() requests in progress will be ACK'ed only when they
+//    are sync()'ed on the disk. Once they are on disk, an asyncronous
+//    flatten of the logfile will start.
+
 package storage
 
 import (
