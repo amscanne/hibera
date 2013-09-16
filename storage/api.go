@@ -6,7 +6,7 @@
 // logFile -- This type represents a log file. It allows for
 //            reading/writing/erasing of logRecords. A logRecord
 //            is a basic type which encapsulates the state for
-//            a given position in the file. 
+//            a given position in the file.
 //
 // logRecord -- A record for an entry in a logFile. When you read()
 //              a record, you will get back functions that allow for
@@ -16,7 +16,7 @@
 // logManager -- The high-level manager which controls the records
 //               being serialized, etc. The storage API is essentially
 //               the logManager.
-// 
+//
 // There is a single thread which controls scheduling of I/O. This
 // is found in queue.go. (It makes use of goroutines whenever possible,
 // but it's careful about limiting sync() calls, etc.).

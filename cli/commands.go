@@ -1,15 +1,20 @@
 package cli
 
 import (
+    "bufio"
     "flag"
     "fmt"
     "hibera/utils"
+    "io/ioutil"
     "log"
     "math/rand"
     "os"
+    "regexp"
     "runtime"
     "runtime/pprof"
     "sort"
+    "strconv"
+    "strings"
     "syscall"
     "time"
 )
@@ -91,6 +96,66 @@ func command_help(cli Cli, arg0 string, command string, spec Command) {
     fmt.Printf("\n")
 }
 
+func crankProcessors() error {
+    cpu_info, err := os.OpenFile("/proc/cpuinfo", os.O_RDONLY, 0)
+    if err != nil {
+        return err
+    }
+    defer cpu_info.Close()
+    reader := bufio.NewReader(cpu_info)
+    count := 0
+    re, err := regexp.Compile("^processor\t:")
+    if err != nil {
+        return err
+    }
+    for {
+        line, _, err := reader.ReadLine()
+        if err != nil {
+            break
+        }
+        if re.Match(line) {
+            count += 1
+        }
+    }
+
+    runtime.GOMAXPROCS(count + 1)
+    return nil
+}
+
+func crankFileDescriptors() error {
+    // First set our soft limit.
+    var rlim syscall.Rlimit
+    err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &rlim)
+    if err != nil {
+        return err
+    }
+    rlim.Cur = rlim.Max
+    err = syscall.Setrlimit(syscall.RLIMIT_NOFILE, &rlim)
+    if err != nil {
+        return err
+    }
+
+    // Then, read the system max.
+    nr_open, err := os.OpenFile("/proc/sys/fs/nr_open", os.O_RDONLY, 0)
+    if err != nil {
+        return err
+    }
+    defer nr_open.Close()
+    bytes, err := ioutil.ReadAll(nr_open)
+    if err != nil {
+        return err
+    }
+    max, err := strconv.ParseUint(strings.TrimSpace(string(bytes)), 10, 64)
+    if err != nil {
+        return err
+    }
+
+    // Try to adjust our maximum.
+    rlim.Cur = max
+    rlim.Max = max
+    return syscall.Setrlimit(syscall.RLIMIT_NOFILE, &rlim)
+}
+
 var arg0 string
 var command string
 var args []string
@@ -153,7 +218,16 @@ func Main(cli Cli, run func(command string, args []string) error) {
     }
 
     // Crank up processors.
-    runtime.GOMAXPROCS(4)
+    err := crankProcessors()
+    if err != nil {
+        // Ignore.
+    }
+
+    // Crank up file descriptors.
+    err = crankFileDescriptors()
+    if err != nil {
+        // Ignore.
+    }
 
     // Turn on CPU profiling.
     if *cpuprofile != "" {
