@@ -14,6 +14,7 @@ import (
     "os"
     "strconv"
     "strings"
+    "syscall"
 )
 
 var UnhandledRequest = errors.New("Unhandled request")
@@ -457,7 +458,7 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
     }
 }
 
-func NewHTTPServer(cluster *cluster.Cluster, restart int, addr string, port uint, active uint) (*HTTPServer, error) {
+func NewHTTPServer(cluster *cluster.Cluster, restart int, addr string, port uint) (*HTTPServer, error) {
 
     // Bind our port.
     var ln net.Listener
@@ -473,6 +474,14 @@ func NewHTTPServer(cluster *cluster.Cluster, restart int, addr string, port uint
     if err != nil {
         return nil, err
     }
+
+    // Figure out our active limit (1/2 open limit).
+    var rlim syscall.Rlimit
+    err = syscall.Getrlimit(syscall.RLIMIT_NOFILE, &rlim)
+    if err != nil {
+        return nil, err
+    }
+    active := uint(rlim.Cur)
 
     // Create our object.
     server := new(HTTPServer)

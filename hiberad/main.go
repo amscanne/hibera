@@ -26,7 +26,6 @@ var dataPath = cli.Flags.String("data", utils.DefaultDataPath, "Backing storage 
 var domain = cli.Flags.String("domain", utils.DefaultDomain, "Failure domain for this server.")
 var keys = cli.Flags.Uint("keys", utils.DefaultKeys, "The number of keys for this node (weight).")
 var seeds = cli.Flags.String("seeds", utils.DefaultSeeds, "Seeds for joining the cluster.")
-var active = cli.Flags.Uint("active", utils.DefaultActive, "Maximum active simutaneous clients.")
 
 var rootfd = cli.Flags.Int("rootfd", -1, "File descriptor for reading root token.")
 var serverfd = cli.Flags.Int("serverfd", -1, "File descriptor used for server restarts.")
@@ -150,7 +149,7 @@ func cli_run() error {
     }
 
     // Startup our server.
-    s, err := server.NewServer(c, *serverfd, *bind, *port, strings.Split(*seeds, ","), *active)
+    s, err := server.NewServer(c, *serverfd, *bind, *port, strings.Split(*seeds, ","))
     if err != nil {
         return err
     }
