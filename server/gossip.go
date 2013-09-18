@@ -63,7 +63,8 @@ func (s *GossipServer) sendPingPong(addr *net.UDPAddr, pong bool) {
     }
     rev := s.Cluster.Version()
     id := s.Cluster.Nodes.Self().Id()
-    m := &message{t, rev, id, gossip}
+    url := s.Cluster.Nodes.Self().URL
+    m := &message{t, rev, id, url, gossip}
     utils.Print("GOSSIP", "SEND addr=%s type=%d", addr, t)
     s.send(addr, m)
 }
@@ -91,7 +92,7 @@ func (s *GossipServer) heartbeat() {
     index := rand.Int() % (len(nodes) + len(s.seeds))
     if index < len(nodes) {
         node := nodes[index]
-        addr, _ = utils.GenerateUDPAddr(node.Addr, "", utils.DefaultPort)
+        addr, _ = utils.UDPAddr(node.Addr, "", utils.DefaultPort)
         if addr != nil {
             // We're going to send, so assume the packet has dropped
             // and all will be reset when we actually get a response.
@@ -100,7 +101,7 @@ func (s *GossipServer) heartbeat() {
     } else {
         // Pick a seed and send a ping.
         seed := s.seeds[index-len(nodes)]
-        addr, _ = utils.GenerateUDPAddr(seed, "", utils.DefaultPort)
+        addr, _ = utils.UDPAddr(seed, "", utils.DefaultPort)
     }
 
     // Send a packet if we've got an address.
@@ -147,7 +148,7 @@ func (s *GossipServer) process(addr *net.UDPAddr, m *message) {
 
     // Update the cluster status based on gossip.
     utils.Print("GOSSIP", "RECV addr=%s type=%d", addr, m.Type)
-    s.Cluster.GossipUpdate(addr, m.Id, m.Revision, m.Dead)
+    s.Cluster.GossipUpdate(addr, m.Id, m.URL, m.Revision, m.Dead)
 
     if m.Type == pingMessage && s.Cluster.Active() {
         // Respond to the ping.

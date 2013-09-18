@@ -90,7 +90,7 @@ func cli_nodes(c *client.HiberaAPI) error {
     }
 
     for id, node := range info.Nodes {
-        addr := fmt.Sprintf("addr=%s", node.Addr)
+        url := fmt.Sprintf("url=%s", node.API())
         domain := fmt.Sprintf("domain=%s", node.Domain)
         keys := fmt.Sprintf("keys=%d", len(node.Keys))
         active := fmt.Sprintf("active=%t", node.Active)
@@ -98,7 +98,7 @@ func cli_nodes(c *client.HiberaAPI) error {
         current := fmt.Sprintf("current=%s", node.Current.String())
         dropped := fmt.Sprintf("dropped=%d", node.Dropped)
         fmt.Printf("%s %s %s %s %s %s %s %s\n",
-            id, addr, domain, keys, active, modified, current, dropped)
+            id, url, domain, keys, active, modified, current, dropped)
     }
 
     return nil

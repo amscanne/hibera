@@ -27,21 +27,16 @@ func ParseAddr(addr string, defaultHost string, defaultPort uint) (string, uint)
     return addr, port
 }
 
-func GenerateURL(addr string, defaultHost string, defaultPort uint) string {
-    addr, port := ParseAddr(addr, defaultHost, defaultPort)
-    return fmt.Sprintf("http://%s:%d", addr, port)
-}
-
-func GenerateUDPAddr(addr string, defaultHost string, defaultPort uint) (*net.UDPAddr, error) {
+func UDPAddr(addr string, defaultHost string, defaultPort uint) (*net.UDPAddr, error) {
     addr, port := ParseAddr(addr, defaultHost, defaultPort)
     return net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", addr, port))
 }
 
-func GenerateURLs(addrs string, defaultHost string, defaultPort uint) []string {
+func URLs(addrs string) []string {
     raw := strings.Split(addrs, ",")
     urls := make([]string, len(raw), len(raw))
     for i, addr := range raw {
-        urls[i] = GenerateURL(addr, defaultHost, defaultPort)
+        urls[i] = MakeURL(addr, "", nil)
     }
     return urls
 }

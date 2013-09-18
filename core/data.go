@@ -279,12 +279,7 @@ func (d *Data) computeIndex(revmap *EphemeralSet, data string, limit uint) SyncI
     return info
 }
 
-func (d *Data) SyncJoin(
-    id EphemId,
-    ns Namespace, key Key,
-    data string, limit uint, timeout uint,
-    notifier <-chan bool,
-    valid func() bool) (int, Revision, error) {
+func (d *Data) SyncJoin(id EphemId, ns Namespace, key Key, data string, limit uint, timeout uint, notifier <-chan bool, valid func() bool) (int, Revision, error) {
 
     lock := d.lock(ns, key)
     defer lock.unlock()
@@ -388,12 +383,7 @@ func (d *Data) DataGet(ns Namespace, key Key) ([]byte, Revision, error) {
     return data, RevisionFromBytes(metadata), err
 }
 
-func (d *Data) DataWatch(
-    id EphemId,
-    ns Namespace, key Key,
-    rev Revision, timeout uint,
-    notifier <-chan bool,
-    valid func() bool) ([]byte, Revision, error) {
+func (d *Data) DataWatch(id EphemId, ns Namespace, key Key, rev Revision, timeout uint, notifier <-chan bool, valid func() bool) ([]byte, Revision, error) {
 
     lock := d.lock(ns, key)
     defer lock.unlock()
@@ -414,10 +404,7 @@ func (d *Data) DataWatch(
     return d.DataGet(ns, key)
 }
 
-func (d *Data) DataModify(
-    ns Namespace, key Key,
-    rev Revision,
-    mod func(Revision) error) (Revision, error) {
+func (d *Data) DataModify(ns Namespace, key Key, rev Revision, mod func(Revision) error) (Revision, error) {
 
     lock := d.lock(ns, key)
     defer func() {
@@ -460,14 +447,7 @@ func (d *Data) DataRemove(ns Namespace, key Key, rev Revision) (Revision, error)
     })
 }
 
-func (d *Data) doWait(
-    id EphemId,
-    ns Namespace, key Key,
-    lock *Lock,
-    rev Revision, timeout uint,
-    getrev func() (Revision, error),
-    notifier <-chan bool,
-    valid func() bool) (Revision, error) {
+func (d *Data) doWait(id EphemId, ns Namespace, key Key, lock *Lock, rev Revision, timeout uint, getrev func() (Revision, error), notifier <-chan bool, valid func() bool) (Revision, error) {
 
     start := time.Now()
     end := start.Add(time.Duration(timeout) * time.Millisecond)
@@ -506,12 +486,7 @@ func (d *Data) doWait(
     return currev, nil
 }
 
-func (d *Data) EventWait(
-    id EphemId,
-    ns Namespace, key Key,
-    rev Revision,
-    timeout uint, notifier <-chan bool,
-    valid func() bool) (Revision, error) {
+func (d *Data) EventWait(id EphemId, ns Namespace, key Key, rev Revision, timeout uint, notifier <-chan bool, valid func() bool) (Revision, error) {
 
     lock := d.lock(ns, key)
     defer lock.unlock()

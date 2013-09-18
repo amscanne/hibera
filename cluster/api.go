@@ -9,8 +9,7 @@ type Redirect struct {
     URL string
 }
 
-type NotActivatedError struct {
-}
+type NotActivatedError struct{}
 
 type PermissionError struct {
     core.Key

@@ -24,6 +24,7 @@ var bind = cli.Flags.String("bind", utils.DefaultBind, "Bind address for the ser
 var port = cli.Flags.Uint("port", utils.DefaultPort, "Bind port for the server.")
 var logPath = cli.Flags.String("log", utils.DefaultLogPath, "Backing storage log path.")
 var dataPath = cli.Flags.String("data", utils.DefaultDataPath, "Backing storage data path.")
+var url = cli.Flags.String("url", utils.DefaultURL, "URL to advertise for this node.")
 var domain = cli.Flags.String("domain", utils.DefaultDomain, "Failure domain for this server.")
 var keys = cli.Flags.Uint("keys", utils.DefaultKeys, "The number of keys for this node (weight).")
 var seeds = cli.Flags.String("seeds", utils.DefaultSeeds, "Seeds for joining the cluster.")
@@ -58,6 +59,7 @@ var cliInfo = cli.Cli{
                 "log",
                 "data",
                 "domain",
+                "url",
                 "keys",
                 "seeds",
                 "active",
@@ -144,7 +146,7 @@ func cli_run() error {
     if err != nil {
         return err
     }
-    c, err := cluster.NewCluster(backend, addr, core.Token(root_passwd), *domain, ids)
+    c, err := cluster.NewCluster(backend, addr, *url, core.Token(root_passwd), *domain, ids)
     if err != nil {
         return err
     }

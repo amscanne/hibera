@@ -36,7 +36,7 @@ func (c *Cluster) doSet(node *core.Node, ns core.Namespace, key core.Key, rev co
     }
 
     utils.Print("QUORUM", "    SET-REMOTE key=%s rev=%s", key, rev.String())
-    cl := c.getClient(utils.MakeURL(node.Addr, "", nil))
+    cl := c.getClient(node.API())
     rrev, err := cl.NSDataSet(ns, key, rev, value)
     return core.Revision(rrev), err
 }
@@ -48,7 +48,7 @@ func (c *Cluster) doGet(node *core.Node, ns core.Namespace, key core.Key) ([]byt
     }
 
     utils.Print("QUORUM", "    GET-REMOTE key=%s", key)
-    cl := c.getClient(utils.MakeURL(node.Addr, "", nil))
+    cl := c.getClient(node.API())
     value, rev, err := cl.NSDataGet(ns, key, core.NoRevision, 1)
     return value, core.Revision(rev), err
 }
@@ -60,7 +60,7 @@ func (c *Cluster) doRemove(node *core.Node, ns core.Namespace, key core.Key, rev
     }
 
     utils.Print("QUORUM", "    REMOVE-REMOTE key=%s rev=%s", key, rev.String())
-    cl := c.getClient(utils.MakeURL(node.Addr, "", nil))
+    cl := c.getClient(node.API())
     rrev, err := cl.NSDataRemove(ns, key, rev)
     return core.Revision(rrev), err
 }
@@ -303,7 +303,7 @@ func (c *Cluster) doList(node *core.Node, ns core.Namespace) (map[core.Key]uint,
     }
 
     utils.Print("QUORUM", "    LIST-REMOTE")
-    cl := c.getClient(utils.MakeURL(node.Addr, "", nil))
+    cl := c.getClient(node.API())
     return cl.NSDataList(ns)
 }
 

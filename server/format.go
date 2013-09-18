@@ -13,5 +13,6 @@ type message struct {
     Type     messageType   `json:"type"`
     Revision core.Revision `json:"revision"`
     Id       string        `json:"id"`
+    URL      string        `json:"url"`
     Dead     []string      `json:"dead"`
 }

@@ -238,14 +238,14 @@ func (c *Cluster) doneSync() {
     c.syncActive = false
 }
 
-func (c *Cluster) doSync(addr *net.UDPAddr) error {
+func (c *Cluster) doSync(url string) error {
     // Only do one sync at a time.
     if !c.startSync() {
         return nil
     }
 
     // Pull the remote info from the node.
-    cl := c.getClient(utils.AsURL(addr))
+    cl := c.getClient(url)
     info, rev, err := cl.Info()
     if err != nil {
         c.doneSync()
@@ -271,7 +271,7 @@ func (c *Cluster) doSync(addr *net.UDPAddr) error {
     return err
 }
 
-func (c *Cluster) GossipUpdate(addr *net.UDPAddr, id string, rev core.Revision, dead []string) {
+func (c *Cluster) GossipUpdate(addr *net.UDPAddr, id string, url string, rev core.Revision, dead []string) {
     // Mark dead nodes as dead.
     for _, id := range dead {
         c.Nodes.NoHeartbeat(id)
@@ -285,7 +285,7 @@ func (c *Cluster) GossipUpdate(addr *net.UDPAddr, id string, rev core.Revision, 
         // We don't know about this node.
         // Refresh addr will go get info
         // from this node by address.
-        go c.doSync(addr)
+        go c.doSync(core.APIFromURL(url, addr.String()))
     }
 }
 
@@ -554,18 +554,13 @@ func (c *Cluster) timedHealthcheck() {
     time.AfterFunc(time.Duration(1)*time.Second, f)
 }
 
-func NewCluster(
-    store *storage.Store,
-    addr string,
-    root core.Token,
-    domain string,
-    ids []string) (*Cluster, error) {
+func NewCluster(store *storage.Store, addr string, url string, root core.Token, domain string, ids []string) (*Cluster, error) {
 
     c := new(Cluster)
     c.N = uint(0)
     c.rev = core.NoRevision
     c.root = root
-    c.Nodes = core.NewNodes(addr, ids, domain)
+    c.Nodes = core.NewNodes(addr, url, ids, domain)
     c.Access = core.NewAccess(root)
     c.Data = core.NewData(store)
     c.ring = NewRing(2*c.N+1, c.Nodes)

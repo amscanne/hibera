@@ -4,7 +4,10 @@ import (
     "errors"
     "fmt"
     "hibera/utils"
+    "os"
     "sort"
+    "strconv"
+    "strings"
     "sync"
     "sync/atomic"
 )
@@ -13,11 +16,14 @@ var DropLimit = uint32(10)
 var NoNode = errors.New("no node")
 
 type Node struct {
+    // The node Id (computed and cached).
+    id  string
+
     // The node address (host:port).
     Addr string `json:"address"`
 
-    // The node Id (computed and cached).
-    id  string
+    // The node URL (fully specified).
+    URL string `json:"url"`
 
     // The node domain.
     Domain string `json:"domain"`
@@ -63,9 +69,29 @@ func (n *Node) Id() string {
     return n.id
 }
 
-func NewNode(addr string, keys []string, domain string) *Node {
+func APIFromURL(url string, addr string) string {
+    parts := strings.SplitN(addr, ":", 2)
+    ip := parts[0]
+    var port string
+    if len(parts) == 2 {
+        port = parts[1]
+    } else {
+        port = strconv.FormatUint(uint64(utils.DefaultPort), 10)
+    }
+    url = strings.Replace(url, "%(addr)", addr, 1)
+    url = strings.Replace(url, "%(ip)", ip, 1)
+    url = strings.Replace(url, "%(port)", port, 1)
+    return url
+}
+
+func (n *Node) API() string {
+    return APIFromURL(n.URL, n.Addr)
+}
+
+func NewNode(addr string, url string, keys []string, domain string) *Node {
     node := new(Node)
     node.Addr = addr
+    node.URL = url
     node.Keys = keys
     node.Domain = domain
     node.Active = false
@@ -250,7 +276,7 @@ func (nodes *Nodes) Encode(next bool, na NodeInfo, N uint) (bool, error) {
             if domains[node.Domain] || len(domains) < int(N) {
                 // Propose this as an active node.
                 domains[node.Domain] = true
-                na[id] = NewNode(node.Addr, node.Keys, node.Domain)
+                na[id] = NewNode(node.Addr, node.URL, node.Keys, node.Domain)
                 na[id].Active = true
                 na[id].Modified = nodes.self.Current
                 changed = true
@@ -261,7 +287,7 @@ func (nodes *Nodes) Encode(next bool, na NodeInfo, N uint) (bool, error) {
             if domains[node.Domain] || len(domains) < int(N) {
                 // Propose this as a removed node.
                 domains[node.Domain] = true
-                na[id] = NewNode(node.Addr, node.Keys, node.Domain)
+                na[id] = NewNode(node.Addr, node.URL, node.Keys, node.Domain)
                 na[id].Active = false
                 na[id].Dropped = DropLimit
                 na[id].Current = node.Current
@@ -270,7 +296,7 @@ func (nodes *Nodes) Encode(next bool, na NodeInfo, N uint) (bool, error) {
             }
 
         } else {
-            na[id] = NewNode(node.Addr, node.Keys, node.Domain)
+            na[id] = NewNode(node.Addr, node.URL, node.Keys, node.Domain)
             na[id].Active = node.Active
             na[id].Current = node.Current
             na[id].Modified = node.Modified
@@ -337,9 +363,16 @@ func (nodes *Nodes) Count() int {
     return len(nodes.all)
 }
 
-func NewNodes(addr string, keys []string, domain string) *Nodes {
+func NewNodes(addr string, url string, keys []string, domain string) *Nodes {
     nodes := new(Nodes)
     nodes.all = make(NodeInfo)
+
+    // Do initial substitution on self.
+    hostname, err := os.Hostname()
+    if err != nil {
+        url = strings.Replace(url, "%(hostname)", hostname, 1)
+    }
+    url = strings.Replace(url, "%(domain)", domain, 1)
 
     // Nodes are create with hashed keys.
     // NOTE: all other nodes will be added
@@ -352,7 +385,7 @@ func NewNodes(addr string, keys []string, domain string) *Nodes {
     for i, key := range keys {
         hashed[i] = utils.Hash(key)
     }
-    nodes.self = NewNode(addr, hashed, domain)
+    nodes.self = NewNode(addr, url, hashed, domain)
     nodes.all[nodes.self.Id()] = nodes.self
 
     return nodes
@@ -364,7 +397,7 @@ func NewTestNodes(n uint, k uint) *Nodes {
     if err != nil {
         return nil
     }
-    nodes := NewNodes("localhost", uuids, "self")
+    nodes := NewNodes("localhost", "http://localhost", uuids, "self")
     nodes.self.Active = true
 
     for i := uint(0); i < n; i += 1 {
@@ -380,8 +413,9 @@ func NewTestNodes(n uint, k uint) *Nodes {
         if err != nil {
             return nil
         }
+        url := fmt.Sprintf("http://other-%d", i)
         name := fmt.Sprintf("other-%d", i)
-        node := NewNode(name, uuids, name)
+        node := NewNode(name, url, uuids, name)
         nodes.all[node.Id()] = node
         node.Active = true
     }

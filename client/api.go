@@ -58,13 +58,7 @@ func noRedirect(req *http.Request, via []*http.Request) error {
     return skipRedirect
 }
 
-func NewHiberaAPI(
-    urls []string,
-    auth core.Token,
-    clientid string,
-    delay uint,
-    defaultNS core.Namespace,
-    useRedirects bool) *HiberaAPI {
+func NewHiberaAPI(urls []string, auth core.Token, clientid string, delay uint, defaultNS core.Namespace, useRedirects bool) *HiberaAPI {
 
     // Check the clientId.
     if clientid == "" {
@@ -107,6 +101,11 @@ func NewHiberaClient(addrs string, auth string, delay uint, namespace string) *H
     } else {
         os.Setenv("HIBERA_API", addrs)
     }
+    if addrs == "" {
+        // Still nothing?
+        // Use the default.
+        addrs = fmt.Sprintf("%s:%d", utils.DefaultHost, utils.DefaultPort)
+    }
     if auth == "" {
         // Same for auth.
         auth = os.Getenv("HIBERA_AUTH")
@@ -119,7 +118,7 @@ func NewHiberaClient(addrs string, auth string, delay uint, namespace string) *H
     } else {
         os.Setenv("HIBERA_NAMESPACE", namespace)
     }
-    urls := utils.GenerateURLs(addrs, utils.DefaultHost, utils.DefaultPort)
+    urls := utils.URLs(addrs)
     clientid := generateClientId()
     return NewHiberaAPI(urls, core.Token(auth), clientid, delay, core.Namespace(namespace), true)
 }
@@ -171,8 +170,8 @@ func (h *HiberaAPI) makeRequest(method string, args httpArgs, hint string) (*htt
         url = utils.MakeURL(url, args.path, args.params)
     } else {
         // Select a random host to make a request.
-        host := h.urls[rand.Int()%len(h.urls)]
-        url = utils.MakeURL(host, args.path, args.params)
+        url = h.urls[rand.Int()%len(h.urls)]
+        url = utils.MakeURL(url, args.path, args.params)
     }
     req, err := http.NewRequest(method, url, bytes.NewBuffer(args.body))
     if err != nil {

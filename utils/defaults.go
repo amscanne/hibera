@@ -54,3 +54,6 @@ var DefaultPort = uint(2033)
 
 // The default host to connect to.
 var DefaultHost = "127.0.0.1"
+
+// The default URL to use.
+var DefaultURL = "http://%(addr)"
