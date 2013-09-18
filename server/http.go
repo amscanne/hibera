@@ -320,27 +320,27 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
         case "sync":
             switch r.Method {
             case "GET":
-                name := req.Name(s.strParam(r, "name"))
+                data := req.Data(s.strParam(r, "data"))
                 limit := uint(s.intParam(r, "limit"))
                 var info core.SyncInfo
-                info, rev, err = s.Cluster.SyncMembers(req, key, name, limit)
+                info, rev, err = s.Cluster.SyncMembers(req, key, data, limit)
                 if err == nil {
                     err = enc.Encode(info)
                 }
                 break
             case "POST":
-                name := req.Name(s.strParam(r, "name"))
+                data := req.Data(s.strParam(r, "data"))
                 limit := uint(s.intParam(r, "limit"))
                 timeout := uint(s.intParam(r, "timeout"))
                 var index int
-                index, rev, err = s.Cluster.SyncJoin(req, key, name, limit, timeout)
+                index, rev, err = s.Cluster.SyncJoin(req, key, data, limit, timeout)
                 if err == nil {
                     err = enc.Encode(index)
                 }
                 break
             case "DELETE":
-                name := req.Name(s.strParam(r, "name"))
-                rev, err = s.Cluster.SyncLeave(req, key, name)
+                data := req.Data(s.strParam(r, "data"))
+                rev, err = s.Cluster.SyncLeave(req, key, data)
                 break
             }
             break

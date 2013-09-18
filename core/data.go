@@ -16,8 +16,8 @@ import (
 // higher-level but it is kept abstract for here.
 
 type RevisionMap map[Key]Revision
-type NameMap map[string]Revision
-type EphemeralSet map[EphemId]NameMap
+type DataMap map[string]Revision
+type EphemeralSet map[EphemId]DataMap
 
 var NotFound = errors.New("Key not found or inconsistent")
 var RevConflict = errors.New("Revision is not sufficient")
@@ -209,7 +209,7 @@ func (d *Data) DataList(ns Namespace) (map[Key]uint, error) {
     return keys, nil
 }
 
-func (d *Data) SyncMembers(ns Namespace, key Key, name string, limit uint) (SyncInfo, Revision, error) {
+func (d *Data) SyncMembers(ns Namespace, key Key, data string, limit uint) (SyncInfo, Revision, error) {
     lock := d.lock(ns, key)
     defer lock.unlock()
 
@@ -221,10 +221,10 @@ func (d *Data) SyncMembers(ns Namespace, key Key, name string, limit uint) (Sync
     }
 
     // Return the members and rev.
-    return d.computeIndex(revmap, name, limit), d.getSyncRev(ns, key), nil
+    return d.computeIndex(revmap, data, limit), d.getSyncRev(ns, key), nil
 }
 
-func (d *Data) computeIndex(revmap *EphemeralSet, name string, limit uint) SyncInfo {
+func (d *Data) computeIndex(revmap *EphemeralSet, data string, limit uint) SyncInfo {
     var info SyncInfo
 
     // Aggregate all members across clients.
@@ -271,7 +271,7 @@ func (d *Data) computeIndex(revmap *EphemeralSet, name string, limit uint) SyncI
     // Save the index if it's available.
     info.Index = -1
     for i, current := range info.Members {
-        if current == name {
+        if current == data {
             info.Index = i
         }
     }
@@ -282,7 +282,7 @@ func (d *Data) computeIndex(revmap *EphemeralSet, name string, limit uint) SyncI
 func (d *Data) SyncJoin(
     id EphemId,
     ns Namespace, key Key,
-    name string, limit uint, timeout uint,
+    data string, limit uint, timeout uint,
     notifier <-chan bool,
     valid func() bool) (int, Revision, error) {
 
@@ -306,12 +306,12 @@ func (d *Data) SyncJoin(
         // Lookup the key and see if we're a member.
         _, present := (*revmap)[id]
         if !present {
-            (*revmap)[id] = make(NameMap)
+            (*revmap)[id] = make(DataMap)
         }
 
         // Check that we're still not there already.
-        if !(*revmap)[id][name].IsZero() {
-            info := d.computeIndex(revmap, name, limit)
+        if !(*revmap)[id][data].IsZero() {
+            info := d.computeIndex(revmap, data, limit)
             return info.Index, d.getSyncRev(ns, key), nil
         }
 
@@ -328,24 +328,24 @@ func (d *Data) SyncJoin(
         // Wait for a change.
         now := time.Now()
         if timeout > 0 && now.After(end) {
-            info := d.computeIndex(revmap, name, limit)
+            info := d.computeIndex(revmap, data, limit)
             return info.Index, d.getSyncRev(ns, key), nil
         }
         if !lock.wait(timeout > 0, end.Sub(now), notifier) || !valid() {
-            info := d.computeIndex(revmap, name, limit)
+            info := d.computeIndex(revmap, data, limit)
             return info.Index, d.getSyncRev(ns, key), nil
         }
     }
 
     // Join and fire.
     rev, err := d.doFire(ns, key, NoRevision, lock)
-    (*revmap)[id][name] = rev
+    (*revmap)[id][data] = rev
     utils.Print("DATA", "JOIN key=%s index=%d id=%d",
         key, index, uint64(id))
     return index, rev, err
 }
 
-func (d *Data) SyncLeave(id EphemId, ns Namespace, key Key, name string) (Revision, error) {
+func (d *Data) SyncLeave(id EphemId, ns Namespace, key Key, data string) (Revision, error) {
     lock := d.lock(ns, key)
     defer lock.unlock()
 
@@ -359,7 +359,7 @@ func (d *Data) SyncLeave(id EphemId, ns Namespace, key Key, name string) (Revisi
     changed := false
     _, present := (*revmap)[id]
     if present {
-        delete((*revmap)[id], name)
+        delete((*revmap)[id], data)
         if len((*revmap)[id]) == 0 {
             delete((*revmap), id)
             changed = true

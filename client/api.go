@@ -390,13 +390,13 @@ func (h *HiberaAPI) NSAccessGet(ns core.Namespace, auth core.Token) (*core.Permi
     return &val, rev, err
 }
 
-func (h *HiberaAPI) SyncJoin(key string, name string, limit uint, timeout uint) (int, core.Revision, error) {
-    return h.NSSyncJoin(h.defaultNS, core.Key(key), name, limit, timeout)
+func (h *HiberaAPI) SyncJoin(key string, data string, limit uint, timeout uint) (int, core.Revision, error) {
+    return h.NSSyncJoin(h.defaultNS, core.Key(key), data, limit, timeout)
 }
 
-func (h *HiberaAPI) NSSyncJoin(ns core.Namespace, key core.Key, name string, limit uint, timeout uint) (int, core.Revision, error) {
+func (h *HiberaAPI) NSSyncJoin(ns core.Namespace, key core.Key, data string, limit uint, timeout uint) (int, core.Revision, error) {
     args := h.makeArgs(ns, fmt.Sprintf("/v1.0/sync/%s", string(key)))
-    args.params["name"] = name
+    args.params["data"] = data
     args.params["limit"] = strconv.FormatUint(uint64(limit), 10)
     args.params["timeout"] = strconv.FormatUint(uint64(timeout), 10)
     content, rev, err := h.doRequest("POST", args, string(key), true)
@@ -411,24 +411,24 @@ func (h *HiberaAPI) NSSyncJoin(ns core.Namespace, key core.Key, name string, lim
     return index, rev, err
 }
 
-func (h *HiberaAPI) SyncLeave(key string, name string) (core.Revision, error) {
-    return h.NSSyncLeave(h.defaultNS, core.Key(key), name)
+func (h *HiberaAPI) SyncLeave(key string, data string) (core.Revision, error) {
+    return h.NSSyncLeave(h.defaultNS, core.Key(key), data)
 }
 
-func (h *HiberaAPI) NSSyncLeave(ns core.Namespace, key core.Key, name string) (core.Revision, error) {
+func (h *HiberaAPI) NSSyncLeave(ns core.Namespace, key core.Key, data string) (core.Revision, error) {
     args := h.makeArgs(ns, fmt.Sprintf("/v1.0/sync/%s", string(key)))
-    args.params["name"] = name
+    args.params["data"] = data
     _, rev, err := h.doRequest("DELETE", args, string(key), false)
     return rev, err
 }
 
-func (h *HiberaAPI) SyncMembers(key string, name string, limit uint) (int, []string, core.Revision, error) {
-    return h.NSSyncMembers(h.defaultNS, core.Key(key), name, limit)
+func (h *HiberaAPI) SyncMembers(key string, data string, limit uint) (int, []string, core.Revision, error) {
+    return h.NSSyncMembers(h.defaultNS, core.Key(key), data, limit)
 }
 
-func (h *HiberaAPI) NSSyncMembers(ns core.Namespace, key core.Key, name string, limit uint) (int, []string, core.Revision, error) {
+func (h *HiberaAPI) NSSyncMembers(ns core.Namespace, key core.Key, data string, limit uint) (int, []string, core.Revision, error) {
     args := h.makeArgs(ns, fmt.Sprintf("/v1.0/sync/%s", string(key)))
-    args.params["name"] = name
+    args.params["data"] = data
     args.params["limit"] = strconv.FormatUint(uint64(limit), 10)
     content, rev, err := h.doRequest("GET", args, string(key), false)
     if err != nil {

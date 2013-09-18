@@ -279,8 +279,8 @@ func (c *Cluster) DataRemove(req Request, key core.Key, rev core.Revision) (core
     return c.quorumRemove(c.ring, req.Namespace(), key, rev)
 }
 
-func (c *Cluster) SyncMembers(req Request, key core.Key, name string, limit uint) (core.SyncInfo, core.Revision, error) {
-    utils.Print("CLUSTER", "SYNC-MEMBERS key=%s name=%s limit=%d", key, name, limit)
+func (c *Cluster) SyncMembers(req Request, key core.Key, data string, limit uint) (core.SyncInfo, core.Revision, error) {
+    utils.Print("CLUSTER", "SYNC-MEMBERS key=%s data=%s limit=%d", key, data, limit)
 
     err := c.Authorize(req.Namespace(), req.Auth(), key, true, false, true)
     if err != nil {
@@ -292,11 +292,11 @@ func (c *Cluster) SyncMembers(req Request, key core.Key, name string, limit uint
         return core.NoSyncInfo, core.NoRevision, err
     }
 
-    return c.Data.SyncMembers(req.Namespace(), key, name, limit)
+    return c.Data.SyncMembers(req.Namespace(), key, data, limit)
 }
 
-func (c *Cluster) SyncJoin(req Request, key core.Key, name string, limit uint, timeout uint) (int, core.Revision, error) {
-    utils.Print("CLUSTER", "SYNC-JOIN key=%s name=%s limit=%d timeout=%d", key, name, limit, timeout)
+func (c *Cluster) SyncJoin(req Request, key core.Key, data string, limit uint, timeout uint) (int, core.Revision, error) {
+    utils.Print("CLUSTER", "SYNC-JOIN key=%s data=%s limit=%d timeout=%d", key, data, limit, timeout)
 
     err := c.Authorize(req.Namespace(), req.Auth(), key, false, true, true)
     if err != nil {
@@ -311,11 +311,11 @@ func (c *Cluster) SyncJoin(req Request, key core.Key, name string, limit uint, t
     valid := func() bool { return c.ring.IsMaster(key) }
     notifier := req.Notifier()
 
-    return c.Data.SyncJoin(req.EphemId(), req.Namespace(), key, name, limit, timeout, notifier, valid)
+    return c.Data.SyncJoin(req.EphemId(), req.Namespace(), key, data, limit, timeout, notifier, valid)
 }
 
-func (c *Cluster) SyncLeave(req Request, key core.Key, name string) (core.Revision, error) {
-    utils.Print("CLUSTER", "SYNC-LEAVE key=%s name=%s", key, name)
+func (c *Cluster) SyncLeave(req Request, key core.Key, data string) (core.Revision, error) {
+    utils.Print("CLUSTER", "SYNC-LEAVE key=%s data=%s", key, data)
 
     err := c.Authorize(req.Namespace(), req.Auth(), key, false, true, true)
     if err != nil {
@@ -327,7 +327,7 @@ func (c *Cluster) SyncLeave(req Request, key core.Key, name string) (core.Revisi
         return core.NoRevision, err
     }
 
-    return c.Data.SyncLeave(req.EphemId(), req.Namespace(), key, name)
+    return c.Data.SyncLeave(req.EphemId(), req.Namespace(), key, data)
 }
 
 func (c *Cluster) EventWait(req Request, key core.Key, rev core.Revision, timeout uint) (core.Revision, error) {

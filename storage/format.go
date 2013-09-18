@@ -536,10 +536,10 @@ func deserialize(input *os.File, start_offset int64) (int64, *deferredIO, error)
                 n += read
             }
             return data, nil
-        } else {
-            // Use sendfile to send the file.
-            return generateSplice(input, data_length, &input_offset)(output, output_offset)
         }
+
+        // Use sendfile to send the file.
+        return generateSplice(input, data_length, &input_offset)(output, output_offset)
     }
 
     // Seek to the end of the record.

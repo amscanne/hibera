@@ -3,7 +3,6 @@ package main
 import (
     "bufio"
     "bytes"
-    "errors"
     "fmt"
     "hibera/cli"
     "hibera/client"
@@ -13,17 +12,17 @@ import (
     "io/ioutil"
     "os"
     "os/exec"
+    "strconv"
     "strings"
     "syscall"
 )
 
 var timeout = cli.Flags.Uint("timeout", 0, "Timeout (in ms) for acquiring a lock.")
-var name = cli.Flags.String("name", "", "Name to use (other than machine address).")
 var start = cli.Flags.String("start", "", "Script to start the given service.")
 var stop = cli.Flags.String("stop", "", "Script to stop the given service.")
 var limit = cli.Flags.Uint("limit", 0, "Limit for machines to run or simultanous locks.")
 var output = cli.Flags.String("output", "", "Output file for sync.")
-var data = cli.Flags.Bool("data", false, "Use the synchronization group data mapping.")
+var data = cli.Flags.String("data", "", "Synchronization group data.")
 var path = cli.Flags.String("path", ".*", "The path for a given token (regular expression).")
 var perms = cli.Flags.String("perms", "rwx", "Permissions (combination of r,w,x).")
 var rev = cli.Flags.String("rev", "0", "Revision (for data, watching, etc.).")
@@ -47,26 +46,13 @@ var cliInfo = cli.Cli{
                     -start '/etc/init.d/myapp start'
                     -stop '/etc/init.d/myapp stop'`,
             []string{"key"},
-            []string{"name", "limit", "timeout", "start", "stop", "data"},
+            []string{"data", "limit", "timeout", "start", "stop"},
             true,
         },
         "members": cli.Command{"Show current members of the given group.",
             "",
             []string{"key"},
-            []string{"name", "limit"},
-            false,
-        },
-        "in": cli.Command{
-            "Show associated data (if joined with given group).",
-            "",
-            []string{"key"},
-            []string{"name", "limit"},
-            false,
-        },
-        "out": cli.Command{"Set associated data (if joined with given group).",
-            "",
-            []string{"key"},
-            []string{"name", "limit"},
+            []string{"data", "limit"},
             false,
         },
         "list": cli.Command{
@@ -145,24 +131,21 @@ func do_exec(command []string, input []byte) error {
 func cli_run(
     c *client.HiberaAPI,
     key string,
-    name string,
+    data string,
     limit uint,
     timeout uint,
     start []string,
     stop []string,
-    cmd []string,
-    dodata bool) error {
+    cmd []string) error {
 
-    var value []byte
     var proc *exec.Cmd
     procchan := make(chan error)
     watchchan := make(chan error)
 
     oldindex := -1
     oldrev := core.NoRevision
-    olddatarev := core.NoRevision
 
-    defer c.SyncLeave(key, name)
+    defer c.SyncLeave(key, data)
 
     for {
         // Ensure that we're in the group.
@@ -170,8 +153,8 @@ func cli_run(
         // may have fired due to an underlying node change. This
         // means that the new node may have lost all ephemeral
         // information and membership may be completely new.
-        utils.Print("CLIENT", "JOINING key=%s name=%s", key, name)
-        newindex, newrev, err := c.SyncJoin(key, name, limit, 1)
+        utils.Print("CLIENT", "JOINING key=%s data=%s", key, data)
+        newindex, newrev, err := c.SyncJoin(key, data, limit, 1)
         if err != nil {
             return err
         }
@@ -179,70 +162,39 @@ func cli_run(
 
         if newindex != oldindex || !newrev.Equals(oldrev) {
 
-            datachanged := false
-
-            // Update the mapped data.
-            if newindex >= 0 && dodata {
-
-                // Opportunistic read of the data.
-                // If there's nothing, we provide an empty set.
-                var datarev core.Revision
-                value, datarev, err = c.DataGet(
-                    fmt.Sprintf("%s.%d", key, newindex),
-                    core.NoRevision, 0)
-
-                if err != nil {
-                    datarev = core.NoRevision
-                }
-                if value == nil {
-                    value = make([]byte, 0, 0)
-                }
-
-                // Save whether changed.
-                datachanged = (newindex != oldindex || !olddatarev.Equals(datarev))
-                olddatarev = datarev
-
-            } else {
-                // No input.
-                value = nil
-            }
-            if value != nil {
-                utils.Print("CLIENT", "DATA len=%d", len(value))
-            } else {
-                utils.Print("CLIENT", "NODATA")
-            }
+            // Our value is our newindex.
+            value := strconv.FormatInt(int64(newindex), 10)
 
             // If something has changed, stop the running process.
-            if newindex < 0 || datachanged {
-                if proc != nil {
-                    utils.Print("CLIENT", "PROC-STOP")
-                    // Kill this process on stop.
-                    // Nothing can be done here to handle errors.
-                    syscall.Kill(proc.Process.Pid, syscall.SIGTERM)
-                    // Pull the exit status.
-                    // NOTE: This doesn't count as a natural exit
-                    // of the running process as per below. So we
-                    // won't return but rather we will wait until
-                    // we own this node again and we will restart
-                    // the process.
-                    <-procchan
-                    proc = nil
-                }
-            }
-            if newindex < 0 && (oldindex != newindex) {
-                if stop != nil {
-                    utils.Print("CLIENT", "EXEC-STOP")
-                    do_exec(stop, value)
-                }
+            if proc != nil {
+                utils.Print("CLIENT", "PROC-STOP")
+                // Kill this process on stop.
+                // Nothing can be done here to handle errors.
+                syscall.Kill(proc.Process.Pid, syscall.SIGTERM)
+                // Pull the exit status.
+                // NOTE: This doesn't count as a natural exit
+                // of the running process as per below. So we
+                // won't return but rather we will wait until
+                // we own this node again and we will restart
+                // the process.
+                <-procchan
+                proc = nil
             }
 
             // Start or stop appropriately.
+            if newindex < 0 && (oldindex != newindex) {
+                if stop != nil {
+                    utils.Print("CLIENT", "EXEC-STOP")
+                    do_exec(stop, []byte(value))
+                }
+            }
             if newindex >= 0 && (newindex != oldindex) {
                 if start != nil {
                     utils.Print("CLIENT", "EXEC-START")
-                    do_exec(start, value)
+                    do_exec(start, []byte(value))
                 }
             }
+
             if newindex >= 0 {
                 if proc == nil && cmd != nil {
                     // Ensure our process is running.
@@ -251,13 +203,7 @@ func cli_run(
                     proc.SysProcAttr = &syscall.SysProcAttr{
                         Chroot:    "",
                         Pdeathsig: syscall.SIGTERM}
-                    if value != nil {
-                        utils.Print("CLIENT", "PROC-DATA")
-                        proc.Stdin = bytes.NewBuffer(value)
-                    } else {
-                        utils.Print("CLIENT", "PROC-STDIN")
-                        proc.Stdin = os.Stdin
-                    }
+                    proc.Stdin = bytes.NewBuffer([]byte(value))
                     proc.Stdout = os.Stdout
                     proc.Stderr = os.Stderr
                     proc.Start()
@@ -304,8 +250,8 @@ func cli_run(
     return nil
 }
 
-func cli_members(c *client.HiberaAPI, key string, name string, limit uint) error {
-    index, members, rev, err := c.SyncMembers(key, name, limit)
+func cli_members(c *client.HiberaAPI, key string, data string, limit uint) error {
+    index, members, rev, err := c.SyncMembers(key, data, limit)
     if err != nil {
         return err
     }
@@ -313,52 +259,6 @@ func cli_members(c *client.HiberaAPI, key string, name string, limit uint) error
     os.Stdout.Write([]byte(fmt.Sprintf("%d\n%s\n", index, strings.Join(members, "\n"))))
     os.Stderr.Write([]byte(fmt.Sprintf("%s\n", rev.String())))
     return nil
-}
-
-func cli_in(c *client.HiberaAPI, key string, name string, limit uint) (bool, error) {
-    index, _, _, err := c.SyncMembers(key, name, limit)
-    if err != nil {
-        return false, err
-    }
-    if index >= 0 {
-        value, rev, err := c.DataGet(
-            fmt.Sprintf("%s.%d", key, index),
-            core.NoRevision, 0)
-        if err == nil {
-            os.Stdout.Write(value)
-            os.Stderr.Write([]byte(fmt.Sprintf("%s\n", rev.String())))
-        }
-        return true, nil
-    }
-    return false, nil
-}
-
-func cli_out(c *client.HiberaAPI, key string, value *string, name string, limit uint) (bool, error) {
-    index, _, rev, err := c.SyncMembers(key, name, limit)
-    if err != nil {
-        return false, err
-    }
-    if index >= 0 {
-        var err error
-        if value == nil {
-            // Fully read input.
-            buf := new(bytes.Buffer)
-            io.Copy(buf, os.Stdin)
-            rev, err = c.DataSet(
-                fmt.Sprintf("%s.%d", key, index),
-                core.NoRevision, buf.Bytes())
-        } else {
-            // Use the given string.
-            rev, err = c.DataSet(
-                fmt.Sprintf("%s.%d", key, index),
-                core.NoRevision, []byte(*value))
-        }
-        if err == nil {
-            os.Stderr.Write([]byte(fmt.Sprintf("%s\n", rev.String())))
-        }
-        return true, err
-    }
-    return false, err
 }
 
 func cli_get(c *client.HiberaAPI, key string, rev core.Revision) error {
@@ -543,28 +443,9 @@ func do_cli(command string, args []string) error {
         cmd := make_command(args[1:]...)
         start_cmd := make_command(*start)
         stop_cmd := make_command(*stop)
-        return cli_run(client, args[0], *name, *limit, *timeout, start_cmd, stop_cmd, cmd, *data)
+        return cli_run(client, args[0], *data, *limit, *timeout, start_cmd, stop_cmd, cmd)
     case "members":
-        return cli_members(client, args[0], *name, *limit)
-    case "in":
-        in, err := cli_in(client, args[0], *name, *limit)
-        if err == nil && !in {
-            return errors.New("")
-        }
-        return err
-    case "out":
-        var in bool
-        var err error
-        if len(args) > 1 {
-            value := strings.Join(args[1:], " ")
-            in, err = cli_out(client, args[0], &value, *name, *limit)
-        } else {
-            in, err = cli_out(client, args[0], nil, *name, *limit)
-        }
-        if err == nil && !in {
-            return errors.New("")
-        }
-        return err
+        return cli_members(client, args[0], *data, *limit)
     case "get":
         return cli_get(client, args[0], crev)
     case "push":

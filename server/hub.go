@@ -55,11 +55,12 @@ type Client struct {
     // This will be passed in via a header.
     UserId
 
-    // The name used for members of sets. The UserId
+    // The data used for members of sets. The UserId
     // above is not exposed for security reasons.
     Name string
 
     // The print-friendly version of this name.
+    // This is used if the above data is empty.
     friendlyName string
 
     // The number of active Connection objects
@@ -85,9 +86,9 @@ type Hub struct {
     *cluster.Cluster
 }
 
-func (c *Connection) Name(name string) string {
-    if name != "" {
-        return name
+func (c *Connection) Data(data string) string {
+    if data != "" {
+        return data
     }
     if c.client != nil {
         return c.client.friendlyName
@@ -171,7 +172,7 @@ func (c *Hub) FindConnection(id ConnectionId, userid UserId) *Connection {
         }
         utils.Print("HUB", "MAPPED conid=%d userid=%s clientid=%d ephemid=%d name=%s",
             conn.ConnectionId, conn.client.UserId, conn.client.ClientId,
-            conn.EphemId(), conn.Name(""))
+            conn.EphemId(), conn.Data(""))
     }
 
     conn.inited = true
