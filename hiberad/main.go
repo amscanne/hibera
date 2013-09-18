@@ -14,6 +14,7 @@ import (
     "os"
     "os/signal"
     "path"
+    "strconv"
     "strings"
     "syscall"
 )
@@ -115,7 +116,7 @@ func cli_run() error {
         }
 
         // Does not return.
-        cli.Flags.Set("rootfd", "3")
+        cli.Flags.Set("rootfd", strconv.FormatInt(int64(rootpipe.Fd()), 10))
         return cli.Restart([]*os.File{os.Stdin, os.Stdout, os.Stderr, rootpipe})
     }
 
@@ -187,8 +188,8 @@ func cli_run() error {
             }
 
             // Save our restartfd.
-            cli.Flags.Set("rootfd", "3")
-            cli.Flags.Set("serverfd", "4")
+            cli.Flags.Set("rootfd", strconv.FormatInt(int64(rootpipe.Fd()), 10))
+            cli.Flags.Set("serverfd", strconv.FormatInt(int64(restart.Fd()), 10))
 
             // Will not return.
             s.Stop()

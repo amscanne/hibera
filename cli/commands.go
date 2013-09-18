@@ -285,19 +285,18 @@ func Restart(files []*os.File) error {
         new_args = append(new_args, arg)
     }
 
-    // Start the new process.
-    fmt.Print("Running:")
-    for _, arg := range new_args {
-        fmt.Printf(" %s", arg)
+    // Clear the close-on-exec flag for the files.
+    for _, file := range files {
+        syscall.RawSyscall(syscall.SYS_FCNTL, file.Fd(), syscall.F_SETFD, 0)
     }
-    fmt.Print("\n")
 
-    _, err := os.StartProcess(arg0, new_args, &os.ProcAttr{"", nil, files, nil})
+    // Re-exec our process.
+    err := syscall.Exec(arg0, new_args, nil)
     if err != nil {
         return err
     }
 
-    // Done!
-    os.Exit(0)
+    // Ummm, success?
+    // We will never get here.
     return nil
 }
