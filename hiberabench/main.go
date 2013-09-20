@@ -129,7 +129,7 @@ func do_bench(
 
 func cli_write(c *client.HiberaAPI, duration float64, size uint, workers uint, keys []string) error {
     work_fn := func(key string) (uint64, error) {
-        _, err := c.DataSet(key, core.NoRevision, genData(key, size))
+        _, _, err := c.DataSet(key, core.NoRevision, genData(key, size))
         return uint64(size), err
     }
     ops_per_second, throughput_mb, err := do_bench(c, duration, workers, keys, size, work_fn)
@@ -170,7 +170,7 @@ func cli_mixed(c *client.HiberaAPI, duration float64, size uint, workers uint, r
             value, _, err := c.DataGet(key, core.NoRevision, 0)
             return uint64(len(value)), err
         }
-        _, err := c.DataSet(key, core.NoRevision, genData(key, size))
+        _, _, err := c.DataSet(key, core.NoRevision, genData(key, size))
         return uint64(size), err
     }
     ops_per_second, throughput_mb, err := do_bench(c, duration, workers, keys, size, work_fn)

@@ -244,6 +244,12 @@ func (h *HiberaAPI) doRequest(method string, args httpArgs, hint string, retry b
                 return nil, core.NoRevision, os.ErrPermission
             }
 
+            // Check for a revision conflict.
+            if resp.StatusCode == http.StatusConflict {
+                rev, _ := h.getRev(resp)
+                return nil, rev, core.RevConflict
+            }
+
             // Check for a temporary condition.
             if resp.StatusCode == http.StatusServiceUnavailable {
                 err = os.ErrInvalid
@@ -501,25 +507,43 @@ func (h *HiberaAPI) NSDataList(ns core.Namespace) (map[core.Key]uint, error) {
     return items, nil
 }
 
-func (h *HiberaAPI) DataSet(key string, rev core.Revision, value []byte) (core.Revision, error) {
+func (h *HiberaAPI) DataSet(key string, rev core.Revision, value []byte) (bool, core.Revision, error) {
     return h.NSDataSet(h.defaultNS, core.Key(key), rev, value)
 }
 
-func (h *HiberaAPI) NSDataSet(ns core.Namespace, key core.Key, rev core.Revision, value []byte) (core.Revision, error) {
+func (h *HiberaAPI) NSDataSet(ns core.Namespace, key core.Key, rev core.Revision, value []byte) (bool, core.Revision, error) {
     args := h.makeArgs(ns, fmt.Sprintf("/v1.0/data/%s", string(key)))
     args.params["rev"] = rev.String()
     args.body = value
-    _, rev, err := h.doRequest("POST", args, string(key), true)
-    return rev, err
+    _, out_rev, err := h.doRequest("POST", args, string(key), true)
+    if err != nil && err != core.RevConflict {
+        return false, out_rev, err
+    }
+    if err == core.RevConflict {
+        return false, out_rev, nil
+    } else if rev.IsZero() || rev.Equals(out_rev) {
+        return true, out_rev, nil
+    } else {
+        return false, out_rev, nil
+    }
 }
 
-func (h *HiberaAPI) DataRemove(key string, rev core.Revision) (core.Revision, error) {
+func (h *HiberaAPI) DataRemove(key string, rev core.Revision) (bool, core.Revision, error) {
     return h.NSDataRemove(h.defaultNS, core.Key(key), rev)
 }
 
-func (h *HiberaAPI) NSDataRemove(ns core.Namespace, key core.Key, rev core.Revision) (core.Revision, error) {
+func (h *HiberaAPI) NSDataRemove(ns core.Namespace, key core.Key, rev core.Revision) (bool, core.Revision, error) {
     args := h.makeArgs(ns, fmt.Sprintf("/v1.0/data/%s", string(key)))
     args.params["rev"] = rev.String()
-    _, rev, err := h.doRequest("DELETE", args, string(key), true)
-    return rev, err
+    _, out_rev, err := h.doRequest("DELETE", args, string(key), true)
+    if err != nil && err != core.RevConflict {
+        return false, out_rev, err
+    }
+    if err == core.RevConflict {
+        return false, out_rev, nil
+    } else if rev.IsZero() || rev.Equals(out_rev) {
+        return true, out_rev, err
+    } else {
+        return false, out_rev, err
+    }
 }

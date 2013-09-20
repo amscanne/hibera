@@ -37,8 +37,14 @@ func (c *Cluster) doSet(node *core.Node, ns core.Namespace, key core.Key, rev co
 
     utils.Print("QUORUM", "    SET-REMOTE key=%s rev=%s", key, rev.String())
     cl := c.getClient(node.API())
-    rrev, err := cl.NSDataSet(ns, key, rev, value)
-    return core.Revision(rrev), err
+    ok, rrev, err := cl.NSDataSet(ns, key, rev, value)
+    if err != nil {
+        return rrev, err
+    }
+    if !ok {
+        return rrev, core.RevConflict
+    }
+    return rrev, nil
 }
 
 func (c *Cluster) doGet(node *core.Node, ns core.Namespace, key core.Key) ([]byte, core.Revision, error) {
@@ -61,7 +67,13 @@ func (c *Cluster) doRemove(node *core.Node, ns core.Namespace, key core.Key, rev
 
     utils.Print("QUORUM", "    REMOVE-REMOTE key=%s rev=%s", key, rev.String())
     cl := c.getClient(node.API())
-    rrev, err := cl.NSDataRemove(ns, key, rev)
+    ok, rrev, err := cl.NSDataRemove(ns, key, rev)
+    if err != nil {
+        return rrev, err
+    }
+    if !ok {
+        return rrev, core.RevConflict
+    }
     return core.Revision(rrev), err
 }
 
@@ -256,9 +268,10 @@ func (c *Cluster) quorumGet(ring *ring, ns core.Namespace, key core.Key) ([]byte
     qr, err := c.quorum(ring, key, fn)
     var value []byte
     var rev core.Revision
-    if qr != nil {
+    if qr != nil && err == nil {
         value = qr.value
         rev = qr.rev
+        err = qr.err
     }
     return value, rev, err
 }
@@ -271,8 +284,9 @@ func (c *Cluster) quorumSet(ring *ring, ns core.Namespace, key core.Key, rev cor
         res <- &QuorumResult{node, rev, value, err}
     }
     qr, err := c.quorum(ring, key, fn)
-    if qr != nil {
+    if qr != nil && err == nil {
         rev = qr.rev
+        err = qr.err
     }
     return rev, err
 }
@@ -285,8 +299,9 @@ func (c *Cluster) quorumRemove(ring *ring, ns core.Namespace, key core.Key, rev 
         res <- &QuorumResult{node, rev, nil, err}
     }
     qr, err := c.quorum(ring, key, fn)
-    if qr != nil {
+    if qr != nil && err == nil {
         rev = qr.rev
+        err = qr.err
     }
     return rev, err
 }

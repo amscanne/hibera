@@ -8,6 +8,7 @@ import (
     "hibera/client"
     "hibera/core"
     "hibera/utils"
+    "errors"
     "io"
     "io/ioutil"
     "os"
@@ -286,7 +287,8 @@ func cli_push(c *client.HiberaAPI, key string) error {
         }
 
         // Post the update.
-        rev, err = c.DataSet(key, rev.Next(), line)
+        // NOTE: We ignore success here, what can we do?
+        _, rev, err := c.DataSet(key, rev.Next(), line)
         if err != nil {
             return err
         }
@@ -322,26 +324,33 @@ func cli_pull(c *client.HiberaAPI, key string) error {
 }
 
 func cli_set(c *client.HiberaAPI, key string, value *string, rev core.Revision) error {
+    var ok bool
     var err error
     if value == nil {
         // Fully read input.
         buf := new(bytes.Buffer)
         io.Copy(buf, os.Stdin)
-        rev, err = c.DataSet(key, rev, buf.Bytes())
+        ok, rev, err = c.DataSet(key, rev, buf.Bytes())
     } else {
         // Use the given string.
-        rev, err = c.DataSet(key, rev, []byte(*value))
+        ok, rev, err = c.DataSet(key, rev, []byte(*value))
     }
     if err == nil {
         os.Stderr.Write([]byte(fmt.Sprintf("%s\n", rev.String())))
+    }
+    if !ok {
+        return errors.New("unsuccessful")
     }
     return err
 }
 
 func cli_remove(c *client.HiberaAPI, key string, rev core.Revision) error {
-    rev, err := c.DataRemove(key, rev)
+    ok, rev, err := c.DataRemove(key, rev)
     if err == nil {
         os.Stderr.Write([]byte(fmt.Sprintf("%s\n", rev.String())))
+    }
+    if !ok {
+        return errors.New("unsuccessful")
     }
     return err
 }

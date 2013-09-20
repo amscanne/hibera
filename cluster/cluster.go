@@ -196,11 +196,11 @@ func (c *Cluster) doActivate(N uint) (core.Revision, error) {
     }
 
     // Write out the new data.
-    rev, err := c.Data.DataSet(RootNamespace, RootKey, rev_one, data)
+    _, err = c.Data.DataSet(RootNamespace, RootKey, rev_one, data)
     if err != nil {
         c.Nodes.Reset()
         utils.Print("CLUSTER", "DATA-SET-ERROR %s", err.Error())
-        return rev, err
+        return core.NoRevision, err
     }
 
     // Change our revision (manually).
@@ -482,7 +482,7 @@ func (c *Cluster) healthcheck() {
             }
 
             // Try to do the data set.
-            new_target_rev, err := c.lockedClusterDataSet(bytes, target_rev)
+            ok, new_rev, err := c.lockedClusterDataSet(bytes, target_rev)
             c.Mutex.Unlock()
             if err != nil {
                 break
@@ -493,11 +493,11 @@ func (c *Cluster) healthcheck() {
             // hasn't changed. Otherwise, we simply end
             // up in a spinny loop chewing CPU waiting
             // for the situation to change.
-            if new_target_rev.Equals(target_rev) {
+            if ok {
                 break
             }
 
-            target_rev = new_target_rev.Next()
+            target_rev = new_rev.Next()
             continue
 
         } else {
@@ -508,7 +508,7 @@ func (c *Cluster) healthcheck() {
     }
 }
 
-func (c *Cluster) lockedClusterDataSet(bytes []byte, target_rev core.Revision) (core.Revision, error) {
+func (c *Cluster) lockedClusterDataSet(bytes []byte, target_rev core.Revision) (bool, core.Revision, error) {
     // Release the lock, otherwise we could end up with
     // a distributed deadlock in the cluster. This will
     // require us to sanity-check our result below a bit
@@ -522,28 +522,34 @@ func (c *Cluster) lockedClusterDataSet(bytes []byte, target_rev core.Revision) (
     // majority still.
     rev, err := c.quorumSet(
         c.ring, RootNamespace, RootKey, target_rev, bytes)
-    c.Mutex.Lock()
+    ok := true
+    if err == core.RevConflict {
+        ok = false
+        err = nil
+    }
     if err != nil {
         utils.Print("CLUSTER", "SET-CLUSTER-ERROR %s", err.Error())
-        return rev, err
+        return ok, rev, err
     }
 
+    c.Mutex.Lock()
     // Yikes, something has happened between the quorum set
     // above and the lock being reacquired. Let it be handled
     // on the next healthcheck and bail.
     if !rev.Equals(target_rev) || !c.rev.Equals(orig_rev) {
         utils.Print("CLUSTER", "SET-CLUSTER-REV-CHANGED")
-        return rev, nil
+        return ok, rev, nil
     }
 
     // Return the decode error.
     force, err := c.lockedDecodeBytes(bytes)
     if err != nil {
-        return c.rev, err
+        return ok, c.rev, err
     }
 
     // Update our revision.
-    return c.lockedChangeRevision(rev, force)
+    rev, err = c.lockedChangeRevision(rev, force)
+    return ok, rev, err
 }
 
 func (c *Cluster) timedHealthcheck() {

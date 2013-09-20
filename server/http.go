@@ -431,6 +431,7 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
         url := utils.MakeURL(err.Error(), r.URL.Path+"?"+r.URL.RawQuery, nil)
         utils.Print("HTTP", "301 %s", url)
         http.Redirect(w, r, url, http.StatusMovedPermanently)
+        break
 
     case *cluster.PermissionError:
         // The user doesn't have appropriate permissions.
@@ -447,13 +448,20 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
         break
 
     default:
-        // Even with errors, we set a revision header.
-        // The error could result from a revision conflict,
-        // so this is important information and can't just
-        // be ignored by the client.
         w.Header().Set("X-Revision", rev.String())
-        utils.Print("HTTP", "500")
-        http.Error(w, err.Error(), http.StatusInternalServerError)
+        if err == core.RevConflict {
+            // Revision conflict.
+            url := utils.MakeURL(err.Error(), r.URL.Path+"?"+r.URL.RawQuery, nil)
+            utils.Print("HTTP", "409 %s", url)
+            http.Error(w, err.Error(), http.StatusConflict)
+        } else {
+            // Even with errors, we set a revision header.
+            // The error could result from a revision conflict,
+            // so this is important information and can't just
+            // be ignored by the client.
+            utils.Print("HTTP", "500")
+            http.Error(w, err.Error(), http.StatusInternalServerError)
+        }
         break
     }
 }
