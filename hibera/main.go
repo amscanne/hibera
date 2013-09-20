@@ -286,11 +286,16 @@ func cli_push(c *client.HiberaAPI, key string) error {
             return err
         }
 
-        // Post the update.
-        // NOTE: We ignore success here, what can we do?
-        _, rev, err := c.DataSet(key, rev.Next(), line)
-        if err != nil {
-            return err
+        for {
+            // Post the update.
+            var ok bool
+            ok, rev, err = c.DataSet(key, rev.Next(), line)
+            if err != nil {
+                return err
+            }
+            if ok {
+                break
+            }
         }
         os.Stderr.Write([]byte(fmt.Sprintf("%s\n", rev.String())))
     }
@@ -303,13 +308,17 @@ func cli_pull(c *client.HiberaAPI, key string) error {
 
     for {
         // Read the next entry.
-        var err error
-        var value []byte
-        value, rev, err = c.DataGet(key, rev, 0)
+        value, new_rev, err := c.DataGet(key, rev, 0)
         if err != nil {
             return err
         }
         os.Stderr.Write([]byte(fmt.Sprintf("%s\n", rev.String())))
+        if !rev.IsZero() && !new_rev.Equals(rev.Next()) && !new_rev.Equals(rev) {
+            // Print out a warning.
+            warning := fmt.Sprintf("WARNING: missed %s revisions\n", new_rev.Delta(rev.Next()).String())
+            os.Stdout.Write([]byte(warning))
+        }
+        rev = new_rev
 
         // Write the data.
         _, err = os.Stdout.Write(value)

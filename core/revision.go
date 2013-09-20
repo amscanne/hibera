@@ -36,6 +36,19 @@ func (r Revision) Next() Revision {
     return Revision{inc_rev.Add(inc_rev, ref)}
 }
 
+func (r Revision) Delta(other Revision) Revision {
+    ref := r.Int
+    if ref == nil {
+        ref = NoRevision.Int
+    }
+    other_ref := other.Int
+    if other_ref == nil {
+        other_ref = NoRevision.Int
+    }
+    delta_rev := big.NewInt(0)
+    return Revision{delta_rev.Sub(ref, other_ref)}
+}
+
 func (r Revision) IsZero() bool {
     ref := r.Int
     if ref == nil {
