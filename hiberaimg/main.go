@@ -465,17 +465,17 @@ func do_op(c *cache, file *os.File, total int64, op int, next func() *chunk, wor
         }()
     }
 
-    // Put the sentinels.
-    for i := 0; i < int(workers); i += 1 {
-        chunks <- nil
-    }
-
     // Wait for all results.
     for i := 0; i < count; i += 1 {
         this_err := <-all_res
         if err == nil && this_err != nil {
             err = this_err
         }
+    }
+
+    // Put the sentinels.
+    for i := 0; i < int(workers); i += 1 {
+        chunks <- nil
     }
 
     // Wait for the 'UI'.
