@@ -375,7 +375,14 @@ func (c *Cluster) lockedChangeRevision(rev core.Revision, force bool) (core.Revi
         // Schedule updates for every key.
         for key, _ := range items {
 
-            if c.Access.Has(ns) {
+            _, rev, err := c.Data.DataGet(ns, key)
+            if rev.IsZero() || err != nil {
+                // Something is wrong with this key.
+                // We purge this guy.
+                go c.purgeData(ns, key, notify)
+                scheduled += 1
+
+            } else if c.Access.Has(ns) {
                 new_master := c.ring.IsMaster(key)
                 new_slave := c.ring.IsSlave(key)
 
