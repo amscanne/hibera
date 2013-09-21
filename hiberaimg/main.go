@@ -54,6 +54,7 @@ type chunk struct {
     Hash   string `json:"hash"`
     Offset int64  `json:"offset"`
     Size   int64  `json:"size"`
+    res    chan error
 }
 
 const (
@@ -99,7 +100,7 @@ func getData(file *os.File, c *chunk) ([]byte, error) {
     return buffer, nil
 }
 
-func worker(c *cache, num int, file *os.File, op int, chunks chan *chunk, done chan error) {
+func worker(c *cache, num int, file *os.File, op int, chunks chan *chunk) {
 
     // Each worker gets their own client.
     client := cli.Client()
@@ -251,10 +252,11 @@ func worker(c *cache, num int, file *os.File, op int, chunks chan *chunk, done c
                     // abdanon this here for now (and maybe we
                     // could have a separate cleanup later).
                     client.SyncLeave(refs_key, name)
-                    work = nil
                     if err != nil {
                         log.Printf("unable to scrub %s: %s\n", data_key, err.Error())
                     }
+                    work.res <- err
+                    work = nil
                     continue
                 }
 
@@ -264,10 +266,11 @@ func worker(c *cache, num int, file *os.File, op int, chunks chan *chunk, done c
                     // Crap. Oh well. It's still zero, so someone
                     // will be able to just clean it up later.
                     client.SyncLeave(refs_key, name)
-                    work = nil
                     if err != nil {
                         log.Printf("unable to scrub %s: %s\n", refs_key, err.Error())
                     }
+                    work.res <- err
+                    work = nil
                     continue
                 }
             }
@@ -280,11 +283,9 @@ func worker(c *cache, num int, file *os.File, op int, chunks chan *chunk, done c
                 log.Printf("unable to leave  %s: %s\n", refs_key, err.Error())
             }
         }
+        work.res <- nil
         work = nil
     }
-
-    // Send our result.
-    done <- err
 }
 
 func swapChunks(key string, write bool, data []byte) (func() *chunk, error) {
@@ -324,6 +325,11 @@ func swapChunks(key string, write bool, data []byte) (func() *chunk, error) {
                 log.Printf("unable to decode info for %s: %s\n", key, err.Error())
                 return iter, err
             }
+
+            // Ensure that the channels are available.
+            for _, chunk := range chunks {
+                chunk.res = make(chan error)
+            }
         }
 
         if write {
@@ -359,7 +365,7 @@ func swapChunks(key string, write bool, data []byte) (func() *chunk, error) {
                     continue
                 }
 
-                utils.Debug("done! -> revision %s\n", new_rev.String())
+                utils.Debug("done -> revision %s\n", new_rev.String())
             }
         }
 
@@ -395,7 +401,6 @@ func delChunks(key string) (func() *chunk, error) {
 func do_op(c *cache, file *os.File, op int, next func() *chunk, workers uint) error {
     var err error
     chunks := make(chan *chunk, workers)
-    done := make(chan error)
 
     if op == o_upload {
         utils.Debug("--- starting upload ---\n")
@@ -407,17 +412,43 @@ func do_op(c *cache, file *os.File, op int, next func() *chunk, workers uint) er
 
     // Start workers.
     for i := 0; i < int(workers); i += 1 {
-        go worker(c, i, file, op, chunks, done)
+        go worker(c, i, file, op, chunks)
     }
 
     // Generate all chunks.
+    total := int64(0)
+    ui_updates := make(chan int64)
+    count := 0
+    all_res := make(chan error)
     for {
         chunk := next()
         if chunk == nil {
             break
         }
         chunks <- chunk
+        total += chunk.Size
+        count += 1
+
+        go func() {
+            err := <-chunk.res
+            ui_updates <- chunk.Size
+            all_res <- err
+        }()
     }
+
+    // Our 'UI' thread.
+    current := int64(0)
+    ui_done := make(chan bool)
+    go func() {
+        for current < total {
+            value := <-ui_updates
+            current += value
+            percent := float64(current) * 100.0 / float64(total)
+            os.Stderr.Write([]byte(fmt.Sprintf("\r[% 2.2f%%] % 10d/%d bytes", percent, current, total)))
+        }
+        os.Stderr.Write([]byte("\n"))
+        ui_done <- true
+    }()
 
     // Put the sentinels.
     for i := 0; i < int(workers); i += 1 {
@@ -425,12 +456,16 @@ func do_op(c *cache, file *os.File, op int, next func() *chunk, workers uint) er
     }
 
     // Wait for all results.
-    for i := 0; i < int(workers); i += 1 {
-        this_err := <-done
+    for i := 0; i < count; i += 1 {
+        this_err := <-all_res
         if err == nil && this_err != nil {
             err = this_err
         }
     }
+
+    // Wait for the 'UI'.
+    <-ui_done
+
     if err != nil {
         return err
     }
@@ -474,7 +509,7 @@ func cli_upload(c *cache, key string, file string, size uint, workers uint) erro
         }
 
         // Save the chunk.
-        cur := &chunk{fmt.Sprintf("%x", hasher.Sum(nil)), offset, int64(n)}
+        cur := &chunk{fmt.Sprintf("%x", hasher.Sum(nil)), offset, int64(n), make(chan error)}
         chunks = append(chunks, cur)
 
         // Emit the chunk.
