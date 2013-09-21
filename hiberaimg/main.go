@@ -329,7 +329,7 @@ func swapChunks(key string, write bool, data []byte) (func() *chunk, int64, erro
 
             // Ensure that the channels are available.
             for _, chunk := range chunks {
-                chunk.res = make(chan error)
+                chunk.res = make(chan error, 1)
             }
 
             // Ensure the total is correct.
@@ -514,7 +514,7 @@ func cli_upload(c *cache, key string, file string, size uint, workers uint) erro
         }
 
         // Save the chunk.
-        cur := &chunk{fmt.Sprintf("%x", hasher.Sum(nil)), offset, int64(n), make(chan error)}
+        cur := &chunk{fmt.Sprintf("%x", hasher.Sum(nil)), offset, int64(n), make(chan error, 1)}
         chunks = append(chunks, cur)
 
         // Emit the chunk.
