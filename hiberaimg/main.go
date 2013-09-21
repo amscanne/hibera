@@ -406,7 +406,7 @@ func delChunks(key string) (func() *chunk, int64, error) {
 
 func do_op(c *cache, file *os.File, total int64, op int, next func() *chunk, workers uint) error {
     var err error
-    chunks := make(chan *chunk, workers)
+    chunks := make(chan *chunk, 3 * workers)
 
     var status string
     if op == o_upload {
