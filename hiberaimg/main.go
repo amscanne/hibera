@@ -197,7 +197,7 @@ func worker(c *cache, num int, file *os.File, op int, chunks chan *chunk) {
             if data == nil {
                 // Grab the data.
                 utils.Debug("downloading %s @ %d (%d bytes)...\n", data_key, work.Offset, work.Size)
-                data, rev, err := client.DataGet(data_key, core.NoRevision, 0)
+                data, rev, err = client.DataGet(data_key, core.NoRevision, 0)
                 if err != nil {
                     // Retry.
                     log.Printf("unable to download %s: %s\n", data_key, err.Error())
@@ -279,7 +279,7 @@ func worker(c *cache, num int, file *os.File, op int, chunks chan *chunk) {
 
         // We're done.
         if op == o_upload || op == o_remove {
-            _, err = client.SyncLeave(refs_key, name)
+            _, _, err = client.SyncLeave(refs_key, name)
             if err != nil {
                 log.Printf("unable to leave  %s: %s\n", refs_key, err.Error())
             }
