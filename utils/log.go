@@ -28,6 +28,12 @@ func Print(module string, fmt string, v ...interface{}) {
     }
 }
 
+func Debug(fmt string, v ...interface{}) {
+    if enabled {
+        log.Printf(pid+" "+fmt, v...)
+    }
+}
+
 func EnableDebugging() {
     enabled = true
     cache = make(map[string]bool)

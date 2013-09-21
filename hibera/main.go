@@ -3,12 +3,12 @@ package main
 import (
     "bufio"
     "bytes"
+    "errors"
     "fmt"
     "hibera/cli"
     "hibera/client"
     "hibera/core"
     "hibera/utils"
-    "errors"
     "io"
     "io/ioutil"
     "os"
