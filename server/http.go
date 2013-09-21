@@ -457,7 +457,7 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
 
     default:
         w.Header().Set("X-Revision", rev.String())
-        if err == core.RevConflict {
+        if err == core.RevConflict || err == core.NotFound {
             // Revision conflict.
             url := utils.MakeURL(err.Error(), r.URL.Path+"?"+r.URL.RawQuery, nil)
             utils.Print("HTTP", "409 %s", url)

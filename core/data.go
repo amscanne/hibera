@@ -357,8 +357,8 @@ func (d *Data) SyncLeave(id EphemId, ns Namespace, key Key, data string) (Revisi
         delete((*revmap)[id], data)
         if len((*revmap)[id]) == 0 {
             delete((*revmap), id)
-            changed = true
         }
+        changed = true
     }
     if len(*revmap) == 0 {
         d.delSyncMap(ns, key)

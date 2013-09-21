@@ -417,7 +417,7 @@ func cli_watch(c *client.HiberaAPI, key string, timeout uint, rev core.Revision)
 }
 
 func cli_fire(c *client.HiberaAPI, key string, rev core.Revision) error {
-    rev, err := c.EventFire(key, rev)
+    _, rev, err := c.EventFire(key, rev)
     if err == nil {
         os.Stderr.Write([]byte(fmt.Sprintf("%s\n", rev.String())))
     }

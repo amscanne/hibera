@@ -416,15 +416,21 @@ func (h *HiberaAPI) NSSyncJoin(ns core.Namespace, key core.Key, data string, lim
     return index, rev, err
 }
 
-func (h *HiberaAPI) SyncLeave(key string, data string) (core.Revision, error) {
+func (h *HiberaAPI) SyncLeave(key string, data string) (bool, core.Revision, error) {
     return h.NSSyncLeave(h.defaultNS, core.Key(key), data)
 }
 
-func (h *HiberaAPI) NSSyncLeave(ns core.Namespace, key core.Key, data string) (core.Revision, error) {
+func (h *HiberaAPI) NSSyncLeave(ns core.Namespace, key core.Key, data string) (bool, core.Revision, error) {
     args := h.makeArgs(ns, fmt.Sprintf("/v1.0/sync/%s", string(key)))
     args.params["data"] = data
     _, rev, err := h.doRequest("DELETE", args, string(key), false)
-    return rev, err
+    if err != nil && err != core.RevConflict {
+        return false, rev, err
+    }
+    if err == core.RevConflict {
+        return false, rev, nil
+    }
+    return true, rev, nil
 }
 
 func (h *HiberaAPI) SyncMembers(key string, data string, limit uint) (int, []string, core.Revision, error) {
@@ -447,15 +453,21 @@ func (h *HiberaAPI) NSSyncMembers(ns core.Namespace, key core.Key, data string, 
     return info.Index, info.Members, rev, err
 }
 
-func (h *HiberaAPI) EventFire(key string, rev core.Revision) (core.Revision, error) {
+func (h *HiberaAPI) EventFire(key string, rev core.Revision) (bool, core.Revision, error) {
     return h.NSEventFire(h.defaultNS, core.Key(key), rev)
 }
 
-func (h *HiberaAPI) NSEventFire(ns core.Namespace, key core.Key, rev core.Revision) (core.Revision, error) {
+func (h *HiberaAPI) NSEventFire(ns core.Namespace, key core.Key, rev core.Revision) (bool, core.Revision, error) {
     args := h.makeArgs(ns, fmt.Sprintf("/v1.0/event/%s", string(key)))
     args.params["rev"] = rev.String()
     _, rev, err := h.doRequest("POST", args, string(key), true)
-    return rev, err
+    if err != nil && err != core.RevConflict {
+        return false, rev, err
+    }
+    if err == core.RevConflict {
+        return false, rev, nil
+    }
+    return true, rev, nil
 }
 
 func (h *HiberaAPI) EventWait(key string, rev core.Revision, timeout uint) (core.Revision, error) {
