@@ -28,6 +28,7 @@ type HiberaAPI struct {
     useRedirects bool
     cache        map[string]string
     *http.Client
+    *http.Transport
 }
 
 func generateClientId() string {
@@ -82,11 +83,11 @@ func NewHiberaAPI(urls []string, auth core.Token, clientid string, delay uint, d
     // Create our HTTP transport.
     // Nothing really special about this, but we may want
     // to tune parameters for idling connections, etc.
-    tr := &http.Transport{
+    api.Transport = &http.Transport{
         TLSClientConfig:     &tls.Config{InsecureSkipVerify: true},
         MaxIdleConnsPerHost: 1,
     }
-    api.Client = &http.Client{Transport: tr, CheckRedirect: noRedirect}
+    api.Client = &http.Client{Transport: api.Transport, CheckRedirect: noRedirect}
 
     return api
 }
@@ -121,6 +122,10 @@ func NewHiberaClient(addrs string, auth string, delay uint, namespace string) *H
     urls := utils.URLs(addrs)
     clientid := generateClientId()
     return NewHiberaAPI(urls, core.Token(auth), clientid, delay, core.Namespace(namespace), true)
+}
+
+func (h *HiberaAPI) Close() {
+    h.Transport.CloseIdleConnections()
 }
 
 type httpArgs struct {
@@ -187,6 +192,14 @@ func (h *HiberaAPI) makeRequest(method string, args httpArgs, hint string) (*htt
     }
 
     return req, nil
+}
+
+func (h *HiberaAPI) Delay() {
+    if h.delay > 0 {
+        random_delay := (rand.Int() % int(h.delay*2)) + 1
+        utils.Print("CLIENT", "DELAY %d milliseconds")
+        time.Sleep(time.Duration(random_delay) * time.Millisecond)
+    }
 }
 
 func (h *HiberaAPI) doRequest(method string, args httpArgs, hint string, retry bool) ([]byte, core.Revision, error) {
@@ -299,17 +312,10 @@ func (h *HiberaAPI) doRequest(method string, args httpArgs, hint string, retry b
             }
         }
 
-        if h.delay == 0 {
-            return nil, core.NoRevision, err
-        }
-
         // Clear any cache hint on an error.
         delete(h.cache, hint)
-
-        // Print a message to the console and retry.
-        random_delay := (rand.Int() % int(h.delay*2)) + 1
-        utils.Print("CLIENT", "ERROR %s (delaying %d milliseconds)", err, random_delay)
-        time.Sleep(time.Duration(random_delay) * time.Millisecond)
+        utils.Print("CLIENT", "ERROR %s", err)
+        h.Delay()
     }
 
     return nil, core.NoRevision, nil
@@ -332,13 +338,13 @@ func (h *HiberaAPI) Info() (*core.Info, core.Revision, error) {
 func (h *HiberaAPI) Activate(replication uint) error {
     args := h.makeArgs("", "/v1.0/")
     args.params["replication"] = strconv.FormatUint(uint64(replication), 10)
-    _, _, err := h.doRequest("POST", args, "", true)
+    _, _, err := h.doRequest("POST", args, "", false)
     return err
 }
 
 func (h *HiberaAPI) Deactivate() error {
     args := h.makeArgs("", "/v1.0/")
-    _, _, err := h.doRequest("DELETE", args, "", true)
+    _, _, err := h.doRequest("DELETE", args, "", false)
     return err
 }
 
@@ -404,7 +410,7 @@ func (h *HiberaAPI) NSSyncJoin(ns core.Namespace, key core.Key, data string, lim
     args.params["data"] = data
     args.params["limit"] = strconv.FormatUint(uint64(limit), 10)
     args.params["timeout"] = strconv.FormatUint(uint64(timeout), 10)
-    content, rev, err := h.doRequest("POST", args, string(key), true)
+    content, rev, err := h.doRequest("POST", args, string(key), false)
     if err != nil {
         return -1, core.NoRevision, err
     }
@@ -460,7 +466,7 @@ func (h *HiberaAPI) EventFire(key string, rev core.Revision) (bool, core.Revisio
 func (h *HiberaAPI) NSEventFire(ns core.Namespace, key core.Key, rev core.Revision) (bool, core.Revision, error) {
     args := h.makeArgs(ns, fmt.Sprintf("/v1.0/event/%s", string(key)))
     args.params["rev"] = rev.String()
-    _, rev, err := h.doRequest("POST", args, string(key), true)
+    _, rev, err := h.doRequest("POST", args, string(key), false)
     if err != nil && err != core.RevConflict {
         return false, rev, err
     }
@@ -527,7 +533,7 @@ func (h *HiberaAPI) NSDataSet(ns core.Namespace, key core.Key, rev core.Revision
     args := h.makeArgs(ns, fmt.Sprintf("/v1.0/data/%s", string(key)))
     args.params["rev"] = rev.String()
     args.body = value
-    _, out_rev, err := h.doRequest("POST", args, string(key), true)
+    _, out_rev, err := h.doRequest("POST", args, string(key), false)
     if err != nil && err != core.RevConflict {
         return false, out_rev, err
     }
@@ -547,7 +553,7 @@ func (h *HiberaAPI) DataRemove(key string, rev core.Revision) (bool, core.Revisi
 func (h *HiberaAPI) NSDataRemove(ns core.Namespace, key core.Key, rev core.Revision) (bool, core.Revision, error) {
     args := h.makeArgs(ns, fmt.Sprintf("/v1.0/data/%s", string(key)))
     args.params["rev"] = rev.String()
-    _, out_rev, err := h.doRequest("DELETE", args, string(key), true)
+    _, out_rev, err := h.doRequest("DELETE", args, string(key), false)
     if err != nil && err != core.RevConflict {
         return false, out_rev, err
     }

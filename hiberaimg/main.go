@@ -103,8 +103,9 @@ func getData(file *os.File, c *chunk) ([]byte, error) {
 func worker(c *cache, num int, file *os.File, op int, chunks chan *chunk) {
 
     // Each worker gets their own client.
-    client := cli.Client()
     name := fmt.Sprintf("worker-%d", num)
+    client := cli.Client()
+    defer client.Close()
 
     var err error
     var work *chunk
@@ -128,6 +129,7 @@ func worker(c *cache, num int, file *os.File, op int, chunks chan *chunk) {
             if err != nil {
                 // Retry.
                 log.Printf("unable to join %s: %s\n", refs_key, err.Error())
+                client.Delay()
                 continue
             }
 
@@ -169,6 +171,7 @@ func worker(c *cache, num int, file *os.File, op int, chunks chan *chunk) {
                 if !ok || err != nil {
                     // Retry.
                     client.SyncLeave(refs_key, name)
+                    client.Delay()
                     if err != nil {
                         log.Printf("unable to upload %s: %s\n", data_key, err.Error())
                     }
@@ -181,6 +184,7 @@ func worker(c *cache, num int, file *os.File, op int, chunks chan *chunk) {
             if !ok || err != nil || !new_rev.Equals(rev.Next()) {
                 // Whoops. Retry.
                 client.SyncLeave(refs_key, name)
+                client.Delay()
                 if err != nil {
                     log.Printf("unable to bump %s: %s\n", refs_key, err.Error())
                 }
@@ -235,6 +239,7 @@ func worker(c *cache, num int, file *os.File, op int, chunks chan *chunk) {
             if !ok || err != nil || !new_rev.Equals(rev.Next()) {
                 // Whoops. Retry.
                 client.SyncLeave(refs_key, name)
+                client.Delay()
                 if err != nil {
                     log.Printf("unable to drop %s: %s\n", refs_key, err.Error())
                 }
@@ -253,6 +258,7 @@ func worker(c *cache, num int, file *os.File, op int, chunks chan *chunk) {
                     // abdanon this here for now (and maybe we
                     // could have a separate cleanup later).
                     client.SyncLeave(refs_key, name)
+                    client.Delay()
                     if err != nil {
                         log.Printf("unable to scrub %s: %s\n", data_key, err.Error())
                     }
@@ -267,6 +273,7 @@ func worker(c *cache, num int, file *os.File, op int, chunks chan *chunk) {
                     // Crap. Oh well. It's still zero, so someone
                     // will be able to just clean it up later.
                     client.SyncLeave(refs_key, name)
+                    client.Delay()
                     if err != nil {
                         log.Printf("unable to scrub %s: %s\n", refs_key, err.Error())
                     }
@@ -281,7 +288,7 @@ func worker(c *cache, num int, file *os.File, op int, chunks chan *chunk) {
         if op == o_upload || op == o_remove {
             _, _, err = client.SyncLeave(refs_key, name)
             if err != nil {
-                log.Printf("unable to leave  %s: %s\n", refs_key, err.Error())
+                log.Printf("unable to leave %s: %s\n", refs_key, err.Error())
             }
         }
         work.res <- nil
@@ -303,6 +310,7 @@ func swapChunks(key string, write bool, data []byte) (func() *chunk, int64, erro
 
     // Get via the client.
     client := cli.Client()
+    defer client.Close()
 
     var rev core.Revision
     for {
@@ -433,13 +441,15 @@ func do_op(c *cache, file *os.File, total int64, op int, next func() *chunk, wor
 
     // Our 'UI' thread.
     current := int64(0)
+    total_str_len := len(fmt.Sprintf("%d", total))
+    format_str := fmt.Sprintf("\r%%s [%%6.2f%%%%] %%%dd / %%d bytes", total_str_len)
     go func() {
         for {
             select {
             case value := <-ui_updates:
                 current += value
                 percent := float64(current) * 100.0 / float64(total)
-                output := fmt.Sprintf("\r%s [% 6.2f%%] % 10d/%d bytes", status, percent, current, total)
+                output := fmt.Sprintf(format_str, status, percent, current, total)
                 os.Stderr.Write([]byte(output))
                 break
             case <-ui_stop:

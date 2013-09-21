@@ -3,7 +3,6 @@ package cluster
 import (
     "bytes"
     "encoding/json"
-    "hibera/client"
     "hibera/core"
     "hibera/storage"
     "hibera/utils"
@@ -57,10 +56,6 @@ type Cluster struct {
     // This is computed each round based on the node map above.
     // NOTE: Not exported so that it is not serialized.
     *ring
-
-    // Cache of connections to other servers.
-    clients     map[string]*client.HiberaAPI
-    clientsLock sync.Mutex
 
     // Whether or not we are executing a quorum function on the given key.
     quorumInProgress map[core.Key]bool
@@ -246,6 +241,8 @@ func (c *Cluster) doSync(url string) error {
 
     // Pull the remote info from the node.
     cl := c.getClient(url)
+    defer cl.Close()
+
     info, rev, err := cl.Info()
     if err != nil {
         c.doneSync()
@@ -577,7 +574,6 @@ func NewCluster(store *storage.Store, addr string, url string, root core.Token, 
     c.Access = core.NewAccess(root)
     c.Data = core.NewData(store)
     c.ring = NewRing(2*c.N+1, c.Nodes)
-    c.clients = make(map[string]*client.HiberaAPI)
 
     // Initialize synchronization structures.
     c.quorumLock = sync.NewCond(&sync.Mutex{})

@@ -146,6 +146,7 @@ func cli_run(
     oldindex := -1
     oldrev := core.NoRevision
 
+    // Ensure we leave the group in the end.
     defer c.SyncLeave(key, data)
 
     for {
@@ -157,7 +158,8 @@ func cli_run(
         utils.Print("CLIENT", "JOINING key=%s data=%s", key, data)
         newindex, newrev, err := c.SyncJoin(key, data, limit, 1)
         if err != nil {
-            return err
+            c.Delay()
+            continue
         }
         utils.Print("CLIENT", "INDEX=%d REV=%d", newindex, newrev)
 
@@ -451,6 +453,8 @@ func make_command(args ...string) []string {
 func do_cli(command string, args []string) error {
 
     client := cli.Client()
+    defer client.Close()
+
     crev, err := core.RevisionFromString(*rev)
     if err != nil {
         return err
