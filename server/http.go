@@ -15,6 +15,7 @@ import (
     "strconv"
     "strings"
     "syscall"
+    "time"
 )
 
 var UnhandledRequest = errors.New("Unhandled request")
@@ -69,9 +70,16 @@ func (l Listener) Close() error {
 }
 
 func (l Listener) Drain() {
+    timeout := time.After(time.Second)
+
     // Drain the connection pool.
     for i := 0; i < int(l.active); i += 1 {
-        <-l.avail
+        select {
+        case <-l.avail:
+            break
+        case <-timeout:
+            return
+        }
     }
 }
 
@@ -483,13 +491,16 @@ func NewHTTPServer(cluster *cluster.Cluster, restart int, addr string, port uint
         return nil, err
     }
 
-    // Figure out our active limit (1/2 open limit).
+    // Figure out our active limit (1/8 open limit).
+    // We use 1/4 for clients because we often need
+    // a pipe for detecting errors, and 2 more sockets
+    // for doing quorum! Yikes, too many FDs.
     var rlim syscall.Rlimit
     err = syscall.Getrlimit(syscall.RLIMIT_NOFILE, &rlim)
     if err != nil {
         return nil, err
     }
-    active := uint(rlim.Cur)
+    active := uint(rlim.Cur) / 8
 
     // Create our object.
     server := new(HTTPServer)

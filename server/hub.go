@@ -179,29 +179,6 @@ func (c *Hub) FindConnection(id ConnectionId, userid UserId) *Connection {
     return conn
 }
 
-func (c *Hub) RemoveClient(client *Client) {
-
-    // Delay one second.
-    // This is to allow the user a brief chance
-    // to reconnect after their last (only?) connection
-    // is lost. This is a distinct advantage over systems
-    // that rely only on the TCP connection as the "alive"
-    // indicator -- we could adjust this as we see fit.
-    time.Sleep(EphemeralTimeout)
-
-    c.Mutex.Lock()
-    defer c.Mutex.Unlock()
-    if client.refs == 0 {
-        // Remove the user from the map and
-        // purge all related keys from the
-        // underlying storage system.
-        utils.Print("HUB", "DROPPED userid=%s clientid=%d",
-            client.UserId, client.ClientId)
-        delete(c.clients, client.UserId)
-        c.Cluster.Purge(core.EphemId(client.ClientId))
-    }
-}
-
 func (c *Hub) DropConnection(conn *Connection) {
     c.Mutex.Lock()
     defer c.Mutex.Unlock()
@@ -214,10 +191,14 @@ func (c *Hub) DropConnection(conn *Connection) {
     // Shuffle userid mappings.
     if conn.client != nil {
         conn.client.refs -= 1
-
-        // NOTE: Delay removal, see RemoveClient().
         if conn.client.refs == 0 {
-            go c.RemoveClient(conn.client)
+            // Remove the user from the map and
+            // purge all related keys from the
+            // underlying storage system.
+            utils.Print("HUB", "DROPPED userid=%s clientid=%d",
+                conn.client.UserId, conn.client.ClientId)
+            delete(c.clients, conn.client.UserId)
+            c.Cluster.Purge(core.EphemId(conn.client.ClientId))
         }
         conn.client = nil
     }

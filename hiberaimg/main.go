@@ -109,6 +109,7 @@ func worker(c *cache, num int, file *os.File, op int, chunks chan *chunk) {
     var err error
     var work *chunk
     for {
+
         if work == nil {
             work = <-chunks
             if work == nil {
@@ -406,7 +407,7 @@ func delChunks(key string) (func() *chunk, int64, error) {
 
 func do_op(c *cache, file *os.File, total int64, op int, next func() *chunk, workers uint) error {
     var err error
-    chunks := make(chan *chunk, 3 * workers)
+    chunks := make(chan *chunk, 3*workers)
 
     var status string
     if op == o_upload {

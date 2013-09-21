@@ -62,7 +62,6 @@ var cliInfo = cli.Cli{
                 "url",
                 "keys",
                 "seeds",
-                "active",
             },
             false,
         },
@@ -177,16 +176,15 @@ func cli_run() error {
             // Setup our root password again.
             rootpipe, err := setupRootFd(root_passwd)
             if err != nil {
-                // Just keep running.
-                break
+                // WTF.
+                return nil
             }
 
             // Grab a restart Fd.
             restart := s.Restart()
             if err != nil {
-                // Keep running.
-                rootpipe.Close()
-                break
+                // Also WTF.
+                return nil
             }
 
             // Save our restartfd.
