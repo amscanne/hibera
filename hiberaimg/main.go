@@ -288,9 +288,10 @@ func worker(c *cache, num int, file *os.File, op int, chunks chan *chunk) {
     }
 }
 
-func swapChunks(key string, write bool, data []byte) (func() *chunk, error) {
+func swapChunks(key string, write bool, data []byte) (func() *chunk, int64, error) {
     chunks := make([]*chunk, 0, 0)
     chunkno := 0
+    total := int64(0)
     iter := func() *chunk {
         if chunkno >= len(chunks) {
             return nil
@@ -313,7 +314,7 @@ func swapChunks(key string, write bool, data []byte) (func() *chunk, error) {
             value, rev, err = client.DataGet(fmt.Sprintf("img/info/%s", key), core.NoRevision, 0)
             if err != nil {
                 log.Printf("unable to fetch info for %s: %s\n", key, err.Error())
-                return iter, err
+                return iter, total, err
             }
             utils.Debug("info %s -> revision %s\n", key, rev.String())
 
@@ -323,12 +324,17 @@ func swapChunks(key string, write bool, data []byte) (func() *chunk, error) {
             err = dec.Decode(&chunks)
             if err != nil {
                 log.Printf("unable to decode info for %s: %s\n", key, err.Error())
-                return iter, err
+                return iter, total, err
             }
 
             // Ensure that the channels are available.
             for _, chunk := range chunks {
                 chunk.res = make(chan error)
+            }
+
+            // Ensure the total is correct.
+            if len(chunks) > 0 {
+                total = chunks[len(chunks)-1].Offset + chunks[len(chunks)-1].Size
             }
         }
 
@@ -340,7 +346,7 @@ func swapChunks(key string, write bool, data []byte) (func() *chunk, error) {
                 ok, new_rev, err := client.DataRemove(fmt.Sprintf("img/info/%s", key), rev.Next())
                 if err != nil {
                     log.Printf("unable to remove %s: %s\n", key, err.Error())
-                    return iter, err
+                    return iter, total, err
                 }
                 if !ok || !new_rev.Equals(rev.Next()) {
                     // Retry.
@@ -357,7 +363,7 @@ func swapChunks(key string, write bool, data []byte) (func() *chunk, error) {
                 ok, new_rev, err := client.DataSet(fmt.Sprintf("img/info/%s", key), rev.Next(), data)
                 if err != nil {
                     log.Printf("unable to set %s: %s\n", key, err.Error())
-                    return iter, err
+                    return iter, total, err
                 }
                 if !ok || !new_rev.Equals(rev.Next()) {
                     // Retry.
@@ -372,14 +378,14 @@ func swapChunks(key string, write bool, data []byte) (func() *chunk, error) {
         break
     }
 
-    return iter, nil
+    return iter, total, nil
 }
 
-func getChunks(key string) (func() *chunk, error) {
+func getChunks(key string) (func() *chunk, int64, error) {
     return swapChunks(key, false, nil)
 }
 
-func setChunks(key string, chunks []*chunk) (func() *chunk, error) {
+func setChunks(key string, chunks []*chunk) (func() *chunk, int64, error) {
     // Encode our info object as JSON.
     buf := new(bytes.Buffer)
     enc := json.NewEncoder(buf)
@@ -388,45 +394,68 @@ func setChunks(key string, chunks []*chunk) (func() *chunk, error) {
         noop := func() *chunk {
             return nil
         }
-        return noop, err
+        return noop, int64(0), err
     }
 
     return swapChunks(key, true, buf.Bytes())
 }
 
-func delChunks(key string) (func() *chunk, error) {
+func delChunks(key string) (func() *chunk, int64, error) {
     return swapChunks(key, true, nil)
 }
 
-func do_op(c *cache, file *os.File, op int, next func() *chunk, workers uint) error {
+func do_op(c *cache, file *os.File, total int64, op int, next func() *chunk, workers uint) error {
     var err error
     chunks := make(chan *chunk, workers)
 
+    var status string
     if op == o_upload {
-        utils.Debug("--- starting upload ---\n")
+        status = "upload"
     } else if op == o_download {
-        utils.Debug("--- starting download ---\n")
+        status = "download"
     } else if op == o_remove {
-        utils.Debug("--- starting remove ---\n")
+        status = "remove"
     }
+    utils.Debug("--- starting %s ---\n", status)
 
     // Start workers.
     for i := 0; i < int(workers); i += 1 {
         go worker(c, i, file, op, chunks)
     }
 
-    // Generate all chunks.
-    total := int64(0)
+    // Setup for generating chunks.
     ui_updates := make(chan int64)
+    ui_stop := make(chan bool)
+    ui_done := make(chan bool)
     count := 0
     all_res := make(chan error)
+
+    // Our 'UI' thread.
+    current := int64(0)
+    go func() {
+        for {
+            select {
+            case value := <-ui_updates:
+                current += value
+                percent := float64(current) * 100.0 / float64(total)
+                output := fmt.Sprintf("\r%s [% 6.2f%%] % 10d/%d bytes", status, percent, current, total)
+                os.Stderr.Write([]byte(output))
+                break
+            case <-ui_stop:
+                os.Stderr.Write([]byte("\n"))
+                ui_done <- true
+                return
+            }
+        }
+    }()
+
+    // Generate all chunks.
     for {
         chunk := next()
         if chunk == nil {
             break
         }
         chunks <- chunk
-        total += chunk.Size
         count += 1
 
         go func() {
@@ -435,20 +464,6 @@ func do_op(c *cache, file *os.File, op int, next func() *chunk, workers uint) er
             all_res <- err
         }()
     }
-
-    // Our 'UI' thread.
-    current := int64(0)
-    ui_done := make(chan bool)
-    go func() {
-        for current < total {
-            value := <-ui_updates
-            current += value
-            percent := float64(current) * 100.0 / float64(total)
-            os.Stderr.Write([]byte(fmt.Sprintf("\r[% 2.2f%%] % 10d/%d bytes", percent, current, total)))
-        }
-        os.Stderr.Write([]byte("\n"))
-        ui_done <- true
-    }()
 
     // Put the sentinels.
     for i := 0; i < int(workers); i += 1 {
@@ -464,20 +479,10 @@ func do_op(c *cache, file *os.File, op int, next func() *chunk, workers uint) er
     }
 
     // Wait for the 'UI'.
+    ui_stop <- true
     <-ui_done
-
-    if err != nil {
-        return err
-    }
-
-    if op == o_upload {
-        utils.Debug("--- finished upload ---\n")
-    } else if op == o_download {
-        utils.Debug("--- finished download ---\n")
-    } else if op == o_remove {
-        utils.Debug("--- finished remove ---\n")
-    }
-    return nil
+    utils.Debug("--- finished %s ---\n", status)
+    return err
 }
 
 func cli_upload(c *cache, key string, file string, size uint, workers uint) error {
@@ -517,17 +522,23 @@ func cli_upload(c *cache, key string, file string, size uint, workers uint) erro
         return cur
     }
 
+    // Get the total size.
+    info, err := open_file.Stat()
+    if err != nil {
+        return err
+    }
+
     // Do the heavy lifting.
-    err = do_op(c, open_file, o_upload, next, workers)
+    err = do_op(c, open_file, info.Size(), o_upload, next, workers)
     if err != nil {
         return err
     }
 
     // Replace the hashes.
-    next, err = setChunks(key, chunks)
+    next, total, err := setChunks(key, chunks)
 
     // Remove the old key, if there was one.
-    return do_op(nil, nil, o_remove, next, workers)
+    return do_op(nil, nil, total, o_remove, next, workers)
 }
 
 func cli_download(c *cache, key string, file string, workers uint) error {
@@ -539,24 +550,23 @@ func cli_download(c *cache, key string, file string, workers uint) error {
     defer open_file.Close()
 
     // Grab our hashes.
-    next, err := getChunks(key)
+    next, total, err := getChunks(key)
     if err != nil {
         return err
     }
 
-    // Do the heavy lifting.
-    return do_op(c, open_file, o_download, next, workers)
+    return do_op(c, open_file, total, o_download, next, workers)
 }
 
 func cli_remove(key string, workers uint) error {
     // Grab (and remove) our hashes.
-    next, err := delChunks(key)
+    next, total, err := delChunks(key)
     if err != nil {
         return err
     }
 
     // Do the heavy lifting (no file necessary).
-    return do_op(nil, nil, o_remove, next, workers)
+    return do_op(nil, nil, total, o_remove, next, workers)
 }
 
 func do_cli(command string, args []string) error {
