@@ -42,15 +42,6 @@ fails, it is presumed dead. This is realistic for modern cloud platforms, where
 instances are ephemeral and eventual failure is assured. However, as a whole
 the system must go on.
 
-Building
-========
-
-Hibera requires at least `go1.1`.
-
-To build Hibera, setup your `GOROOT` and `PATH` appropriately, then type `make`.
-
-You can build packages via `make deb` and `make rpm`.
-
 Command line
 ============
 
