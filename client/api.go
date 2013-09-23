@@ -232,6 +232,10 @@ func (h *HiberaAPI) doRequest(method string, args httpArgs, hint string, retry b
                         // the case of a redirect as per below.
                     }
                 } else {
+                    // Clear any cache hint on an error.
+                    utils.Print("CLIENT", "ERROR %s", err)
+                    delete(h.cache, hint)
+
                     // If retry is on, then we will retry the request
                     // below. If it is not, then we will return the error.
                     // This is used for some synchronization requests
@@ -261,11 +265,6 @@ func (h *HiberaAPI) doRequest(method string, args httpArgs, hint string, retry b
             if resp.StatusCode == http.StatusConflict {
                 rev, _ := h.getRev(resp)
                 return nil, rev, core.RevConflict
-            }
-
-            // Check for a temporary condition.
-            if resp.StatusCode == http.StatusServiceUnavailable {
-                err = os.ErrInvalid
             }
 
             if resp.StatusCode == http.StatusOK {
@@ -312,9 +311,6 @@ func (h *HiberaAPI) doRequest(method string, args httpArgs, hint string, retry b
             }
         }
 
-        // Clear any cache hint on an error.
-        delete(h.cache, hint)
-        utils.Print("CLIENT", "ERROR %s", err)
         h.Delay()
     }
 

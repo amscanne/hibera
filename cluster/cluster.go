@@ -92,7 +92,7 @@ func (c *Cluster) lockedEncode(next bool, rev core.Revision) ([]byte, error) {
     }
 
     // Check if we're encoding anything interesting.
-    if next && (info.N == c.N) && !nodes_changed && !access_changed {
+    if next && !c.force && (info.N == c.N) && !nodes_changed && !access_changed {
         utils.Print("CLUSTER", "NOTHING-DOING")
         return nil, nil
     }
