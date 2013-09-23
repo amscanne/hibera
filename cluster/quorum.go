@@ -38,6 +38,19 @@ func (c *Cluster) doSet(node *core.Node, ns core.Namespace, key core.Key, rev co
     return rrev, nil
 }
 
+func (c *Cluster) doInfo(node *core.Node, ns core.Namespace, key core.Key) (core.Revision, error) {
+    if node == c.Nodes.Self() {
+        utils.Print("QUORUM", "    INFO-LOCAL key=%s", key)
+        _, rev, err := c.Data.DataGet(ns, key, false)
+        return rev, err
+    }
+
+    utils.Print("QUORUM", "    INFO-REMOTE key=%s", key)
+    cl := c.getClient(node.API())
+    defer cl.Close()
+    return cl.NSDataInfo(ns, key, core.NoRevision, 1, false)
+}
+
 func (c *Cluster) doGet(node *core.Node, ns core.Namespace, key core.Key) ([]byte, core.Revision, error) {
     if node == c.Nodes.Self() {
         utils.Print("QUORUM", "    GET-LOCAL key=%s", key)
@@ -47,8 +60,7 @@ func (c *Cluster) doGet(node *core.Node, ns core.Namespace, key core.Key) ([]byt
     utils.Print("QUORUM", "    GET-REMOTE key=%s", key)
     cl := c.getClient(node.API())
     defer cl.Close()
-    value, rev, err := cl.NSDataGet(ns, key, core.NoRevision, 1, false)
-    return value, core.Revision(rev), err
+    return cl.NSDataGet(ns, key, core.NoRevision, 1, false)
 }
 
 func (c *Cluster) doRemove(node *core.Node, ns core.Namespace, key core.Key, rev core.Revision) (core.Revision, error) {
@@ -67,7 +79,7 @@ func (c *Cluster) doRemove(node *core.Node, ns core.Namespace, key core.Key, rev
     if !ok {
         return rrev, core.RevConflict
     }
-    return core.Revision(rrev), err
+    return rrev, err
 }
 
 func NewQuorumError(revcounts map[core.Revision]int) error {
@@ -252,6 +264,21 @@ func (c *Cluster) quorum(ring *ring, key core.Key, fn func(*core.Node, chan<- *Q
     return &QuorumResult{rev: maxrev}, err
 }
 
+func (c *Cluster) quorumInfo(ring *ring, ns core.Namespace, key core.Key) (core.Revision, error) {
+    fn := func(node *core.Node, res chan<- *QuorumResult) {
+        utils.Print("QUORUM", "  INFO key=%s", key)
+        rev, err := c.doInfo(node, ns, key)
+        res <- &QuorumResult{node, rev, nil, err}
+    }
+    qr, err := c.quorum(ring, key, fn)
+    var rev core.Revision
+    if qr != nil && err == nil {
+        rev = qr.rev
+        err = qr.err
+    }
+    return rev, err
+}
+
 func (c *Cluster) quorumGet(ring *ring, ns core.Namespace, key core.Key) ([]byte, core.Revision, error) {
     fn := func(node *core.Node, res chan<- *QuorumResult) {
         utils.Print("QUORUM", "  GET key=%s", key)
@@ -273,8 +300,11 @@ func (c *Cluster) quorumSet(ring *ring, ns core.Namespace, key core.Key, rev cor
     fn := func(node *core.Node, res chan<- *QuorumResult) {
         utils.Print("QUORUM", "  SET key=%s rev=%s len=%d",
             key, rev.String(), len(value))
-        rev, err := c.doSet(node, ns, key, rev, value)
-        res <- &QuorumResult{node, rev, value, err}
+        cur_rev, err := c.doInfo(node, ns, key)
+        if err != nil || !cur_rev.Equals(rev) {
+            rev, err := c.doSet(node, ns, key, rev, value)
+            res <- &QuorumResult{node, rev, value, err}
+        }
     }
     qr, err := c.quorum(ring, key, fn)
     if qr != nil && err == nil {

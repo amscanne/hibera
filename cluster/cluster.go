@@ -311,16 +311,27 @@ func (c *Cluster) syncData(old_ring *ring, ns core.Namespace, key core.Key, sync
 
     utils.Print("CLUSTER", "SYNC-START ns=%s key=%s", ns, key)
 
-    // Pull in the quorum value (from the old ring).
-    value, rev, err := c.quorumGet(old_ring, ns, key)
+    // Pull in our local value.
+    value, local_rev, err := c.Data.DataGet(ns, key, true)
     if err != nil {
-        // It's possible that the quorumGet failed because we were in the middle
-        // of some other quorumSet(). That's fine, whatever other quroumSet() will
-        // complete and ultimately represent the correct quorumValue.
-        syncLimit <- true
-        utils.Print("CLUSTER", "SYNC-GET-ERROR key=%s rev=%s %s", key, rev.String(), err.Error())
-        notify <- false
-        return
+        value = nil
+        local_rev = core.NoRevision
+    }
+
+    // Pull in the quorum revision.
+    rev, err := c.quorumInfo(old_ring, ns, key)
+    if err != nil || !rev.Equals(local_rev) {
+        // Pull in the quorum value (from the old ring).
+        value, rev, err = c.quorumGet(old_ring, ns, key)
+        if err != nil {
+            // It's possible that the quorumGet failed because we were in the middle
+            // of some other quorumSet(). That's fine, whatever other quroumSet() will
+            // complete and ultimately represent the correct quorumValue.
+            syncLimit <- true
+            utils.Print("CLUSTER", "SYNC-GET-ERROR key=%s rev=%s %s", key, rev.String(), err.Error())
+            notify <- false
+            return
+        }
     }
 
     // Set the full cluster.
