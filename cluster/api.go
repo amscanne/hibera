@@ -88,14 +88,19 @@ func (c *Cluster) Info(req Request) ([]byte, core.Revision, error) {
         return nil, core.NoRevision, err
     }
 
-    // NOTE: We fetch the cluster info from the current node,
-    // this may not be the *current* cluster info, but since
-    // it may have changed by the time the result gets back to
-    // the client anyways, it makes sense to handle this here.
+    // If we've active, then redirect to the master.
+    // (NOTE: If this is a server, it'll fall through).
+    if c.Active() {
+        _, err = c.doRedirect(req, RootKey)
+        if err != nil {
+            return nil, c.Revision(), err
+        }
+    }
+
     c.Mutex.Lock()
     defer c.Mutex.Unlock()
-    bytes, err := c.lockedEncode(false)
-    return bytes, c.rev, err
+    bytes, err := c.lockedEncode(false, c.Revision())
+    return bytes, c.Revision(), err
 }
 
 func (c *Cluster) Activate(req Request, N uint) (core.Revision, error) {
@@ -104,7 +109,7 @@ func (c *Cluster) Activate(req Request, N uint) (core.Revision, error) {
     // We always authorize ACTIVATE against the root namepsace.
     err := c.Authorize(RootNamespace, req.Auth(), RootKey, true, true, false)
     if err != nil {
-        return c.rev, err
+        return c.Revision(), err
     }
 
     if c.Active() {
@@ -114,7 +119,7 @@ func (c *Cluster) Activate(req Request, N uint) (core.Revision, error) {
         // the client to the current master node.
         _, err = c.doRedirect(req, RootKey)
         if err != nil {
-            return c.rev, err
+            return c.Revision(), err
         }
     }
 
@@ -127,18 +132,14 @@ func (c *Cluster) Deactivate(req Request) (core.Revision, error) {
     // Same as activate, we authorize DEACTIVATE against the root namespace.
     err := c.Authorize(RootNamespace, req.Auth(), RootKey, true, true, false)
     if err != nil {
-        return c.rev, err
+        return c.Revision(), err
     }
 
     // NOTE: The deactivate call is sent to a specific node,
     // we do not redirect to the master node in this case.
     c.Mutex.Lock()
     defer c.Mutex.Unlock()
-    return c.rev, c.lockedDeactivate()
-}
-
-func (c *Cluster) Version() core.Revision {
-    return c.rev
+    return c.Revision(), c.lockedDeactivate()
 }
 
 func (c *Cluster) DataList(req Request) (map[core.Key]uint, core.Revision, error) {
@@ -146,17 +147,17 @@ func (c *Cluster) DataList(req Request) (map[core.Key]uint, core.Revision, error
 
     err := c.Authorize(req.Namespace(), req.Auth(), RootKey, true, false, false)
     if err != nil {
-        return nil, c.rev, err
+        return nil, c.Revision(), err
     }
 
     server, err := c.doRedirect(req, RootKey)
     if err != nil {
-        return nil, c.rev, err
+        return nil, c.Revision(), err
     }
 
     if server {
         items, err := c.Data.DataList(req.Namespace())
-        return items, c.rev, err
+        return items, c.Revision(), err
     }
 
     items, err := c.allList(req.Namespace())
@@ -165,7 +166,7 @@ func (c *Cluster) DataList(req Request) (map[core.Key]uint, core.Revision, error
     // See get() and set() where it is also handled specially.
     delete(items, RootKey)
 
-    return items, c.rev, err
+    return items, c.Revision(), err
 }
 
 func (c *Cluster) DataGet(req Request, key core.Key, rev core.Revision, timeout uint) ([]byte, core.Revision, error) {
@@ -261,7 +262,7 @@ func (c *Cluster) DataRemove(req Request, key core.Key, rev core.Revision) (core
         return c.Data.DataRemove(req.Namespace(), key, rev)
     }
     if key == RootKey {
-        return c.rev, &PermissionError{key}
+        return c.Revision(), &PermissionError{key}
     }
 
     if rev.IsZero() {
@@ -369,16 +370,16 @@ func (c *Cluster) AccessList(req Request) ([]core.Token, core.Revision, error) {
 
     err := c.Authorize(req.Namespace(), req.Auth(), RootKey, true, false, false)
     if err != nil {
-        return nil, c.rev, err
+        return nil, c.Revision(), err
     }
 
     server, err := c.doRedirect(req, RootKey)
     if err != nil || server {
-        return nil, c.rev, err
+        return nil, c.Revision(), err
     }
 
     items := c.Access.List(req.Namespace())
-    return items, c.rev, nil
+    return items, c.Revision(), nil
 }
 
 func (c *Cluster) AccessGet(req Request, auth core.Token) (*core.Permissions, core.Revision, error) {
@@ -386,16 +387,16 @@ func (c *Cluster) AccessGet(req Request, auth core.Token) (*core.Permissions, co
 
     err := c.Authorize(req.Namespace(), req.Auth(), RootKey, true, false, false)
     if err != nil {
-        return nil, c.rev, err
+        return nil, c.Revision(), err
     }
 
     server, err := c.doRedirect(req, RootKey)
     if err != nil || server {
-        return nil, c.rev, err
+        return nil, c.Revision(), err
     }
 
     value, err := c.Access.Get(req.Namespace(), auth)
-    return value, c.rev, err
+    return value, c.Revision(), err
 }
 
 func (c *Cluster) AccessUpdate(req Request, auth core.Token, key core.Key, read bool, write bool, execute bool) (core.Revision, error) {
@@ -411,14 +412,14 @@ func (c *Cluster) AccessUpdate(req Request, auth core.Token, key core.Key, read 
 
     err := c.Authorize(ns, req.Auth(), RootKey, false, true, false)
     if err != nil {
-        return c.rev, err
+        return c.Revision(), err
     }
 
     server, err := c.doRedirect(req, RootKey)
     if err != nil || server {
-        return c.rev, err
+        return c.Revision(), err
     }
 
     err = c.Access.Update(req.Namespace(), auth, key, read, write, execute)
-    return c.rev, err
+    return c.Revision(), err
 }

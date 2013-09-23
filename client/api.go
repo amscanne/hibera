@@ -197,7 +197,7 @@ func (h *HiberaAPI) makeRequest(method string, args httpArgs, hint string) (*htt
 func (h *HiberaAPI) Delay() {
     if h.delay > 0 {
         random_delay := (rand.Int() % int(h.delay*2)) + 1
-        utils.Print("CLIENT", "DELAY %d milliseconds")
+        utils.Print("CLIENT", "DELAY %d milliseconds", random_delay)
         time.Sleep(time.Duration(random_delay) * time.Millisecond)
     }
 }
@@ -338,7 +338,7 @@ func (h *HiberaAPI) Info() (*core.Info, core.Revision, error) {
 func (h *HiberaAPI) Activate(replication uint) error {
     args := h.makeArgs("", "/v1.0/")
     args.params["replication"] = strconv.FormatUint(uint64(replication), 10)
-    _, _, err := h.doRequest("POST", args, "", false)
+    _, _, err := h.doRequest("POST", args, "", true)
     return err
 }
 

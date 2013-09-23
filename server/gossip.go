@@ -61,9 +61,9 @@ func (s *GossipServer) sendPingPong(addr *net.UDPAddr, pong bool) {
     if pong {
         t = pongMessage
     }
-    rev := s.Cluster.Version()
-    id := s.Cluster.Nodes.Self().Id()
-    url := s.Cluster.Nodes.Self().URL
+    rev := s.Cluster.Revision()
+    id := s.Cluster.Id()
+    url := s.Cluster.URL()
     m := &message{t, rev, id, url, gossip}
     utils.Print("GOSSIP", "SEND addr=%s type=%d", addr, t)
     s.send(addr, m)
@@ -77,6 +77,7 @@ func (s *GossipServer) heartbeat() {
     // the seeds is to ensure that at cluster creation time, we
     // don't end up with two split clusters.
     var nodes []*core.Node
+
     if s.Cluster.HasSuspicious() {
         nodes = s.Cluster.Suspicious()
     }
@@ -142,13 +143,21 @@ func NewGossipServer(c *cluster.Cluster, addr string, port uint, seeds []string)
 
 func (s *GossipServer) process(addr *net.UDPAddr, m *message) {
     // Check for our own id (prevents broadcast from looping back).
-    if m.Id == s.Cluster.Nodes.Self().Id() {
+    if m.Id == s.Cluster.Id() {
         return
     }
 
-    // Update the cluster status based on gossip.
+    // Debug print.
     utils.Print("GOSSIP", "RECV addr=%s type=%d", addr, m.Type)
-    s.Cluster.GossipUpdate(addr, m.Id, m.URL, m.Revision, m.Dead)
+
+    // Update the cluster status based on gossip.
+    go func() {
+        hint := s.Cluster.GossipUpdate(addr, m.Id, m.URL, m.Revision, m.Dead)
+        if hint != nil {
+            addr, _ = utils.UDPAddr(hint.Addr, "", utils.DefaultPort)
+            go s.sendPingPong(addr, true)
+        }
+    }()
 
     if m.Type == pingMessage && s.Cluster.Active() {
         // Respond to the ping.

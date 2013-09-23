@@ -122,7 +122,7 @@ func (nodes *Nodes) Heartbeat(id string, rev Revision) bool {
         // will be removed and replaced by other nodes,
         // but we allow that to happen organically.
         node.RstDropped()
-        if rev.GreaterThan(node.Current) {
+        if !rev.IsZero() && rev.GreaterThan(node.Current) {
             node.Current = rev
         }
         return true
@@ -229,7 +229,7 @@ func (nodes *Nodes) Suspicious() []*Node {
 }
 
 func (nodes *Nodes) HasSuspicious() bool {
-    return len(nodes.Suspicious()) > 0
+    return nodes.self.Active && len(nodes.Suspicious()) > 0
 }
 
 func (nodes *Nodes) Self() *Node {
@@ -262,24 +262,32 @@ func (nodes *Nodes) Encode(next bool, na NodeInfo, N uint) (bool, error) {
     }
 
     if notcurrent >= N {
+        utils.Print("NODES", "%d (N=%d) NODES NOT CURRENT", notcurrent, N)
         addokay = false
     }
 
     for id, node := range nodes.all {
 
-        if next && addokay && !node.Active && node.Alive() {
+        if next && !node.Active && node.Alive() {
             // Check if we can't add this domain.
             // We limit ourselves to adding & removing nodes
             // from a single domain at a time. This is done
             // to ensure that the cluster can reach a consistent
             // state after each transition.
-            if domains[node.Domain] || len(domains) < int(N) {
+            if !addokay {
+                utils.Print("NODES", "NOT ADDING %s, CURRENT LIMIT", id)
+            } else if domains[node.Domain] || len(domains) < int(N) {
                 // Propose this as an active node.
                 domains[node.Domain] = true
                 na[id] = NewNode(node.Addr, node.URL, node.Keys, node.Domain)
                 na[id].Active = true
+                na[id].Current = node.Current
                 na[id].Modified = nodes.self.Current
+                na[id].Dropped = 0
                 changed = true
+                utils.Print("NODES", "ADDING %s", id)
+            } else {
+                utils.Print("NODES", "NOT ADDING %s, DOMAIN LIMIT", id)
             }
 
         } else if next && node.Active && node != nodes.self && !node.Alive() {
@@ -289,18 +297,22 @@ func (nodes *Nodes) Encode(next bool, na NodeInfo, N uint) (bool, error) {
                 domains[node.Domain] = true
                 na[id] = NewNode(node.Addr, node.URL, node.Keys, node.Domain)
                 na[id].Active = false
-                na[id].Dropped = DropLimit
                 na[id].Current = node.Current
                 na[id].Modified = nodes.self.Current
+                na[id].Dropped = DropLimit
                 changed = true
+                utils.Print("NODES", "DROPPING %s", id)
+            } else {
+                utils.Print("NODES", "NOT DROPPING %s, DOMAIN LIMIT", id)
             }
 
-        } else {
+        } else if node.Active || !nodes.self.Current.GreaterThan(node.Current.Next().Next()) {
             na[id] = NewNode(node.Addr, node.URL, node.Keys, node.Domain)
             na[id].Active = node.Active
             na[id].Current = node.Current
             na[id].Modified = node.Modified
-            na[id].Dropped = node.Dropped
+            na[id].Dropped = 0
+            utils.Print("NODES", "LEAVING %s", id)
         }
     }
 
@@ -316,30 +328,27 @@ func (nodes *Nodes) Decode(na NodeInfo) (bool, error) {
     // Update all nodes with revs > Modified.
     for id, node := range na {
         orig_active := (nodes.all[id] != nil && nodes.all[id].Active)
+        is_self := (nodes.self.Id() == id)
+        new_node := false
 
-        if nodes.all[id] == nil ||
-            node.Modified.GreaterThan(nodes.all[id].Modified) {
-            if id == nodes.self.Id() {
-                nodes.self = node
-            }
+        if nodes.all[id] == nil {
             nodes.all[id] = node
+            new_node = true
         }
+        if node.Modified.GreaterThan(nodes.all[id].Modified) {
+            node.Current = nodes.all[id].Current
+            node.Dropped = nodes.all[id].Dropped
+            nodes.all[id] = node
+            new_node = true
+        }
+        if new_node && is_self {
+            nodes.self = node
+        }
+
         now_active := (nodes.all[id] != nil && nodes.all[id].Active)
         if orig_active != now_active {
             changed = true
         }
-    }
-
-    // Forget about non-active nodes with Current < node.Self.Current.
-    rev := nodes.self.Current
-    to_remove := make([]string, 0)
-    for id, node := range na {
-        if !node.Active && rev.GreaterThan(node.Current.Next()) {
-            to_remove = append(to_remove, id)
-        }
-    }
-    for _, id := range to_remove {
-        delete(na, id)
     }
 
     return changed, nil

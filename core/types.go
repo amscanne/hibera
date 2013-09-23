@@ -55,6 +55,7 @@ var NoSyncInfo = SyncInfo{-1, make([]string, 0, 0)}
 // Representation of the cluster state.
 type Info struct {
     N      uint       `json:"replication"`
+    N_mod  Revision   `json:"modified"`
     Nodes  NodeInfo   `json:"nodes"`
     Access AccessInfo `json:"access"`
 }
