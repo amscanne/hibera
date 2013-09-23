@@ -59,6 +59,7 @@ type Cluster struct {
     // data synchronization (i.e. changing to a new revision).
     syncActive bool
     syncLock   sync.Mutex
+    syncLimit  uint
 
     // The core lock (protecting revision, etc.)
     sync.Mutex
@@ -273,6 +274,13 @@ func (c *Cluster) doSync(url string) error {
     return err
 }
 
+func (c *Cluster) SetSyncLimit(active uint) {
+    c.Mutex.Lock()
+    defer c.Mutex.Unlock()
+
+    c.syncLimit = active
+}
+
 func (c *Cluster) GossipUpdate(addr *net.UDPAddr, id string, url string, rev core.Revision, dead []string) *core.Node {
     // Mark dead nodes as dead.
     for _, id := range dead {
@@ -297,7 +305,10 @@ func (c *Cluster) GossipUpdate(addr *net.UDPAddr, id string, url string, rev cor
     return nil
 }
 
-func (c *Cluster) syncData(old_ring *ring, ns core.Namespace, key core.Key, notify chan bool) {
+func (c *Cluster) syncData(old_ring *ring, ns core.Namespace, key core.Key, syncLimit chan bool, notify chan bool) {
+    // Wait for a slot.
+    <-syncLimit
+
     utils.Print("CLUSTER", "SYNC-START ns=%s key=%s", ns, key)
 
     // Pull in the quorum value (from the old ring).
@@ -306,6 +317,7 @@ func (c *Cluster) syncData(old_ring *ring, ns core.Namespace, key core.Key, noti
         // It's possible that the quorumGet failed because we were in the middle
         // of some other quorumSet(). That's fine, whatever other quroumSet() will
         // complete and ultimately represent the correct quorumValue.
+        syncLimit <- true
         utils.Print("CLUSTER", "SYNC-GET-ERROR key=%s rev=%s %s", key, rev.String(), err.Error())
         notify <- false
         return
@@ -317,11 +329,13 @@ func (c *Cluster) syncData(old_ring *ring, ns core.Namespace, key core.Key, noti
         // It's possible that the cluster has changed again by the time this
         // set has actually had a chance to run. That's okay, at some point
         // the most recent quorumSet will work (setting the most recent ring).
+        syncLimit <- true
         utils.Print("CLUSTER", "SYNC-QUORUM-ERROR key=%s rev=%s %s", key, rev.String(), err.Error())
         notify <- false
         return
     }
 
+    syncLimit <- true
     utils.Print("CLUSTER", "SYNC-OKAY key=%s rev=%s", key, rev.String())
     notify <- true
 }
@@ -369,6 +383,10 @@ func (c *Cluster) lockedChangeRevision(rev core.Revision, force bool) (core.Revi
     done := 0
     scheduled := 0
     notify := make(chan bool)
+    syncLimit := make(chan bool, c.syncLimit)
+    for i := 0; i < int(c.syncLimit); i += 1 {
+        syncLimit <- true
+    }
 
     // Update every namespace.
     for _, ns := range namespaces {
@@ -399,7 +417,7 @@ func (c *Cluster) lockedChangeRevision(rev core.Revision, force bool) (core.Revi
                     // We unconditionally do a sync for this key
                     // in order to ensure that all the slaves have
                     // the correct data in place.
-                    go c.syncData(old_ring, ns, key, notify)
+                    go c.syncData(old_ring, ns, key, syncLimit, notify)
                     scheduled += 1
 
                 } else if c.ring.IsFailover(key) &&
@@ -407,7 +425,7 @@ func (c *Cluster) lockedChangeRevision(rev core.Revision, force bool) (core.Revi
                     // Ensure that the master is aware of this key.
                     // This happens if the new master was not in the
                     // ring previously, but is now in the ring.
-                    go c.syncData(old_ring, ns, key, notify)
+                    go c.syncData(old_ring, ns, key, syncLimit, notify)
                     scheduled += 1
                 }
 
@@ -587,6 +605,9 @@ func NewCluster(store *storage.Store, addr string, url string, root core.Token, 
     c.quorumLock = sync.NewCond(&sync.Mutex{})
     c.quorumInProgress = make(map[core.Key]bool)
     c.quorumWaiters = make(map[core.Key]uint)
+
+    // Initialize our syncLimit.
+    c.syncLimit = 1
 
     // Read cluster data.
     data, rev, err := c.Data.DataGet(RootNamespace, RootKey)

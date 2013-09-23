@@ -491,16 +491,20 @@ func NewHTTPServer(cluster *cluster.Cluster, restart int, addr string, port uint
         return nil, err
     }
 
-    // Figure out our active limit (1/8 open limit).
-    // We use 1/4 for clients because we often need
+    // Figure out our active limit (1/2 open limit).
+    // We use 1/2 for clients because we often need
     // a pipe for detecting errors, and 2 more sockets
     // for doing quorum! Yikes, too many FDs.
+    // NOTE: This is also used to initialize the active
+    // limit for the cluster. This is the most number of
+    // simultaneous syncs that can occured at any moment.
     var rlim syscall.Rlimit
     err = syscall.Getrlimit(syscall.RLIMIT_NOFILE, &rlim)
     if err != nil {
         return nil, err
     }
-    active := uint(rlim.Cur) / 8
+    active := uint(rlim.Cur) / 2
+    cluster.SetSyncLimit(active / 4)
 
     // Create our object.
     server := new(HTTPServer)
