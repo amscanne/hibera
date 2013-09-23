@@ -2,9 +2,9 @@ package main
 
 import (
     "fmt"
-    "hibera/cli"
-    "hibera/client"
-    "hibera/core"
+    "github.com/amscanne/hibera/cli"
+    "github.com/amscanne/hibera/client"
+    "github.com/amscanne/hibera/core"
     "math/rand"
     "sync/atomic"
     "time"

@@ -4,7 +4,7 @@ import (
     "bufio"
     "flag"
     "fmt"
-    "hibera/utils"
+    "github.com/amscanne/hibera/utils"
     "io/ioutil"
     "log"
     "math/rand"
@@ -19,7 +19,7 @@ import (
     "time"
 )
 
-var Flags = flag.NewFlagSet("hibera", flag.ExitOnError)
+var Flags = flag.NewFlagSet("github.com/amscanne/hibera", flag.ExitOnError)
 
 type Command struct {
     Help     string

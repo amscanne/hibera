@@ -2,7 +2,7 @@ package main
 
 import (
     "container/heap"
-    "hibera/utils"
+    "github.com/amscanne/hibera/utils"
     "io"
     "os"
     "path"

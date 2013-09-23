@@ -3,9 +3,9 @@ package server
 import (
     "encoding/json"
     "fmt"
-    "hibera/cluster"
-    "hibera/core"
-    "hibera/utils"
+    "github.com/amscanne/hibera/cluster"
+    "github.com/amscanne/hibera/core"
+    "github.com/amscanne/hibera/utils"
     "math/rand"
     "net"
     "time"

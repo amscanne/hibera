@@ -3,9 +3,9 @@ package cluster
 import (
     "errors"
     "fmt"
-    "hibera/client"
-    "hibera/core"
-    "hibera/utils"
+    "github.com/amscanne/hibera/client"
+    "github.com/amscanne/hibera/core"
+    "github.com/amscanne/hibera/utils"
 )
 
 type QuorumResult struct {

@@ -1,9 +1,9 @@
 package server
 
 import (
-    "hibera/cluster"
-    "hibera/core"
-    "hibera/utils"
+    "github.com/amscanne/hibera/cluster"
+    "github.com/amscanne/hibera/core"
+    "github.com/amscanne/hibera/utils"
     "net"
     "strings"
     "sync"

@@ -3,8 +3,8 @@ package core
 import (
     "errors"
     "fmt"
-    "hibera/storage"
-    "hibera/utils"
+    "github.com/amscanne/hibera/storage"
+    "github.com/amscanne/hibera/utils"
     "strings"
     "sync"
     "time"

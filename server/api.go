@@ -1,8 +1,8 @@
 package server
 
 import (
-    "hibera/cluster"
-    "hibera/utils"
+    "github.com/amscanne/hibera/cluster"
+    "github.com/amscanne/hibera/utils"
 )
 
 type Server struct {

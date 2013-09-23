@@ -39,7 +39,7 @@
 package storage
 
 import (
-    "hibera/utils"
+    "github.com/amscanne/hibera/utils"
     "os"
 )
 

@@ -1,8 +1,8 @@
 package cli
 
 import (
-    "hibera/client"
-    "hibera/core"
+    "github.com/amscanne/hibera/client"
+    "github.com/amscanne/hibera/core"
 )
 
 var api = Flags.String("api", "", "API address (comma-separated list).")

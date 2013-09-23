@@ -5,7 +5,7 @@ import (
     "encoding/binary"
     "errors"
     "fmt"
-    "hibera/utils"
+    "github.com/amscanne/hibera/utils"
     "io"
     "log"
     "os"

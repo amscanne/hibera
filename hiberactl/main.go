@@ -2,9 +2,9 @@ package main
 
 import (
     "fmt"
-    "hibera/cli"
-    "hibera/client"
-    "hibera/utils"
+    "github.com/amscanne/hibera/cli"
+    "github.com/amscanne/hibera/client"
+    "github.com/amscanne/hibera/utils"
     "strings"
 )
 

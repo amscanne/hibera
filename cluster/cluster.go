@@ -3,9 +3,9 @@ package cluster
 import (
     "bytes"
     "encoding/json"
-    "hibera/core"
-    "hibera/storage"
-    "hibera/utils"
+    "github.com/amscanne/hibera/core"
+    "github.com/amscanne/hibera/storage"
+    "github.com/amscanne/hibera/utils"
     "net"
     "sync"
     "time"

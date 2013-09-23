@@ -5,9 +5,9 @@ import (
     "encoding/json"
     "errors"
     "fmt"
-    "hibera/cluster"
-    "hibera/core"
-    "hibera/utils"
+    "github.com/amscanne/hibera/cluster"
+    "github.com/amscanne/hibera/core"
+    "github.com/amscanne/hibera/utils"
     "io"
     "net"
     "net/http"
@@ -99,7 +99,7 @@ func (c HTTPConnection) Close() error {
 }
 
 func (a Addr) Network() string {
-    return "hibera"
+    return "github.com/amscanne/hibera"
 }
 
 func (a Addr) String() string {

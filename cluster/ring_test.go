@@ -1,8 +1,8 @@
 package cluster
 
 import (
-    "hibera/core"
-    "hibera/utils"
+    "github.com/amscanne/hibera/core"
+    "github.com/amscanne/hibera/utils"
     "testing"
 )
 

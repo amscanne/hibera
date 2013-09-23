@@ -1,7 +1,7 @@
 package server
 
 import (
-    "hibera/core"
+    "github.com/amscanne/hibera/core"
 )
 
 type messageType int

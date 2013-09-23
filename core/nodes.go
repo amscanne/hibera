@@ -3,7 +3,7 @@ package core
 import (
     "errors"
     "fmt"
-    "hibera/utils"
+    "github.com/amscanne/hibera/utils"
     "os"
     "sort"
     "strconv"

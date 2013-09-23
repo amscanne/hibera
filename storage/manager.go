@@ -2,7 +2,7 @@ package storage
 
 import (
     "fmt"
-    "hibera/utils"
+    "github.com/amscanne/hibera/utils"
     "log"
     "os"
     "path"
