@@ -518,6 +518,10 @@ func deserialize(input *os.File, start_offset int64) (int64, *deferredIO, error)
 
     // Construct our function for reading data.
     run := func(output *os.File, output_offset *int64) ([]byte, error) {
+        if data_length == nilLength {
+            return nil, nil
+        }
+
         if output == nil {
             // Read the file directly.
             data := make([]byte, data_length, data_length)
