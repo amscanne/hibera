@@ -488,6 +488,18 @@ func (h *HiberaAPI) NSEventWait(ns core.Namespace, key core.Key, rev core.Revisi
     return rev, err
 }
 
+func (h *HiberaAPI) DataInfo(key string, rev core.Revision, timeout uint) (core.Revision, error) {
+    return h.NSDataInfo(h.defaultNS, core.Key(key), rev, timeout, true)
+}
+
+func (h *HiberaAPI) NSDataInfo(ns core.Namespace, key core.Key, rev core.Revision, timeout uint, retry bool) (core.Revision, error) {
+    args := h.makeArgs(ns, fmt.Sprintf("/v1.0/data/%s", string(key)))
+    args.params["rev"] = rev.String()
+    args.params["timeout"] = strconv.FormatUint(uint64(timeout), 10)
+    _, rev, err := h.doRequest("HEAD", args, string(key), retry)
+    return rev, err
+}
+
 func (h *HiberaAPI) DataGet(key string, rev core.Revision, timeout uint) ([]byte, core.Revision, error) {
     return h.NSDataGet(h.defaultNS, core.Key(key), rev, timeout, true)
 }

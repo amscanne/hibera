@@ -354,6 +354,13 @@ func (s *HTTPServer) process(w http.ResponseWriter, r *http.Request) {
             break
         case "data":
             switch r.Method {
+            case "HEAD":
+                rev, err = s.revParam(r, "rev")
+                if err == nil {
+                    timeout := uint(s.intParam(r, "timeout"))
+                    rev, err = s.Cluster.DataRev(req, key, rev, timeout)
+                }
+                break
             case "GET":
                 var value []byte
                 rev, err = s.revParam(r, "rev")

@@ -75,6 +75,18 @@ func (s *Store) WriteFile(id string, metadata []byte, length int32, input *os.Fi
     return <-upd.result
 }
 
+func (s *Store) Info(id string) ([]byte, error) {
+    utils.Print("STORAGE", "INFO %s", id)
+
+    record, ok := s.logs.records[id]
+    if ok {
+        _, metadata, err := record.Info()
+        return metadata, err
+    }
+
+    return nil, nil
+}
+
 func (s *Store) Read(id string) ([]byte, []byte, error) {
     utils.Print("STORAGE", "READ %s", id)
 

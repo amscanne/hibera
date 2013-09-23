@@ -274,6 +274,22 @@ func (l *logRecord) Read() (string, []byte, []byte, error) {
     return dio.key, dio.metadata, data, nil
 }
 
+func (l *logRecord) Info() (string, []byte, error) {
+    l.RWMutex.RLock()
+    defer l.RWMutex.RUnlock()
+
+    // Get our deferred functions.
+    dio, finished, err := l.readGuarded()
+    if err != nil {
+        return "", nil, err
+    }
+
+    // Make sure we call finished().
+    defer finished()
+
+    return dio.key, dio.metadata, nil
+}
+
 func (l *logRecord) Delete() error {
     // NOTE: For reads and writes, we actually
     // drop the lock before doing the read/write.

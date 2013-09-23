@@ -401,7 +401,7 @@ func (c *Cluster) lockedChangeRevision(rev core.Revision, force bool) (core.Revi
         // Schedule updates for every key.
         for key, _ := range items {
 
-            _, rev, err := c.Data.DataGet(ns, key)
+            _, rev, err := c.Data.DataGet(ns, key, false)
             if rev.IsZero() || err != nil {
                 // Something is wrong with this key.
                 // We purge this guy.
@@ -610,7 +610,7 @@ func NewCluster(store *storage.Store, addr string, url string, root core.Token, 
     c.syncLimit = 1
 
     // Read cluster data.
-    data, rev, err := c.Data.DataGet(RootNamespace, RootKey)
+    data, rev, err := c.Data.DataGet(RootNamespace, RootKey, true)
     if err == nil && !rev.IsZero() {
         utils.Print("CLUSTER", "START-FOUND rev=%s", rev.String())
 

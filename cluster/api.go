@@ -169,9 +169,14 @@ func (c *Cluster) DataList(req Request) (map[core.Key]uint, core.Revision, error
     return items, c.Revision(), err
 }
 
-func (c *Cluster) DataGet(req Request, key core.Key, rev core.Revision, timeout uint) ([]byte, core.Revision, error) {
+func (c *Cluster) DataWatch(
+    req Request,
+    key core.Key,
+    rev core.Revision,
+    timeout uint,
+    with_data bool) ([]byte, core.Revision, error) {
 
-    utils.Print("CLUSTER", "DATA-GET key=%s", key)
+    utils.Print("CLUSTER", "DATA-WATCH key=%s", key)
 
     err := c.Authorize(req.Namespace(), req.Auth(), key, true, false, false)
     if err != nil {
@@ -196,7 +201,18 @@ func (c *Cluster) DataGet(req Request, key core.Key, rev core.Revision, timeout 
         req.EphemId(),
         req.Namespace(), key,
         rev, timeout,
-        notifier, valid)
+        notifier, valid,
+        with_data)
+}
+
+func (c *Cluster) DataRev(req Request, key core.Key, rev core.Revision, timeout uint) (core.Revision, error) {
+    _, rev, err := c.DataWatch(req, key, rev, timeout, false)
+    return rev, err
+}
+
+func (c *Cluster) DataGet(req Request, key core.Key, rev core.Revision, timeout uint) ([]byte, core.Revision, error) {
+    value, rev, err := c.DataWatch(req, key, rev, timeout, true)
+    return value, rev, err
 }
 
 func (c *Cluster) DataSet(req Request, key core.Key, rev core.Revision, value []byte) (core.Revision, error) {
@@ -229,7 +245,7 @@ func (c *Cluster) DataSet(req Request, key core.Key, rev core.Revision, value []
         // do not succeed will get a server error and will retry. So
         // if you keep posting will 0, eventually you will set some key
         // to whatever value you wanted.
-        _, rev, err = c.Data.DataGet(req.Namespace(), key)
+        _, rev, err = c.Data.DataGet(req.Namespace(), key, false)
         if err != nil {
             return core.NoRevision, err
         }
@@ -267,7 +283,7 @@ func (c *Cluster) DataRemove(req Request, key core.Key, rev core.Revision) (core
 
     if rev.IsZero() {
         // NOTE: See above in DataGet().
-        _, rev, err = c.Data.DataGet(req.Namespace(), key)
+        _, rev, err = c.Data.DataGet(req.Namespace(), key, false)
         if err != nil {
             return core.NoRevision, err
         }

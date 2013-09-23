@@ -63,6 +63,13 @@ var cliInfo = cli.Cli{
             []string{},
             false,
         },
+        "info": cli.Command{
+            "Fetch info for the key.",
+            "",
+            []string{"key"},
+            []string{"rev"},
+            false,
+        },
         "get": cli.Command{
             "Get the contents of the key.",
             "",
@@ -264,8 +271,18 @@ func cli_members(c *client.HiberaAPI, key string, data string, limit uint) error
     return nil
 }
 
-func cli_get(c *client.HiberaAPI, key string, rev core.Revision) error {
-    value, rev, err := c.DataGet(key, rev, 0)
+func cli_info(c *client.HiberaAPI, key string, rev core.Revision, timeout uint) error {
+    rev, err := c.DataInfo(key, rev, timeout)
+    if err != nil {
+        return err
+    }
+    // Output the string.
+    os.Stderr.Write([]byte(fmt.Sprintf("%s\n", rev.String())))
+    return nil
+}
+
+func cli_get(c *client.HiberaAPI, key string, rev core.Revision, timeout uint) error {
+    value, rev, err := c.DataGet(key, rev, timeout)
     if err != nil {
         return err
     }
@@ -468,8 +485,10 @@ func do_cli(command string, args []string) error {
         return cli_run(client, args[0], *data, *limit, *timeout, start_cmd, stop_cmd, cmd)
     case "members":
         return cli_members(client, args[0], *data, *limit)
+    case "info":
+        return cli_info(client, args[0], crev, *timeout)
     case "get":
-        return cli_get(client, args[0], crev)
+        return cli_get(client, args[0], crev, *timeout)
     case "push":
         return cli_push(client, args[0])
     case "pull":

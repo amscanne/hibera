@@ -372,18 +372,33 @@ func (d *Data) SyncLeave(id EphemId, ns Namespace, key Key, data string) (Revisi
     return d.getSyncRev(ns, key), NotFound
 }
 
-func (d *Data) DataGet(ns Namespace, key Key) ([]byte, Revision, error) {
+func (d *Data) DataGet(ns Namespace, key Key, with_data bool) ([]byte, Revision, error) {
 
-    // Read the local value available.
-    metadata, data, err := d.store.Read(toStoreKey(ns, key))
+    var data []byte
+    var metadata []byte
+    var err error
+
+    if with_data {
+        // Read the local value available.
+        metadata, data, err = d.store.Read(toStoreKey(ns, key))
+    } else {
+        // Read the header only.
+        metadata, err = d.store.Info(toStoreKey(ns, key))
+    }
+
     if err != nil {
         return nil, NoRevision, err
     }
-
     return data, RevisionFromBytes(metadata), err
 }
 
-func (d *Data) DataWatch(id EphemId, ns Namespace, key Key, rev Revision, timeout uint, notifier <-chan bool, valid func() bool) ([]byte, Revision, error) {
+func (d *Data) DataWatch(
+    id EphemId,
+    ns Namespace,
+    key Key,
+    rev Revision, timeout uint,
+    notifier <-chan bool, valid func() bool,
+    with_data bool) ([]byte, Revision, error) {
 
     lock := d.lock(ns, key)
     defer lock.unlock()
@@ -401,7 +416,7 @@ func (d *Data) DataWatch(id EphemId, ns Namespace, key Key, rev Revision, timeou
     }
 
     // Read the local store.
-    return d.DataGet(ns, key)
+    return d.DataGet(ns, key, with_data)
 }
 
 func (d *Data) DataModify(ns Namespace, key Key, rev Revision, mod func(Revision) error) (Revision, error) {

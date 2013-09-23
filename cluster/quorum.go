@@ -41,7 +41,7 @@ func (c *Cluster) doSet(node *core.Node, ns core.Namespace, key core.Key, rev co
 func (c *Cluster) doGet(node *core.Node, ns core.Namespace, key core.Key) ([]byte, core.Revision, error) {
     if node == c.Nodes.Self() {
         utils.Print("QUORUM", "    GET-LOCAL key=%s", key)
-        return c.Data.DataGet(ns, key)
+        return c.Data.DataGet(ns, key, true)
     }
 
     utils.Print("QUORUM", "    GET-REMOTE key=%s", key)
