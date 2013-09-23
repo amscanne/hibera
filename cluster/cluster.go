@@ -250,7 +250,7 @@ func (c *Cluster) doSync(url string) error {
     cl := c.getClient(url)
     defer cl.Close()
 
-    info, rev, err := cl.Info()
+    info, rev, err := cl.Info(false)
     if err != nil {
         c.doneSync()
         utils.Print("CLUSTER", "SYNC-CLIENT-ERROR %s", err.Error())

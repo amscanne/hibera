@@ -84,7 +84,7 @@ func cli_deactivate(c *client.HiberaAPI) error {
 }
 
 func cli_nodes(c *client.HiberaAPI) error {
-    info, _, err := c.Info()
+    info, _, err := c.Info(true)
     if err != nil {
         return err
     }
@@ -118,7 +118,7 @@ func cli_data(c *client.HiberaAPI) error {
 }
 
 func cli_list_namespaces(c *client.HiberaAPI) error {
-    info, _, err := c.Info()
+    info, _, err := c.Info(true)
     if err != nil {
         return err
     }

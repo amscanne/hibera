@@ -47,7 +47,7 @@ func (c *Cluster) doGet(node *core.Node, ns core.Namespace, key core.Key) ([]byt
     utils.Print("QUORUM", "    GET-REMOTE key=%s", key)
     cl := c.getClient(node.API())
     defer cl.Close()
-    value, rev, err := cl.NSDataGet(ns, key, core.NoRevision, 1)
+    value, rev, err := cl.NSDataGet(ns, key, core.NoRevision, 1, false)
     return value, core.Revision(rev), err
 }
 
@@ -313,7 +313,7 @@ func (c *Cluster) doList(node *core.Node, ns core.Namespace) (map[core.Key]uint,
     utils.Print("QUORUM", "    LIST-REMOTE")
     cl := c.getClient(node.API())
     defer cl.Close()
-    return cl.NSDataList(ns)
+    return cl.NSDataList(ns, false)
 }
 
 func (c *Cluster) allList(ns core.Namespace) (map[core.Key]uint, error) {

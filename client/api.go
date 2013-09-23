@@ -194,12 +194,14 @@ func (h *HiberaAPI) makeRequest(method string, args httpArgs, hint string) (*htt
     return req, nil
 }
 
-func (h *HiberaAPI) Delay() {
+func (h *HiberaAPI) Delay() bool {
     if h.delay > 0 {
         random_delay := (rand.Int() % int(h.delay*2)) + 1
         utils.Print("CLIENT", "DELAY %d milliseconds", random_delay)
         time.Sleep(time.Duration(random_delay) * time.Millisecond)
+        return true
     }
+    return false
 }
 
 func (h *HiberaAPI) doRequest(method string, args httpArgs, hint string, retry bool) ([]byte, core.Revision, error) {
@@ -311,15 +313,17 @@ func (h *HiberaAPI) doRequest(method string, args httpArgs, hint string, retry b
             }
         }
 
-        h.Delay()
+        if !h.Delay() {
+            break
+        }
     }
 
     return nil, core.NoRevision, nil
 }
 
-func (h *HiberaAPI) Info() (*core.Info, core.Revision, error) {
+func (h *HiberaAPI) Info(retry bool) (*core.Info, core.Revision, error) {
     args := h.makeArgs("", "/v1.0/")
-    content, rev, err := h.doRequest("GET", args, "", true)
+    content, rev, err := h.doRequest("GET", args, "", retry)
     if err != nil {
         return nil, core.NoRevision, err
     }
@@ -485,18 +489,18 @@ func (h *HiberaAPI) NSEventWait(ns core.Namespace, key core.Key, rev core.Revisi
 }
 
 func (h *HiberaAPI) DataGet(key string, rev core.Revision, timeout uint) ([]byte, core.Revision, error) {
-    return h.NSDataGet(h.defaultNS, core.Key(key), rev, timeout)
+    return h.NSDataGet(h.defaultNS, core.Key(key), rev, timeout, true)
 }
 
-func (h *HiberaAPI) NSDataGet(ns core.Namespace, key core.Key, rev core.Revision, timeout uint) ([]byte, core.Revision, error) {
+func (h *HiberaAPI) NSDataGet(ns core.Namespace, key core.Key, rev core.Revision, timeout uint, retry bool) ([]byte, core.Revision, error) {
     args := h.makeArgs(ns, fmt.Sprintf("/v1.0/data/%s", string(key)))
     args.params["rev"] = rev.String()
     args.params["timeout"] = strconv.FormatUint(uint64(timeout), 10)
-    return h.doRequest("GET", args, string(key), true)
+    return h.doRequest("GET", args, string(key), retry)
 }
 
 func (h *HiberaAPI) DataList() (map[string]uint, error) {
-    items, err := h.NSDataList(h.defaultNS)
+    items, err := h.NSDataList(h.defaultNS, true)
     if items == nil || err != nil {
         return nil, err
     }
@@ -507,9 +511,9 @@ func (h *HiberaAPI) DataList() (map[string]uint, error) {
     return keys, nil
 }
 
-func (h *HiberaAPI) NSDataList(ns core.Namespace) (map[core.Key]uint, error) {
+func (h *HiberaAPI) NSDataList(ns core.Namespace, retry bool) (map[core.Key]uint, error) {
     args := h.makeArgs(ns, "/v1.0/data")
-    content, _, err := h.doRequest("GET", args, "", true)
+    content, _, err := h.doRequest("GET", args, "", retry)
     var items map[core.Key]uint
     if err != nil {
         return items, err
